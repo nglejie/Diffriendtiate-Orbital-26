@@ -26,3 +26,6 @@ npm run dev
 The app runs the React client and local Express API together. The client URL is usually `http://127.0.0.1:5173`, and the API runs on `http://127.0.0.1:4000`.
 
 Local app data is stored in `server/data/db.json`, and uploaded files are stored in `server/uploads`. Both are ignored by Git.
+
+### Not Yet Implemented
+- Chatot server
