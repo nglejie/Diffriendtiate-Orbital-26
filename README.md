@@ -25,6 +25,8 @@ Run from project root folder
 docker-compose up
 ```
 
+This method assumes you have docker (https://www.docker.com/get-started/) set up.
+
 ### Using npm
 Run from app folder
 ```bash
@@ -34,7 +36,7 @@ npm run dev
 
 The app runs the React client and local Express API together. The client URL is usually `http://127.0.0.1:5173`, and the API runs on `http://127.0.0.1:4000`.
 
-Local app data is stored in `server/data/db.json`, and uploaded files are stored in `server/uploads`. Both are ignored by Git.
+Local app data is stored in `app/server/data/db.json`, and uploaded files are stored in `app/server/uploads`. Both are ignored by Git.
 
 ## Not Yet Implemented Functions
 - Chatbot server
