@@ -17,6 +17,7 @@ This local version includes:
 - Simple study session scheduling
 
 ## Getting started
+Clone repository
 
 ### Using Docker
 Run from project root folder
@@ -29,6 +30,7 @@ This method assumes you have docker (https://www.docker.com/get-started/) set up
 
 ### Using npm
 Run from app folder
+
 ```bash
 npm install
 npm run dev
@@ -40,3 +42,4 @@ Local app data is stored in `app/server/data/db.json`, and uploaded files are st
 
 ## Not Yet Implemented Functions
 - Chatbot server
+- Chatbot frontend integration
