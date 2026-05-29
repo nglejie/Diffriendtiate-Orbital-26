@@ -28,4 +28,4 @@ The app runs the React client and local Express API together. The client URL is 
 Local app data is stored in `server/data/db.json`, and uploaded files are stored in `server/uploads`. Both are ignored by Git.
 
 ### Not Yet Implemented
-- Chatot server
+- Chatbot server
