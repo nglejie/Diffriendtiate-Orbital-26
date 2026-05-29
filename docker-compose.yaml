@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  server-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - Port=4000
+      - JWT_Secret="placeholderplaceholder"
+    volumes:
+      - ./server/data:/app/data
+      - ./server/uploads:/app/uploads
+    restart: unless-stopped
+
+  # server-chatbot:
+  #   build: 
+  #     context: ./test
+  #     dockerfile: Dockerfile
