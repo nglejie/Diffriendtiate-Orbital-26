@@ -16,8 +16,17 @@ This local version includes:
 - Room themes
 - Simple study session scheduling
 
-### Getting started
+## Getting started
 
+### Using Docker
+Run from project root folder
+
+```cmd
+docker-compose up
+```
+
+### Using npm
+Run from app folder
 ```bash
 npm install
 npm run dev
@@ -27,5 +36,5 @@ The app runs the React client and local Express API together. The client URL is 
 
 Local app data is stored in `server/data/db.json`, and uploaded files are stored in `server/uploads`. Both are ignored by Git.
 
-### Not Yet Implemented
+## Not Yet Implemented Functions
 - Chatbot server
