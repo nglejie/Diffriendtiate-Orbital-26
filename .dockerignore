@@ -2,5 +2,6 @@ node_modules
 .git
 venv
 server-chatbot # Can remove once function is ready
-# dist
+dist
 .env
+__pycache__

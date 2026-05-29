@@ -1,13 +1,20 @@
-FROM node:20-alpine
+FROM node:20
 
 WORKDIR /app
 
+# copy dependencies first (better caching)
 COPY package*.json ./
+
 RUN npm install
 
-COPY dist/ ./dist/
-COPY server/ ./server/
+# copy all source code
+COPY . .
 
+# build frontend (Vite)
+RUN npm run build
+
+# expose backend port
 EXPOSE 4000
 
-CMD ["node", "server/index.js"]
+# start express server
+CMD ["npm", "start"]
