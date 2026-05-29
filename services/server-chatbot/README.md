@@ -7,7 +7,9 @@ This is achieved through usage of Retrieval Augmented Generation (RAG) technolog
 ## Current implementation
 ### Models
 Embedding: nomic-embed-text
+
 Generation: Qwen2.5:3b
+
 Database: ChromaDB
 
 ## Endpoints
