@@ -1,12 +1,15 @@
 import os
 from typing import Optional
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_community.llms import Ollama
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from langchain_ollama import OllamaEmbeddings, OllamaLLM
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import PromptTemplate
+
+from langchain_ollama import OllamaEmbeddings, OllamaLLM
 
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -39,7 +42,7 @@ class RAGPipeline:
             persist_directory=CHROMA_DIR,
             embedding_function=self.embeddings,
         )
-        self.llm = Ollama(
+        self.llm = OllamaLLM(
             model=LLM_MODEL,
             base_url=OLLAMA_BASE_URL,
         )
@@ -91,41 +94,28 @@ class RAGPipeline:
         temp_file_path: Optional[str] = None,
         temp_file_name: Optional[str] = None,
     ) -> tuple[str, list[str]]:
-        """
-        Answer a question using RAG.
-        If temp_file_path is provided, use that file as context (not persisted).
-        Otherwise search ChromaDB, optionally filtered by room_id.
-        """
         if temp_file_path and temp_file_name:
-            # One-shot: load the file, chunk it, use as context without storing
             docs = self._load_file(temp_file_path, temp_file_name)
             chunks = self.splitter.split_documents(docs)
-
-            # Build a temporary in-memory vectorstore just for this request
             temp_store = Chroma.from_documents(chunks, self.embeddings)
             retriever = temp_store.as_retriever(search_kwargs={"k": 4})
         else:
-            # Search persistent ChromaDB, filter by room_id if provided
             search_kwargs = {"k": 4}
             if room_id:
                 search_kwargs["filter"] = {"room_id": room_id}
-
             retriever = self.vectorstore.as_retriever(search_kwargs=search_kwargs)
 
-        chain = RetrievalQA.from_chain_type(
-            llm=self.llm,
-            retriever=retriever,
-            return_source_documents=True,
-            chain_type_kwargs={"prompt": self.prompt},
-        )
+        # Retrieve docs first so we can return sources
+        retrieved_docs = retriever.invoke(question)
+        context = "\n\n".join(doc.page_content for doc in retrieved_docs)
 
-        result = chain.invoke({"query": question})
-        answer = result["result"]
+        # Build LCEL chain
+        chain = self.prompt | self.llm | StrOutputParser()
+        answer = chain.invoke({"context": context, "question": question})
 
-        # Extract unique source filenames
         sources = list({
             doc.metadata.get("file_name", "unknown")
-            for doc in result.get("source_documents", [])
+            for doc in retrieved_docs
         })
 
         return answer, sources
