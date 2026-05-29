@@ -9,12 +9,41 @@ services:
       - "4000:4000"
     environment:
       - Port=4000
+    env_file: .env
     volumes:
       - ./app/server/data:/app/server/data
       - ./app/server/uploads:/app/server/uploads
     restart: unless-stopped
 
-  # server-chatbot:
-  #   build: 
-  #     context: ./test
-  #     dockerfile: Dockerfile
+  server-chatbot:
+    build:
+      context: ./services/server-chatbot
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    env_file: .env
+    volumes:
+      - ./services/server-chatbot/chroma_db:/app/chroma_db
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    build:
+      context: ./services/ollama
+      dockerfile: Dockerfile
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 999
+      start_period: 10s
+
+volumes:
+  ollama_data:

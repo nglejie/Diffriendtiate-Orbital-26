@@ -4,6 +4,7 @@ langchain-community
 langchain-ollama
 langchain-text-splitters
 langchain-core
+langchain-chroma
 chromadb
 pypdf
 docx2txt
