@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - Port=4000
+    volumes:
+      - ./app/server/data:/app/server/data
+      - ./app/server/uploads:/app/server/uploads
+    restart: unless-stopped
+
+  # server-chatbot:
+  #   build: 
+  #     context: ./test
+  #     dockerfile: Dockerfile
