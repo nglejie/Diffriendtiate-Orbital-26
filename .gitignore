@@ -10,3 +10,10 @@ yarn-error.log*
 pnpm-debug.log*
 server/data/*.json
 server/uploads
+app/server/data/*.json
+app/server/uploads
+apps/client/dist
+apps/server/data/*.json
+apps/server/uploads
+docs/
+tools/
