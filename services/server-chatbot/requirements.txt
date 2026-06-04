@@ -5,7 +5,9 @@ langchain-ollama
 langchain-text-splitters
 langchain-core
 langchain-chroma
+langgraph
 chromadb
 pypdf
 docx2txt
 uvicorn
+httpx

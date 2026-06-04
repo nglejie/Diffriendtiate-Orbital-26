@@ -81,7 +81,7 @@ services:
       - "5000:5000"
     env_file: .env
     volumes:
-      - ./services/server-chatbot/chroma_db:/app/chroma_db
+      - chroma_db:/app/chroma_db
     depends_on:
       ollama:
         condition: service_healthy
@@ -115,3 +115,4 @@ volumes:
   postgres_data:
   uploads_data:
   ollama_data:
+  chroma_db:

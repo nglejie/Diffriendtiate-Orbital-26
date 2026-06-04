@@ -18,3 +18,4 @@ apps/server/data/*.json
 apps/server/uploads
 docs/
 tools/
+chroma_db
