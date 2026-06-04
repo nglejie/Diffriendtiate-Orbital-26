@@ -3,4 +3,4 @@ FROM ollama/ollama
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]  # make sure this line exists
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
