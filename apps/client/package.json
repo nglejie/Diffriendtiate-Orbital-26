@@ -9,13 +9,16 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "socket.io-client": "latest"
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest"
+    "@vitejs/plugin-react": "^6.0.2",
+    "vite": "^8.0.16"
+  },
+  "optionalDependencies": {
+    "lightningcss-linux-x64-musl": "1.32.0"
   }
 }

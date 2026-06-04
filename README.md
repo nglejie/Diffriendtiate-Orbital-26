@@ -16,6 +16,12 @@ Our app is a collaborative study hub where students can create or join module-sp
 - bcrypt password hashing
 - Local JSON persistence for the development build
 
+## Prerequisites
+
+- Node.js 22 LTS or newer
+- npm 10 or newer
+- Docker Desktop, for the containerized setup
+
 ## Project Structure
 
 ```text
