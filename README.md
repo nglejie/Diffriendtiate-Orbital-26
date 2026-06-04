@@ -1,45 +1,66 @@
-# Diffriendtiate-Orbital-26
-NUS Orbital 2026
+# Diffriendtiate
 
-Diffriendtiate is a NUS Orbital project for module-based study rooms.
+We are building Diffriendtiate as a NUS Orbital 2026 Project Gemini application for module-based study rooms.
 
-## Local MVP
+Our app is a collaborative study hub where students can create or join module-specific rooms, chat in real time, share resources, schedule study sessions, and keep room context persistent across visits.
 
-This local version includes:
+## Tech Stack
 
-- Email/password registration and login
-- Study room creation, editing, deletion, and public/private visibility
-- Invite-link joining for private rooms
-- Public room discovery by module, room name, description, or tag
-- Real-time room chat with persisted history
-- Resource sharing through URLs and uploaded files
-- Room themes
-- Simple study session scheduling
+- React + Vite
+- Node.js + Express
+- Socket.io
+- PostgreSQL
+- Nginx
+- Docker Compose
+- JWT authentication
+- bcrypt password hashing
+- Local JSON persistence for the development build
 
-## Getting started
-Clone repository
+## Project Structure
 
-### Using Docker
-Run from project root folder
-
-```cmd
-docker-compose up
+```text
+apps/client/   React frontend, Vite config, and Nginx production config
+apps/server/   Express API, Socket.io server, uploads, and persistence layer
+services/      Independent services, including chatbot/RAG work
 ```
 
-This method assumes you have docker (https://www.docker.com/get-started/) set up.
+## Getting Started
 
-### Using npm
-Run from app folder
+Run from the project root:
 
 ```bash
 npm install
 npm run dev
 ```
 
-The app runs the React client and local Express API together. The client URL is usually `http://127.0.0.1:5173`, and the API runs on `http://127.0.0.1:4000`.
+The local app usually runs at:
 
-Local app data is stored in `app/server/data/db.json`, and uploaded files are stored in `app/server/uploads`. Both are ignored by Git.
+- Frontend: `http://127.0.0.1:5173`
+- Backend API: `http://127.0.0.1:4000`
 
-## Not Yet Implemented Functions
-- Chatbot server
-- Chatbot frontend integration
+## Docker Setup
+
+Create a local `.env` file from `.env.example`, then run:
+
+```cmd
+docker compose up --build
+```
+
+The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL services. Uploaded files and database data are stored in Docker volumes.
+
+When `DATABASE_URL` is set, the server initializes and uses PostgreSQL automatically. Without `DATABASE_URL`, local development falls back to the JSON store under `apps/server/data`.
+
+## Features
+
+- User registration and login
+- Study room creation, editing, deletion, and public/private visibility
+- Invite-link joining for private rooms
+- Public room discovery and search
+- Real-time room chat with persisted history
+- URL and file resource sharing
+- Room themes
+- Basic study session scheduling
+
+## Services
+
+The `services/` folder is reserved for independently deployable supporting services. The chatbot/RAG service lives there and can be developed without coupling it to the web client or API server.

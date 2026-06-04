@@ -8,6 +8,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+services/server-chatbot/chroma_db/*.sqlite3
+server/data/*.json
+server/uploads
 app/server/data/*.json
 app/server/uploads
-services/server-chatbot/chroma_db/*.sqlite3
+apps/client/dist
+apps/server/data/*.json
+apps/server/uploads
+docs/
+tools/

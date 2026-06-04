@@ -1,0 +1,20 @@
+{
+  "name": "diffriendtiate",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace @diffriendtiate/server\" \"npm run dev --workspace @diffriendtiate/client\"",
+    "client": "npm run dev --workspace @diffriendtiate/client",
+    "server": "npm run dev --workspace @diffriendtiate/server",
+    "build": "npm run build --workspace @diffriendtiate/client",
+    "preview": "npm run preview --workspace @diffriendtiate/client",
+    "start": "npm run start --workspace @diffriendtiate/server",
+    "check": "npm run check --workspace @diffriendtiate/server && npm run build --workspace @diffriendtiate/client"
+  },
+  "devDependencies": {
+    "concurrently": "latest"
+  }
+}

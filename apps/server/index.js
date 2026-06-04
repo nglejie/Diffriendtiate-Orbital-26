@@ -9,46 +9,15 @@ import { fileURLToPath } from "node:url";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import { Server } from "socket.io";
+import { initDb, readDb, storageMode, writeDb } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, "..");
-const dataDir = path.join(__dirname, "data");
 const uploadDir = path.join(__dirname, "uploads");
-const dbPath = path.join(dataDir, "db.json");
 const port = Number(process.env.PORT || 4000);
 const jwtSecret =
   process.env.JWT_SECRET || "diffriendtiate-local-development-secret";
 
-const initialDb = {
-  users: [],
-  rooms: [],
-  messages: [],
-  resources: [],
-  sessions: [],
-};
-
-fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(uploadDir, { recursive: true });
-
-function readDb() {
-  if (!fs.existsSync(dbPath)) {
-    fs.writeFileSync(dbPath, JSON.stringify(initialDb, null, 2));
-  }
-
-  const rawDb = fs.readFileSync(dbPath, "utf8").replace(/^\uFEFF/, "");
-  const db = rawDb.trim() ? JSON.parse(rawDb) : initialDb;
-  return {
-    users: db.users || [],
-    rooms: db.rooms || [],
-    messages: db.messages || [],
-    resources: db.resources || [],
-    sessions: db.sessions || [],
-  };
-}
-
-function writeDb(db) {
-  fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-}
 
 function createId(prefix) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
@@ -75,22 +44,22 @@ function signToken(user) {
   return jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: "7d" });
 }
 
-function getUserByToken(token) {
+async function getUserByToken(token) {
   if (!token) return null;
 
   try {
     const payload = jwt.verify(token, jwtSecret);
-    const db = readDb();
+    const db = await readDb();
     return db.users.find((user) => user.id === payload.sub) || null;
   } catch {
     return null;
   }
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const user = getUserByToken(token);
+  const user = await getUserByToken(token);
 
   if (!user) {
     return res.status(401).json({ message: "Please log in again." });
@@ -216,11 +185,11 @@ app.use(express.json({ limit: "1mb" }));
 app.use("/uploads", express.static(uploadDir));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "Diffriendtiate API" });
+  res.json({ ok: true, service: "Diffriendtiate API", storage: storageMode() });
 });
 
 app.post("/api/auth/register", async (req, res) => {
-  const db = readDb();
+  const db = await readDb();
   const name = String(req.body.name || "").trim();
   const email = toEmail(req.body.email);
   const password = String(req.body.password || "");
@@ -245,7 +214,7 @@ app.post("/api/auth/register", async (req, res) => {
   };
 
   db.users.push(user);
-  writeDb(db);
+  await writeDb(db);
 
   res.status(201).json({
     token: signToken(user),
@@ -254,7 +223,7 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 app.post("/api/auth/login", async (req, res) => {
-  const db = readDb();
+  const db = await readDb();
   const email = toEmail(req.body.email);
   const password = String(req.body.password || "");
   const user = db.users.find((candidate) => candidate.email === email);
@@ -273,8 +242,8 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
-app.get("/api/rooms", requireAuth, (req, res) => {
-  const db = readDb();
+app.get("/api/rooms", requireAuth, async (req, res) => {
+  const db = await readDb();
   const query = String(req.query.search || "").trim().toLowerCase();
 
   const rooms = db.rooms
@@ -297,8 +266,8 @@ app.get("/api/rooms", requireAuth, (req, res) => {
   res.json({ rooms });
 });
 
-app.post("/api/rooms", requireAuth, (req, res) => {
-  const db = readDb();
+app.post("/api/rooms", requireAuth, async (req, res) => {
+  const db = await readDb();
   const now = new Date().toISOString();
   const name = String(req.body.name || "").trim();
   const moduleCode = String(req.body.moduleCode || "").trim().toUpperCase();
@@ -323,12 +292,12 @@ app.post("/api/rooms", requireAuth, (req, res) => {
   };
 
   db.rooms.push(room);
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json({ room: roomDto(db, room, req.user.id) });
 });
 
-app.get("/api/rooms/:roomId", requireAuth, (req, res) => {
-  const db = readDb();
+app.get("/api/rooms/:roomId", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = findRoomOr404(db, req.params.roomId, res);
   if (!room) return;
 
@@ -339,8 +308,8 @@ app.get("/api/rooms/:roomId", requireAuth, (req, res) => {
   res.json({ room: roomDto(db, room, req.user.id) });
 });
 
-app.patch("/api/rooms/:roomId", requireAuth, (req, res) => {
-  const db = readDb();
+app.patch("/api/rooms/:roomId", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = findRoomOr404(db, req.params.roomId, res);
   if (!room) return;
 
@@ -362,13 +331,13 @@ app.patch("/api/rooms/:roomId", requireAuth, (req, res) => {
   room.theme = String(req.body.theme || room.theme || "bay");
   room.updatedAt = new Date().toISOString();
 
-  writeDb(db);
+  await writeDb(db);
   io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
   res.json({ room: roomDto(db, room, req.user.id) });
 });
 
-app.delete("/api/rooms/:roomId", requireAuth, (req, res) => {
-  const db = readDb();
+app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = findRoomOr404(db, req.params.roomId, res);
   if (!room) return;
 
@@ -387,14 +356,14 @@ app.delete("/api/rooms/:roomId", requireAuth, (req, res) => {
   db.messages = db.messages.filter((message) => message.roomId !== room.id);
   db.resources = db.resources.filter((resource) => resource.roomId !== room.id);
   db.sessions = db.sessions.filter((session) => session.roomId !== room.id);
-  writeDb(db);
+  await writeDb(db);
 
   io.to(`room:${room.id}`).emit("room:deleted", { roomId: room.id });
   res.status(204).end();
 });
 
-app.post("/api/rooms/:roomId/join", requireAuth, (req, res) => {
-  const db = readDb();
+app.post("/api/rooms/:roomId/join", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = findRoomOr404(db, req.params.roomId, res);
   if (!room) return;
 
@@ -405,14 +374,14 @@ app.post("/api/rooms/:roomId/join", requireAuth, (req, res) => {
   if (!isMember(room, req.user.id)) {
     room.memberIds.push(req.user.id);
     room.updatedAt = new Date().toISOString();
-    writeDb(db);
+    await writeDb(db);
   }
 
   res.json({ room: roomDto(db, room, req.user.id) });
 });
 
-app.post("/api/invites/:inviteCode/join", requireAuth, (req, res) => {
-  const db = readDb();
+app.post("/api/invites/:inviteCode/join", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = db.rooms.find((candidate) => candidate.inviteCode === req.params.inviteCode);
 
   if (!room) {
@@ -422,14 +391,14 @@ app.post("/api/invites/:inviteCode/join", requireAuth, (req, res) => {
   if (!isMember(room, req.user.id)) {
     room.memberIds.push(req.user.id);
     room.updatedAt = new Date().toISOString();
-    writeDb(db);
+    await writeDb(db);
   }
 
   res.json({ room: roomDto(db, room, req.user.id) });
 });
 
-app.get("/api/rooms/:roomId/messages", requireAuth, (req, res) => {
-  const db = readDb();
+app.get("/api/rooms/:roomId/messages", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
@@ -440,8 +409,8 @@ app.get("/api/rooms/:roomId/messages", requireAuth, (req, res) => {
   res.json({ messages });
 });
 
-app.post("/api/rooms/:roomId/messages", requireAuth, (req, res) => {
-  const db = readDb();
+app.post("/api/rooms/:roomId/messages", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
@@ -459,15 +428,15 @@ app.post("/api/rooms/:roomId/messages", requireAuth, (req, res) => {
   };
 
   db.messages.push(message);
-  writeDb(db);
+  await writeDb(db);
 
   const dto = messageDto(db, message);
   io.to(`room:${room.id}`).emit("message:new", dto);
   res.status(201).json({ message: dto });
 });
 
-app.get("/api/rooms/:roomId/resources", requireAuth, (req, res) => {
-  const db = readDb();
+app.get("/api/rooms/:roomId/resources", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
@@ -479,8 +448,8 @@ app.get("/api/rooms/:roomId/resources", requireAuth, (req, res) => {
   res.json({ resources });
 });
 
-app.post("/api/rooms/:roomId/resources/url", requireAuth, (req, res) => {
-  const db = readDb();
+app.post("/api/rooms/:roomId/resources/url", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
@@ -502,7 +471,7 @@ app.post("/api/rooms/:roomId/resources/url", requireAuth, (req, res) => {
   };
 
   db.resources.push(resource);
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json({ resource: resourceDto(db, resource) });
 });
 
@@ -510,8 +479,8 @@ app.post(
   "/api/rooms/:roomId/resources/file",
   requireAuth,
   upload.single("file"),
-  (req, res) => {
-    const db = readDb();
+  async (req, res) => {
+    const db = await readDb();
     const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
     if (!room) return;
 
@@ -534,13 +503,13 @@ app.post(
     };
 
     db.resources.push(resource);
-    writeDb(db);
+    await writeDb(db);
     res.status(201).json({ resource: resourceDto(db, resource) });
   },
 );
 
-app.delete("/api/resources/:resourceId", requireAuth, (req, res) => {
-  const db = readDb();
+app.delete("/api/resources/:resourceId", requireAuth, async (req, res) => {
+  const db = await readDb();
   const resource = db.resources.find(
     (candidate) => candidate.id === req.params.resourceId,
   );
@@ -559,12 +528,12 @@ app.delete("/api/resources/:resourceId", requireAuth, (req, res) => {
   }
 
   db.resources = db.resources.filter((candidate) => candidate.id !== resource.id);
-  writeDb(db);
+  await writeDb(db);
   res.status(204).end();
 });
 
-app.get("/api/rooms/:roomId/sessions", requireAuth, (req, res) => {
-  const db = readDb();
+app.get("/api/rooms/:roomId/sessions", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
@@ -576,8 +545,8 @@ app.get("/api/rooms/:roomId/sessions", requireAuth, (req, res) => {
   res.json({ sessions });
 });
 
-app.post("/api/rooms/:roomId/sessions", requireAuth, (req, res) => {
-  const db = readDb();
+app.post("/api/rooms/:roomId/sessions", requireAuth, async (req, res) => {
+  const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
@@ -599,12 +568,12 @@ app.post("/api/rooms/:roomId/sessions", requireAuth, (req, res) => {
   };
 
   db.sessions.push(session);
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json({ session: sessionDto(db, session) });
 });
 
-app.delete("/api/sessions/:sessionId", requireAuth, (req, res) => {
-  const db = readDb();
+app.delete("/api/sessions/:sessionId", requireAuth, async (req, res) => {
+  const db = await readDb();
   const session = db.sessions.find((candidate) => candidate.id === req.params.sessionId);
 
   if (!session) {
@@ -617,12 +586,12 @@ app.delete("/api/sessions/:sessionId", requireAuth, (req, res) => {
   }
 
   db.sessions = db.sessions.filter((candidate) => candidate.id !== session.id);
-  writeDb(db);
+  await writeDb(db);
   res.status(204).end();
 });
 
-io.use((socket, next) => {
-  const user = getUserByToken(socket.handshake.auth?.token);
+io.use(async (socket, next) => {
+  const user = await getUserByToken(socket.handshake.auth?.token);
   if (!user) {
     return next(new Error("Authentication failed."));
   }
@@ -632,59 +601,68 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("room:join", (roomId, ack) => {
-    const db = readDb();
-    const room = db.rooms.find((candidate) => candidate.id === roomId);
+  socket.on("room:join", async (roomId, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === roomId);
 
-    if (!room || !isMember(room, socket.user.id)) {
-      ack?.({ ok: false, message: "Join the room before chatting." });
-      return;
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before chatting." });
+        return;
+      }
+
+      socket.join(`room:${room.id}`);
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to join the room right now." });
     }
-
-    socket.join(`room:${room.id}`);
-    ack?.({ ok: true });
   });
 
-  socket.on("message:send", (payload, ack) => {
-    const db = readDb();
-    const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+  socket.on("message:send", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
 
-    if (!room || !isMember(room, socket.user.id)) {
-      ack?.({ ok: false, message: "Join the room before chatting." });
-      return;
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before chatting." });
+        return;
+      }
+
+      const body = String(payload?.body || "").trim();
+      if (!body) {
+        ack?.({ ok: false, message: "Message cannot be empty." });
+        return;
+      }
+
+      const message = {
+        id: createId("msg"),
+        roomId: room.id,
+        senderId: socket.user.id,
+        body: body.slice(0, 2000),
+        createdAt: new Date().toISOString(),
+      };
+
+      db.messages.push(message);
+      await writeDb(db);
+
+      const dto = messageDto(db, message);
+      io.to(`room:${room.id}`).emit("message:new", dto);
+      ack?.({ ok: true, message: dto });
+    } catch {
+      ack?.({ ok: false, message: "Unable to send the message right now." });
     }
-
-    const body = String(payload?.body || "").trim();
-    if (!body) {
-      ack?.({ ok: false, message: "Message cannot be empty." });
-      return;
-    }
-
-    const message = {
-      id: createId("msg"),
-      roomId: room.id,
-      senderId: socket.user.id,
-      body: body.slice(0, 2000),
-      createdAt: new Date().toISOString(),
-    };
-
-    db.messages.push(message);
-    writeDb(db);
-
-    const dto = messageDto(db, message);
-    io.to(`room:${room.id}`).emit("message:new", dto);
-    ack?.({ ok: true, message: dto });
   });
 });
 
-const distDir = path.join(rootDir, "dist");
-if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
-  app.get(/.*/, (_req, res) => {
-    res.sendFile(path.join(distDir, "index.html"));
-  });
-}
+app.use((error, _req, res, _next) => {
+  console.error(error);
+  res.status(500).json({ message: "Something went wrong." });
+});
+
+await initDb();
 
 server.listen(port, () => {
-  console.log(`Diffriendtiate API running on http://127.0.0.1:${port}`);
+  console.log(
+    `Diffriendtiate API running on http://127.0.0.1:${port} using ${storageMode()} storage`,
+  );
 });

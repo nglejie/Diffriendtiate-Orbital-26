@@ -1,0 +1,20 @@
+{
+  "name": "@diffriendtiate/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node index.js",
+    "start": "node index.js",
+    "check": "node --check index.js && node --check store.js"
+  },
+  "dependencies": {
+    "bcryptjs": "latest",
+    "cors": "latest",
+    "express": "latest",
+    "jsonwebtoken": "latest",
+    "multer": "latest",
+    "pg": "^8.21.0",
+    "socket.io": "latest"
+  }
+}
