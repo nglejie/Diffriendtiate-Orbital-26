@@ -15,6 +15,6 @@
     "check": "npm run check --workspace @diffriendtiate/server && npm run build --workspace @diffriendtiate/client"
   },
   "devDependencies": {
-    "concurrently": "latest"
+    "concurrently": "^10.0.1"
   }
 }
