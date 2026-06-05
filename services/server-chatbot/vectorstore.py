@@ -9,13 +9,13 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 CHROMA_DIR = os.getenv("CHROMA_DIR", "/app/chroma_db")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-EMBEB_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
 
 class VectorStore:
     def __init__(self):
         self.embeddings = OllamaEmbeddings(
-            model= EMBEB_MODEL,
+            model= EMBED_MODEL,
             base_url = OLLAMA_BASE_URL,
         )
         
@@ -65,6 +65,28 @@ class VectorStore:
         docs = self._load_file(file_path, file_name)
         return "\n\n".join(doc.page_content for doc in docs)
     
+    def load_file_content_from_bytes(self, file_bytes: bytes, file_name: str):
+        """
+        Write file bytes into a temp file, and using the tmp path to call load_file_content
+        
+        Args:
+            file_bytes (bytes): raw file bytes
+            file_name (str): file name used to get file extention to use correct file reader
+        
+        Returns:
+            str: result of load_file_content
+        """
+        print("---Processing Uploaded File---")
+        suffix = os.path.splitext(file_name or "")[-1]
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            tmp.write(file_bytes)
+            tmp.close()
+            return self.load_file_content(tmp.name, file_name)
+        finally:
+            tmp.close()
+            os.remove(tmp.name)
+    
     async def embed_room_documents(self, room_id: str, urls: list[str]) -> int:
         """Load, chunk and store a document in ChromaDB
 
@@ -110,6 +132,7 @@ class VectorStore:
                         results["success"].append(file_name)
                         results["total_chunks"] += len(chunks)
                     finally:
+                        tmp.close()
                         os.remove(tmp_path)
                 except Exception as e:
                     results["failed"].append({"file": file_name, "error": str(e)})
@@ -131,6 +154,8 @@ class VectorStore:
         #     search_kwargs={"k": k, "filter": {"room_id": room_id}}
         # )
         # return retriever.invoke(query)
+        print("---Search for Chunks---")
+        print("Chunk count:", self.db._collection.count())
     
         results = self.db.similarity_search(
             query=query,
