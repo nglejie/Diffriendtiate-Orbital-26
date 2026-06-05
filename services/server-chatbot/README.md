@@ -15,6 +15,8 @@ If all is well (pray), LLM will send correct response back to user
 TBD
 
 ## Endpoints
+![alt ](./static/fastapi_ss.png "FastAPI Endpoints")
+
 | Method | Endpoint | Description | Inputs | Return |
 | :--- | :--- | :--- | :--- | :--- | 
 | **GET** | `/health` | Returns server healthy | None | Success if healthy
