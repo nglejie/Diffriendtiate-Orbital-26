@@ -48,8 +48,16 @@ The local app usually runs at:
 
 Create a local `.env` file from `.env.example`, then run:
 
+CPU Only
+
 ```cmd
 docker compose up --build
+```
+
+With NVIDIA GPU
+
+```cmd
+docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
 ```
 
 The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL services. Uploaded files and database data are stored in Docker volumes.
