@@ -32,7 +32,7 @@ If all is well (pray), LLM will send correct response back to user
 
 ## Models
 - Embedding: nomic-embed-text
-- Generation: Qwen2.5:7b (Hosted using Ollama)
+- Generation: Qwen2.5:7b
 
 ## Files
 ### main.py
