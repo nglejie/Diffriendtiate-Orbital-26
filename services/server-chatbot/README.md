@@ -11,8 +11,7 @@ Else the LLM would determine the need for additional tool usage to provide an an
 If all is well (pray), LLM will send correct response back to user
 
 ## Design Diagram
-
-TBD
+![alt ](./static/architecture_diagram.png "Architecute Diagram")
 
 ## Endpoints
 ![alt ](./static/fastapi_ss.png "FastAPI Endpoints")
