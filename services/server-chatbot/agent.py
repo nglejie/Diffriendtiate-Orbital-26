@@ -191,7 +191,7 @@ class Agent:
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 if (event.get("metadata", {}).get("langgraph_node") == "agent" and chunk.content):
-                    yield chunk.content
+                    yield f"[TOKEN]{chunk.content}"
             
             # Handle Tool starting
             elif event_type == "on_tool_start":
@@ -236,6 +236,8 @@ class Agent:
         yield f"[SOURCES]{json.dumps(sources)}"
         
         yield f"[CHAIN]{json.dumps(self._convert_messages(all_messages))}"
+        
+        yield f"[DONE]"
                 
     async def invoke(self, question: str, room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
         """Non-streaming invoke, returns full answer, sources, and message chain

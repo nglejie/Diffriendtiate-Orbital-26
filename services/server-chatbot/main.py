@@ -141,26 +141,24 @@ async def predict_stream(question: str, room_id: Optional[str] = None, file: Opt
         file_bytes = await file.read()
         file_name = file.filename
     
-    print("---Define Token Generator---")    
+    print("---Define Token Generator---")
+    # PREFIX MAP to determine event name tag
+    PREFIX_MAP = {
+        "[TOKEN]": "[TOKEN]",
+        "[TOOL_START]": "[TOOL_START]",
+        "[TOOL_END]": "[TOOL_END]",
+        "[SOURCES]": "[SOURCES]",
+        "[CHAIN]": "[CHAIN]",
+        "[DONE]": "[DONE]",
+    }
+    
     async def token_generator():
         async for chunk in agent.stream(question = question, room_id = room_id, file_bytes = file_bytes, file_name = file_name):
-            if chunk.startswith("[TOOL_START]"):
-                tool_data = chunk[len("[TOOL_START]"):]
-                yield f"event: tool_start\ndata: {tool_data}\n\n"
-            elif chunk.startswith("[TOOL_END]"):
-                tool_data = chunk[len("[TOOL_END]"):]
-                yield f"event: tool_end\ndata: {tool_data}\n\n"
-            elif chunk.startswith("[SOURCES]"):
-                # Named SSE event so frontend can handle seperately
-                sources_data = chunk[len("[SOURCES]"):]
-                yield f"event: sources\ndata: {sources_data}\n\n"
-            elif chunk.startswith("[CHAIN]"):
-                chain_data = chunk[len("[CHAIN]"):]
-                yield f"event: chain\ndata: {chain_data}\n\n"
-            else:
-                yield f"data: {chunk}\n\n"
-        
-        yield "data: [DONE]\n\n"
+            for prefix, event_name in PREFIX_MAP.items():
+                if chunk.startswith(prefix):
+                    data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}
+                    yield f"event: {event_name}\ndata: {data}\n\n"
+                    break
         
     print("---Streaming Response---")
     return StreamingResponse(token_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
