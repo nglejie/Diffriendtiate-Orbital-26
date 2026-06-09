@@ -60,7 +60,7 @@ async def embed_documents(body: EmbedRequest):
     Called by Node server with room_id and list of file URLs.
 
     Args:
-        body (EmbedRequest): room_id and doc urls
+        body (EmbedRequest): room_id and document urls (the url to visit to retrieve a documents)
 
     Returns:
         EmbedResponse: contains the result of the operation, files that succeeded, files that failed, and total chunks embeded
@@ -92,9 +92,10 @@ async def predict(question: str, room_id: Optional[str] = None, file: Optional[U
         question (str): the question to be answered
         room_id (Optional[str], optional): the room id to scope response (e.g. RAG). Defaults to None.
         file (Optional[UploadFile], optional): any user updated file, file content is always fed directly to the agent. Defaults to File(default=None).
+        history (Optional[str], optional): A conversation history (if any). Defaults to None
 
     Returns:
-        PredictResponse: contains the answer to the question, as well as the sources referenced
+        PredictResponse: contains the answer to the question, the sources referenced, as well as the chain of messages and tool calls
     """
     print("---Predict API---")
     if not question.strip():

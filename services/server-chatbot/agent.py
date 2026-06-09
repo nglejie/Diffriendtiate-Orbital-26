@@ -3,7 +3,8 @@ import json
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt import create_react_agent # deprecated
+# from langchain.agents import create_agent
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
