@@ -148,7 +148,7 @@ async def predict_stream(question: str, room_id: Optional[str] = None, file: Opt
                 # Named SSE event so frontend can handle seperately
                 sources_data = chunk[len("[SOURCES]"):]
                 yield f"event: sources\ndata: {sources_data}\n\n"
-            if chunk.startswith("[CHAIN]"):
+            elif chunk.startswith("[CHAIN]"):
                 chain_data = chunk[len("[CHAIN]"):]
                 yield f"event: chain\ndata: {chain_data}\n\n"
             else:

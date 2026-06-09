@@ -118,10 +118,7 @@ class Agent:
             tool_name = getattr(msg, "name", None)
             
             # message content
-            if msg.content:
-                content = msg.content
-            else: 
-                None
+            content = msg.content if msg.content else None
             
             output.append({
                 "type": msg_type,
@@ -143,7 +140,7 @@ class Agent:
             list[str]: a list of sources filenames found in the message
         """
         sources = []
-        if hasattr(message, "name") and message.name == "search_corpus":
+        if hasattr(message, "name") and message.name in ("search_corpus", "read_file"):
                 for line in message.content.split("\n"):
                     if line.startswith("[Source:"):
                         source = line.replace("[Source:", "").replace("]", "").strip()
@@ -177,14 +174,14 @@ class Agent:
             file_name (Optional[str]), optional): file name of uploaded file (if any). Defaults to None.
 
         Returns:
-            AsyncIterator[str]: yields generated string chunks, before yielding a final [SOURCES] chunk
+            AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
         messages = self._build_messages(question, has_file= file_bytes != None, room_id = room_id)
         sources = []
         all_messages = list(messages)
         
-        async for event in agent.astream_events({"messages": messages},):
+        async for event in agent.astream_events({"messages": messages}, version="v2"):
             # print(event)
             event_type = event["event"]
             
@@ -196,8 +193,12 @@ class Agent:
                     
             # Handle tool
             elif event_type == "on_tool_end":
-                tool_message = ToolMessage(content = event["data"].get("output", ""), 
-                                           name = event["name"].event["name"], 
+                tool_output = event["data"].get("output", "")
+                if hasattr(tool_output, "content"):
+                    tool_output = tool_output.content
+                    
+                tool_message = ToolMessage(content = tool_output, 
+                                           name = event["name"], 
                                            tool_call_id = event["run_id"],)
                 all_messages.append(tool_message)
                 
