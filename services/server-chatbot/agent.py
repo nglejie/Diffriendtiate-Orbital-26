@@ -181,6 +181,8 @@ class Agent:
         sources = []
         all_messages = list(messages)
         
+        tool_call_in_progress = {}
+        
         async for event in agent.astream_events({"messages": messages}, version="v2"):
             # print(event)
             event_type = event["event"]
@@ -190,22 +192,39 @@ class Agent:
                 chunk = event["data"]["chunk"]
                 if (event.get("metadata", {}).get("langgraph_node") == "agent" and chunk.content):
                     yield chunk.content
+            
+            # Handle Tool starting
+            elif event_type == "on_tool_start":
+                run_id = event["run_id"]
+                tool_name = event["name"]
+                args = event["data"].get("input", {})
+                
+                tool_call_in_progress[run_id] = {"name": tool_name, "args": args}
+                
+                yield f"[TOOL_START]{json.dumps({'name': tool_name, "aegs": args})}"
                     
-            # Handle tool
+            # Handle tool ending
             elif event_type == "on_tool_end":
+                run_id = event["run_id"]
+                tool_name = event["name"]
                 tool_output = event["data"].get("output", "")
+                
                 if hasattr(tool_output, "content"):
                     tool_output = tool_output.content
                     
                 tool_message = ToolMessage(content = tool_output, 
-                                           name = event["name"], 
-                                           tool_call_id = event["run_id"],)
+                                           name = tool_name, 
+                                           tool_call_id = run_id,)
                 all_messages.append(tool_message)
                 
                 # Store all sources given by tool
                 for source in self._extract_sources_from_message(tool_message):
                     if source not in sources:
                         sources.append(source)
+                
+                tool_call_in_progress.pop(run_id, None)
+                
+                yield f"[TOOL_END]{json.dumps({"name": tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
                 if event.get("metadata", {}).get("langgraph_node") == "agent":

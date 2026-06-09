@@ -144,7 +144,13 @@ async def predict_stream(question: str, room_id: Optional[str] = None, file: Opt
     print("---Define Token Generator---")    
     async def token_generator():
         async for chunk in agent.stream(question = question, room_id = room_id, file_bytes = file_bytes, file_name = file_name):
-            if chunk.startswith("[SOURCES]"):
+            if chunk.startswith("[TOOL_START]"):
+                tool_data = chunk[len("[TOOL_START]"):]
+                yield f"event: tool_start\ndata: {tool_data}\n\n"
+            elif chunk.startswith("[TOOL_END]"):
+                tool_data = chunk[len("[TOOL_END]"):]
+                yield f"event: tool_end\ndata: {tool_data}\n\n"
+            elif chunk.startswith("[SOURCES]"):
                 # Named SSE event so frontend can handle seperately
                 sources_data = chunk[len("[SOURCES]"):]
                 yield f"event: sources\ndata: {sources_data}\n\n"
