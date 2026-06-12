@@ -3,10 +3,12 @@ import json
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
+from langchain.agents.middleware import dynamic_prompt
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
+from models import HistoryMessage
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
@@ -53,13 +55,16 @@ class Agent:
         if file_bytes and file_name:
             tools += build_file_tool(file_bytes, file_name, self.vectorstore)
             
-        return create_react_agent(self.llm, tools)
+        @dynamic_prompt
+        def generate_system_prompt_middleware(request) -> str:
+            return self._build_system_prompt(room_id = room_id, has_file = file_bytes != None)
+        
+        return create_agent(model = self.llm, tools = tools, middleware = [generate_system_prompt_middleware])
     
-    def _build_messages(self, question: str, has_file: bool = False, room_id: Optional[str] = None) -> list:
-        """Build message list, including file content into system prompt if present
+    def _build_system_prompt(self, has_file: bool = False, room_id: Optional[str] = None) -> list:
+        """Build system prompt, letting the model know if there is uploaded file or corpus available
 
         Args:
-            question (str): question to answer
             has_file (Optional[bool], optional): whether a file was uploaded. Defaults to False.
             room_id (Optional[str], optional): the room_id of the convo (if any). Defaults to None
 
@@ -76,10 +81,7 @@ class Agent:
         if has_file:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
-        return [
-            SystemMessage(content=system_content),
-            HumanMessage(content=question),
-        ]
+        return system_content
 
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
@@ -118,10 +120,7 @@ class Agent:
             tool_name = getattr(msg, "name", None)
             
             # message content
-            if msg.content:
-                content = msg.content
-            else: 
-                None
+            content = msg.content if msg.content else None
             
             output.append({
                 "type": msg_type,
@@ -143,7 +142,7 @@ class Agent:
             list[str]: a list of sources filenames found in the message
         """
         sources = []
-        if hasattr(message, "name") and message.name == "search_corpus":
+        if hasattr(message, "name") and message.name in ("search_corpus", "read_file"):
                 for line in message.content.split("\n"):
                     if line.startswith("[Source:"):
                         source = line.replace("[Source:", "").replace("]", "").strip()
@@ -166,62 +165,109 @@ class Agent:
                 if source not in sources:
                     sources.append(source)
         return sources
+
+    def _message_chain_to_messages(self, message_chain: list[HistoryMessage]) -> list:
+        """ Convert generic messages into langchain messages to parse into model
+
+        Args:
+            message_chain (list[HistoryMessage]): full list of HistoryMessage objects, each HistoryMessage is a message in the conversation
+
+        Returns:
+            list: list of HistoryMessage converted to HumanMessage and AIMessages
+        """
+        messages = []
+        for item in message_chain:
+            if item.role == 'user':
+                messages.append(HumanMessage(content = item.content))
+            elif item.role == 'assistant':
+                messages.append(AIMessage(content = item.content))
+            else:
+                print(f'DEBUG: Not handled message in message chain (message omitted). role: {item.role} | content: {item.content}')
         
-    async def stream(self, question: str, room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> AsyncIterator[str]:
+        return messages
+        
+    async def stream(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> AsyncIterator[str]:
         """Stream the agents responsetoken by token
 
         Args:
-            question (str): the question to answer
+            message_chain (list[HistoryMessage]): the full message_chain between user and assistant, with the last message being current prompt
             room_id (Optional[str], optional): the room id scope. Defaults to None.
             file_bytes (Optional[bytes], optional): raw bytes of uploaded file (if any). Defaults to None.
             file_name (Optional[str]), optional): file name of uploaded file (if any). Defaults to None.
 
         Returns:
-            AsyncIterator[str]: yields generated string chunks, before yielding a final [SOURCES] chunk
+            AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
-        messages = self._build_messages(question, has_file= file_bytes != None, room_id = room_id)
+        messages = self._message_chain_to_messages(message_chain)
         sources = []
         all_messages = list(messages)
         
-        async for event in agent.astream_events({"messages": messages},):
-            # print(event)
+        tool_call_in_progress = {}
+        
+        async for event in agent.astream_events({"messages": messages}, version="v2"):
             event_type = event["event"]
             
             # Handle model answers
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
-                if (event.get("metadata", {}).get("langgraph_node") == "agent" and chunk.content):
-                    yield chunk.content
+                if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
+                    yield f"[TOKEN]{chunk.content}"
+            
+            # Handle Tool starting
+            elif event_type == "on_tool_start":
+                run_id = event["run_id"]
+                tool_name = event["name"]
+                args = event["data"].get("input", {})
+                
+                tool_call_in_progress[run_id] = {"name": tool_name, "args": args}
+                
+                yield f"[TOOL_START]{json.dumps({'name': tool_name, "args": args})}"
                     
-            # Handle tool
+            # Handle tool ending
             elif event_type == "on_tool_end":
-                tool_message = ToolMessage(content = event["data"].get("output", ""), 
-                                           name = event["name"].event["name"], 
-                                           tool_call_id = event["run_id"],)
+                run_id = event["run_id"]
+                tool_name = event["name"]
+                tool_output = event["data"].get("output", "")
+                
+                if hasattr(tool_output, "content"):
+                    tool_output = tool_output.content
+                    
+                tool_message = ToolMessage(content = tool_output, 
+                                           name = tool_name, 
+                                           tool_call_id = run_id,)
                 all_messages.append(tool_message)
                 
                 # Store all sources given by tool
                 for source in self._extract_sources_from_message(tool_message):
                     if source not in sources:
                         sources.append(source)
+                
+                tool_call_in_progress.pop(run_id, None)
+                
+                yield f"[TOOL_END]{json.dumps({"name": tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
-                if event.get("metadata", {}).get("langgraph_node") == "agent":
+                if event.get("metadata", {}).get("langgraph_node") == "model":
                     ai_message = event["data"]["output"]
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
+            
+            else: # catch any other events
+                print(f"DEBUG: unhandled event type: {event_type} | metadata {event.get('metadata', {})}")
                 
         # return sources after all tokens
         yield f"[SOURCES]{json.dumps(sources)}"
         
         yield f"[CHAIN]{json.dumps(self._convert_messages(all_messages))}"
+        
+        yield f"[DONE]"
                 
-    async def invoke(self, question: str, room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
+    async def invoke(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
         """Non-streaming invoke, returns full answer, sources, and message chain
 
         Args:
-            question (str): the question to answer
+            message_chain (list[HistoryMessage]): the full message_chain between user and assistant, with the last message being current prompt
             room_id (Optional[str], optional): the room id scope. Defaults to None.
             file_bytes (Optional[bytes], optional): the raw bytes of uploaded file (if any). Defaults to None.
             file_name (Optional[str], optional): the name of the uploaded file (if any). Defaults to None
@@ -230,7 +276,7 @@ class Agent:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
-        messages = self._build_messages(question, has_file = file_bytes != None, room_id = room_id)
+        messages = self._message_chain_to_messages(message_chain)
         
         result = await agent.ainvoke({"messages": messages})
         answer = result["messages"][-1].content

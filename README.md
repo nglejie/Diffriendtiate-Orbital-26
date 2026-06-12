@@ -5,7 +5,7 @@ We are building Diffriendtiate as a NUS Orbital 2026 Project Gemini application 
 Our app is a collaborative study hub where students can create or join module-specific rooms, chat in real time, share resources, schedule study sessions, and keep room context persistent across visits.
 
 ## Tech Stack
-
+### Core App
 - React + Vite
 - Node.js + Express
 - Socket.io
@@ -16,10 +16,17 @@ Our app is a collaborative study hub where students can create or join module-sp
 - bcrypt password hashing
 - Local JSON persistence for the development build
 
+### Additional Services
+#### LLM Buddy
+- FASTAPI
+- LangChain
+- ChromaDB
+
 ## Prerequisites
 
 - Node.js 22 LTS or newer
 - npm 10 or newer
+- Python 3.12 or newer
 - Docker Desktop, for the containerized setup
 
 ## Project Structure
@@ -31,20 +38,7 @@ services/      Independent services, including chatbot/RAG work
 ```
 
 ## Getting Started
-
-Run from the project root:
-
-```bash
-npm install
-npm run dev
-```
-
-The local app usually runs at:
-
-- Frontend: `http://127.0.0.1:5173`
-- Backend API: `http://127.0.0.1:4000`
-
-## Docker Setup
+### Docker Setup (Recommended)
 
 Create a local `.env` file from `.env.example`, then run:
 
@@ -60,9 +54,57 @@ With NVIDIA GPU
 docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
 ```
 
-The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL services. Uploaded files and database data are stored in Docker volumes.
+The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL, as well as LLM chatbot and Ollama services. Uploaded files, database data, vector database data, and pulled LLM models are stored in Docker volumes.
 
 When `DATABASE_URL` is set, the server initializes and uses PostgreSQL automatically. Without `DATABASE_URL`, local development falls back to the JSON store under `apps/server/data`.
+
+### Command Line Setup
+
+Run from the project root:
+
+#### Main App 
+
+```bash
+npm install
+npm run dev
+```
+
+The local app usually runs at:
+
+- Frontend: `http://127.0.0.1:5173`
+- Backend API: `http://127.0.0.1:4000`
+
+#### Services
+
+Ollama
+
+One-time setup
+- Download Ollama
+- Pull models
+    ```
+    ollama serve &&
+    ollama pull nomic-embed-text &&
+    ollama pull qwen2.5:7b
+    ```
+
+
+Start Ollama server
+```bash
+ollama serve
+```
+
+Chatbot Server
+
+```bash
+python -m venv venv &&
+.\venv\Scripts\activate &&
+pip install -r .\services\server-chatbot\requirements.txt &&
+uvicorn main:app --app-dir services/server-chatbot --reload
+```
+The services usually runs locally at
+
+- server-chatbot: `http://127.0.0.1:8000`
+- ollama: `http://127.0.0.1:11434`
 
 ## Features
 
@@ -78,3 +120,5 @@ When `DATABASE_URL` is set, the server initializes and uses PostgreSQL automatic
 ## Services
 
 The `services/` folder is reserved for independently deployable supporting services. The chatbot/RAG service lives there and can be developed without coupling it to the web client or API server.
+
+Refer to corresponding README in those folders for more information on respective services

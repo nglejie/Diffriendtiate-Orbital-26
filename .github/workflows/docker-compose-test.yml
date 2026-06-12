@@ -1,4 +1,4 @@
-name: Docker Compose Test
+name: Docker Compose Test (Test that all containers can start)
 
 on:
   pull_request:
@@ -9,8 +9,8 @@ on:
       - "docker-compose.yaml"
       - "!**.md"
       - "!services/server-chatbot/static/**"
-
-
+      - "!.drawio"
+      
   push:
     branches: [main]
     paths:
@@ -19,6 +19,7 @@ on:
       - "docker-compose.yaml"
       - "!**.md"
       - "!services/server-chatbot/static/**"
+      - "!.drawio"
 
 jobs:
   test:

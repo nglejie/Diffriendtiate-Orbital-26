@@ -1,13 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import Optional
-import tempfile
-import os
+from pydantic import BaseModel, ValidationError
+from typing import Literal, Optional
+import tempfile, os, json
  
 from vectorstore import VectorStore
 from agent import Agent
+from models import HistoryMessage, EmbedRequest, EmbedResponse, PredictResponse
  
 # Init Application
 app = FastAPI(title="Diffriendtiate Chat API")
@@ -23,22 +23,36 @@ app.add_middleware(
 store = VectorStore()
 agent = Agent(vectorstore=store)
 
-# --- Request/Response Models ---
+# --- Helper Functions ---
+def parse_message_chain(message_chain: str) -> list[HistoryMessage]:
+    """ Help to validate and convert message chain / history passed in.
+    
+    Args:
+        message_chain (str): _description_
 
-class EmbedRequest(BaseModel):
-    room_id: str
-    urls: list[str]
- 
-class EmbedResponse(BaseModel):
-    result: bool
-    success: list[str]
-    failed: list[dict]
-    total_chunks: int
+    Raises:
+        HTTPException: 400, Invalid History Format
+        HTTPException: 400, Empty message chain
+        HTTPException: 400, Last message is not user (needed as last message is treated as current question)
+        HTTPException: 400, current question cannot be empty
 
-class PredictResponse(BaseModel):
-    answer: str
-    sources: list[str] = []
-    message_chain: list[dict] = []
+    Returns:
+        list[HistoryMessage]: full message chain
+    """
+    try:
+        parsed = json.loads(message_chain)
+        message_chain = [HistoryMessage(**msg) for msg in parsed]
+    except (json.JSONDecodeError, ValidationError) as e:
+        raise HTTPException(status_code = 400, detail = f"Invalid History Format: {e}")
+
+    if not message_chain:
+        raise HTTPException(status_code = 400, detail = "Message chain cannot be empty")
+    if message_chain[-1].role != "user":
+        raise HTTPException(status_code = 400, detail = "Last History must have role 'user'")
+    if message_chain[-1].content in [None, ""]:
+        raise HTTPException(status_code = 400, detail = "Question cannot be empty")
+    
+    return message_chain
 
 # --- Routes ---
 
@@ -60,7 +74,7 @@ async def embed_documents(body: EmbedRequest):
     Called by Node server with room_id and list of file URLs.
 
     Args:
-        body (EmbedRequest): room_id and doc urls
+        body (EmbedRequest): room_id and document urls (the url to visit to retrieve a documents)
 
     Returns:
         EmbedResponse: contains the result of the operation, files that succeeded, files that failed, and total chunks embeded
@@ -84,21 +98,22 @@ async def embed_documents(body: EmbedRequest):
     )
     
 @app.post("/predict", response_model=PredictResponse)
-async def predict(question: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
+async def predict(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
     """ The base predict API
     Answer a question using the agent
-
+    
+    Currently acceptable roles in message chain is "user" and "assistant"
+    
     Args:
-        question (str): the question to be answered
+        message_chain (str): the json format string of full message_chain / history, where the current question to be answered is positioned as the last item
         room_id (Optional[str], optional): the room id to scope response (e.g. RAG). Defaults to None.
         file (Optional[UploadFile], optional): any user updated file, file content is always fed directly to the agent. Defaults to File(default=None).
 
     Returns:
-        PredictResponse: contains the answer to the question, as well as the sources referenced
+        PredictResponse: contains the answer to the question, the sources referenced, as well as the chain of messages and tool calls
     """
     print("---Predict API---")
-    if not question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    message_chain = parse_message_chain(message_chain)
     
     file_bytes = None
     file_name = None
@@ -108,7 +123,7 @@ async def predict(question: str, room_id: Optional[str] = None, file: Optional[U
     
     print("---Calling Agent Invoke---")        
     answer, sources, chain = await agent.invoke(
-        question = question,
+        message_chain = message_chain,
         room_id = room_id,
         file_bytes = file_bytes,
         file_name = file_name,
@@ -117,14 +132,16 @@ async def predict(question: str, room_id: Optional[str] = None, file: Optional[U
     return PredictResponse(answer = answer, sources = sources, message_chain = chain)
 
 @app.post("/predict/stream")
-async def predict_stream(question: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
+async def predict_stream(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
     """
     Similar to predict
     But streams the response token by token using Server-Sent Events
     Sends a "sources" event at the end with list of sources used
+    
+    Currently acceptable roles in message chain is "user" and "assistant"
 
     Args:
-        question (str): the question to be answered
+        message_chain (str): the json format string of full message_chain / history, where the current question to be answered is positioned as the last item
         room_id (Optional[str], optional): the room id to scope response (e.g. RAG). Defaults to None.
         file (Optional[UploadFile], optional): any user updated file, file content is always fed directly to the agent. Defaults to File(default=None).
 
@@ -132,8 +149,7 @@ async def predict_stream(question: str, room_id: Optional[str] = None, file: Opt
         StreamingResponse: streamed response of the agent, including a sources event
     """
     print("---Predict Stream API---")
-    if not question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    message_chain = parse_message_chain(message_chain)
     
     file_bytes = None
     file_name = None
@@ -141,20 +157,28 @@ async def predict_stream(question: str, room_id: Optional[str] = None, file: Opt
         file_bytes = await file.read()
         file_name = file.filename
     
-    print("---Define Token Generator---")    
+    print("---Define Token Generator---")
+    # PREFIX MAP to determine event name tag
+    PREFIX_MAP = {
+        "[TOKEN]": "token",
+        "[TOOL_START]": "tool_start",
+        "[TOOL_END]": "tool_end",
+        "[SOURCES]": "sources",
+        "[CHAIN]": "chain",
+        "[DONE]": "done",
+    }
+    
     async def token_generator():
-        async for chunk in agent.stream(question = question, room_id = room_id, file_bytes = file_bytes, file_name = file_name):
-            if chunk.startswith("[SOURCES]"):
-                # Named SSE event so frontend can handle seperately
-                sources_data = chunk[len("[SOURCES]"):]
-                yield f"event: sources\ndata: {sources_data}\n\n"
-            if chunk.startswith("[CHAIN]"):
-                chain_data = chunk[len("[CHAIN]"):]
-                yield f"event: chain\ndata: {chain_data}\n\n"
-            else:
-                yield f"data: {chunk}\n\n"
-        
-        yield "data: [DONE]\n\n"
+        async for chunk in agent.stream(message_chain = message_chain, 
+                                        room_id = room_id, 
+                                        file_bytes = file_bytes, 
+                                        file_name = file_name):
+            # print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", chunk)
+            for prefix, event_name in PREFIX_MAP.items():
+                if chunk.startswith(prefix):
+                    data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}
+                    yield f"event: {event_name}\ndata: {data}\n\n"
+                    break
         
     print("---Streaming Response---")
     return StreamingResponse(token_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
