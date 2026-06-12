@@ -32,7 +32,11 @@ services/      Independent services, including chatbot/RAG work
 
 ## Getting Started
 
+### Command Line Setup
+
 Run from the project root:
+
+#### Main App 
 
 ```bash
 npm install
@@ -44,7 +48,28 @@ The local app usually runs at:
 - Frontend: `http://127.0.0.1:5173`
 - Backend API: `http://127.0.0.1:4000`
 
-## Docker Setup
+#### Services
+
+Ollama
+
+```bash
+ollama serve
+```
+
+server-chatbot
+
+```bash
+python -m venv venv &&
+.\venv\Scripts\activate &&
+pip install -r .\services\server-chatbot\requirements.txt &&
+uvicorn main:app --app-dir services/server-chatbot --reload
+```
+The services usually runs locally at
+
+- server-chatbot: `http://127.0.0.1:8000`
+
+
+### Docker Setup (Alternative)
 
 Create a local `.env` file from `.env.example`, then run:
 
@@ -78,3 +103,5 @@ When `DATABASE_URL` is set, the server initializes and uses PostgreSQL automatic
 ## Services
 
 The `services/` folder is reserved for independently deployable supporting services. The chatbot/RAG service lives there and can be developed without coupling it to the web client or API server.
+
+Refer to corresponding README in those folders for more information on respective services

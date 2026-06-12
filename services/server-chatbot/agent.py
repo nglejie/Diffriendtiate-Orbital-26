@@ -8,6 +8,7 @@ from langchain.agents.middleware import dynamic_prompt
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
+from models import HistoryMessage
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
@@ -164,12 +165,32 @@ class Agent:
                 if source not in sources:
                     sources.append(source)
         return sources
+
+    def _message_chain_to_messages(self, message_chain: list[HistoryMessage]) -> list:
+        """ Convert generic messages into langchain messages to parse into model
+
+        Args:
+            message_chain (list[HistoryMessage]): full list of HistoryMessage objects, each HistoryMessage is a message in the conversation
+
+        Returns:
+            list: list of HistoryMessage converted to HumanMessage and AIMessages
+        """
+        messages = []
+        for item in message_chain:
+            if item.role == 'user':
+                messages.append(HumanMessage(content = item.content))
+            elif item.role == 'assistant':
+                messages.append(AIMessage(content = item.content))
+            else:
+                print(f'DEBUG: Not handled message in message chain (message omitted). role: {item.role} | content: {item.content}')
         
-    async def stream(self, question: str, room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> AsyncIterator[str]:
+        return messages
+        
+    async def stream(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> AsyncIterator[str]:
         """Stream the agents responsetoken by token
 
         Args:
-            question (str): the question to answer
+            message_chain (list[HistoryMessage]): the full message_chain between user and assistant, with the last message being current prompt
             room_id (Optional[str], optional): the room id scope. Defaults to None.
             file_bytes (Optional[bytes], optional): raw bytes of uploaded file (if any). Defaults to None.
             file_name (Optional[str]), optional): file name of uploaded file (if any). Defaults to None.
@@ -178,7 +199,7 @@ class Agent:
             AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
-        messages = [HumanMessage(content = question)]
+        messages = self._message_chain_to_messages(message_chain)
         sources = []
         all_messages = list(messages)
         
@@ -227,10 +248,8 @@ class Agent:
                 yield f"[TOOL_END]{json.dumps({"name": tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
-                print(f"DEBUG on_chat_model_end node={event.get('metadata', {}).get('langgraph_node')}")
                 if event.get("metadata", {}).get("langgraph_node") == "model":
                     ai_message = event["data"]["output"]
-                    print(f"DEBUG ai_message content={ai_message.content!r} tool_calls={getattr(ai_message, 'tool_calls', None)}")
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
             
@@ -244,11 +263,11 @@ class Agent:
         
         yield f"[DONE]"
                 
-    async def invoke(self, question: str, room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
+    async def invoke(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
         """Non-streaming invoke, returns full answer, sources, and message chain
 
         Args:
-            question (str): the question to answer
+            message_chain (list[HistoryMessage]): the full message_chain between user and assistant, with the last message being current prompt
             room_id (Optional[str], optional): the room id scope. Defaults to None.
             file_bytes (Optional[bytes], optional): the raw bytes of uploaded file (if any). Defaults to None.
             file_name (Optional[str], optional): the name of the uploaded file (if any). Defaults to None
@@ -257,7 +276,7 @@ class Agent:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
-        messages = [HumanMessage(content = question)]
+        messages = self._message_chain_to_messages(message_chain)
         
         result = await agent.ainvoke({"messages": messages})
         answer = result["messages"][-1].content
