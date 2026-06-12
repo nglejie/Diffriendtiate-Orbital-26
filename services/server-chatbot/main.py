@@ -145,16 +145,17 @@ async def predict_stream(question: str, room_id: Optional[str] = None, file: Opt
     print("---Define Token Generator---")
     # PREFIX MAP to determine event name tag
     PREFIX_MAP = {
-        "[TOKEN]": "[TOKEN]",
-        "[TOOL_START]": "[TOOL_START]",
-        "[TOOL_END]": "[TOOL_END]",
-        "[SOURCES]": "[SOURCES]",
-        "[CHAIN]": "[CHAIN]",
-        "[DONE]": "[DONE]",
+        "[TOKEN]": "token",
+        "[TOOL_START]": "tool_start",
+        "[TOOL_END]": "tool_end",
+        "[SOURCES]": "sources",
+        "[CHAIN]": "chain",
+        "[DONE]": "done",
     }
     
     async def token_generator():
         async for chunk in agent.stream(question = question, room_id = room_id, file_bytes = file_bytes, file_name = file_name):
+            # print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", chunk)
             for prefix, event_name in PREFIX_MAP.items():
                 if chunk.startswith(prefix):
                     data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}

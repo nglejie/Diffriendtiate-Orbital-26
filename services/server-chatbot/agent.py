@@ -3,8 +3,8 @@ import json
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent # deprecated
-# from langchain.agents import create_agent
+from langchain.agents import create_agent
+from langchain.agents.middleware import dynamic_prompt
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
@@ -54,13 +54,16 @@ class Agent:
         if file_bytes and file_name:
             tools += build_file_tool(file_bytes, file_name, self.vectorstore)
             
-        return create_react_agent(self.llm, tools)
+        @dynamic_prompt
+        def generate_system_prompt_middleware(request) -> str:
+            return self._build_system_prompt(room_id = room_id, has_file = file_bytes != None)
+        
+        return create_agent(model = self.llm, tools = tools, middleware = [generate_system_prompt_middleware])
     
-    def _build_messages(self, question: str, has_file: bool = False, room_id: Optional[str] = None) -> list:
-        """Build message list, including file content into system prompt if present
+    def _build_system_prompt(self, has_file: bool = False, room_id: Optional[str] = None) -> list:
+        """Build system prompt, letting the model know if there is uploaded file or corpus available
 
         Args:
-            question (str): question to answer
             has_file (Optional[bool], optional): whether a file was uploaded. Defaults to False.
             room_id (Optional[str], optional): the room_id of the convo (if any). Defaults to None
 
@@ -77,10 +80,7 @@ class Agent:
         if has_file:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
-        return [
-            SystemMessage(content=system_content),
-            HumanMessage(content=question),
-        ]
+        return system_content
 
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
@@ -178,20 +178,19 @@ class Agent:
             AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
-        messages = self._build_messages(question, has_file= file_bytes != None, room_id = room_id)
+        messages = [HumanMessage(content = question)]
         sources = []
         all_messages = list(messages)
         
         tool_call_in_progress = {}
         
         async for event in agent.astream_events({"messages": messages}, version="v2"):
-            # print(event)
             event_type = event["event"]
             
             # Handle model answers
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
-                if (event.get("metadata", {}).get("langgraph_node") == "agent" and chunk.content):
+                if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
                     yield f"[TOKEN]{chunk.content}"
             
             # Handle Tool starting
@@ -202,7 +201,7 @@ class Agent:
                 
                 tool_call_in_progress[run_id] = {"name": tool_name, "args": args}
                 
-                yield f"[TOOL_START]{json.dumps({'name': tool_name, "aegs": args})}"
+                yield f"[TOOL_START]{json.dumps({'name': tool_name, "args": args})}"
                     
             # Handle tool ending
             elif event_type == "on_tool_end":
@@ -228,10 +227,15 @@ class Agent:
                 yield f"[TOOL_END]{json.dumps({"name": tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
-                if event.get("metadata", {}).get("langgraph_node") == "agent":
+                print(f"DEBUG on_chat_model_end node={event.get('metadata', {}).get('langgraph_node')}")
+                if event.get("metadata", {}).get("langgraph_node") == "model":
                     ai_message = event["data"]["output"]
+                    print(f"DEBUG ai_message content={ai_message.content!r} tool_calls={getattr(ai_message, 'tool_calls', None)}")
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
+            
+            else: # catch any other events
+                print(f"DEBUG: unhandled event type: {event_type} | metadata {event.get('metadata', {})}")
                 
         # return sources after all tokens
         yield f"[SOURCES]{json.dumps(sources)}"
@@ -253,7 +257,7 @@ class Agent:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
-        messages = self._build_messages(question, has_file = file_bytes != None, room_id = room_id)
+        messages = [HumanMessage(content = question)]
         
         result = await agent.ainvoke({"messages": messages})
         answer = result["messages"][-1].content
