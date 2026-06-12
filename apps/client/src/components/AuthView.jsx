@@ -44,7 +44,7 @@ function AuthView({ onAuthenticated }) {
         <div className="brand-lockup">
           <span className="brand-mark">D</span>
           <div>
-            <p className="eyebrow">NUS Orbital 2026</p>
+            <p className="eyebrow">Shared Study Rooms</p>
             <h1>Diffriendtiate</h1>
           </div>
         </div>
@@ -52,7 +52,7 @@ function AuthView({ onAuthenticated }) {
         <form className="auth-form" onSubmit={handleSubmit}>
           <div className="form-heading">
             <h2>{isRegistering ? "Create Account" : "Welcome Back"}</h2>
-            <p>One room for every module.</p>
+            <p>A unique shared study room for every module group.</p>
           </div>
 
           {isRegistering ? (

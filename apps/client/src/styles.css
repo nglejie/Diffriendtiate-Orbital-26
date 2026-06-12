@@ -1,11 +1,34 @@
 :root {
-  color: #16212f;
-  background: #eef3f6;
+  color: #351d43;
+  background: #1a0628;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   font-weight: 400;
   line-height: 1.5;
+  --night: #100519;
+  --night-2: #1a0628;
+  --night-3: #2e1244;
+  --plum: #51225f;
+  --plum-soft: #7b3bb2;
+  --rose: #f15d96;
+  --rose-deep: #bd3f79;
+  --coral: #ff7f76;
+  --peach: #ffd3bd;
+  --cream: #fff5ed;
+  --cream-strong: #ffe7de;
+  --lavender: #ead4ff;
+  --gold: #ffe985;
+  --mint: #dfff9a;
+  --ink: #351d43;
+  --muted: #7d5a7a;
+  --panel: rgba(255, 245, 237, 0.96);
+  --panel-strong: #fff0ea;
+  --panel-tint: #ffe2ef;
+  --line: #e6abc9;
+  --line-strong: #b65bd0;
+  --shadow: 0 18px 45px rgba(45, 9, 55, 0.18);
+  --glow: 0 0 26px rgba(241, 93, 150, 0.34);
 }
 
 * {
@@ -20,6 +43,8 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+  background:
+    linear-gradient(180deg, var(--night) 0%, var(--night-2) 38%, #5e236c 72%, #f27999 100%);
 }
 
 button,
@@ -83,8 +108,8 @@ h3 {
 .loading-mark {
   width: 48px;
   aspect-ratio: 1;
-  border: 4px solid #c8d7de;
-  border-top-color: #0f766e;
+  border: 4px solid rgba(255, 211, 189, 0.35);
+  border-top-color: var(--rose);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -97,19 +122,17 @@ h3 {
 
 .auth-layout {
   background:
-    linear-gradient(135deg, rgba(22, 33, 47, 0.9), rgba(15, 118, 110, 0.72)),
-    radial-gradient(circle at 16% 18%, #f2cc8f 0 0.5px, transparent 1px),
-    #16212f;
-  background-size: auto, 28px 28px, auto;
+    linear-gradient(135deg, rgba(16, 5, 25, 0.96), rgba(70, 22, 96, 0.9)),
+    linear-gradient(180deg, transparent 0 58%, rgba(242, 93, 150, 0.26) 100%);
 }
 
 .auth-panel {
   width: min(100%, 440px);
   padding: 28px;
-  background: #ffffff;
-  border: 1px solid #d7e1e8;
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 24px 80px rgba(9, 23, 40, 0.22);
+  box-shadow: 0 26px 90px rgba(8, 3, 16, 0.42), var(--glow);
 }
 
 .brand-lockup,
@@ -143,9 +166,10 @@ h3 {
   aspect-ratio: 1;
   flex: 0 0 auto;
   place-items: center;
-  color: #ffffff;
-  background: #0f766e;
+  color: var(--cream);
+  background: linear-gradient(135deg, var(--rose), var(--plum-soft));
   border-radius: 8px;
+  box-shadow: 0 0 18px rgba(241, 93, 150, 0.38);
   font-weight: 800;
 }
 
@@ -157,7 +181,7 @@ h3 {
 
 .eyebrow {
   margin-bottom: 6px;
-  color: #607182;
+  color: var(--rose-deep);
   font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0;
@@ -171,7 +195,7 @@ h3 {
 .form-heading p,
 .room-description,
 .feature-copy {
-  color: #607182;
+  color: var(--muted);
 }
 
 .auth-form,
@@ -188,7 +212,7 @@ h3 {
 .field {
   display: grid;
   gap: 7px;
-  color: #344355;
+  color: var(--ink);
   font-size: 0.92rem;
   font-weight: 700;
 }
@@ -199,9 +223,9 @@ h3 {
 .search-box input,
 .message-form input {
   width: 100%;
-  color: #16212f;
-  background: #ffffff;
-  border: 1px solid #c9d6df;
+  color: var(--ink);
+  background: #fffaf6;
+  border: 1px solid var(--line);
   border-radius: 8px;
   outline: none;
 }
@@ -225,8 +249,8 @@ h3 {
 .field textarea:focus,
 .search-box input:focus,
 .message-form input:focus {
-  border-color: #0f766e;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+  border-color: var(--rose);
+  box-shadow: 0 0 0 3px rgba(241, 93, 150, 0.18);
 }
 
 .input-shell,
@@ -234,9 +258,9 @@ h3 {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #607182;
-  background: #ffffff;
-  border: 1px solid #c9d6df;
+  color: var(--muted);
+  background: #fffaf6;
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 
@@ -281,22 +305,23 @@ h3 {
 }
 
 .primary-button {
-  color: #ffffff;
-  background: #0f766e;
-  border: 1px solid #0f766e;
+  color: #fffaf6;
+  background: linear-gradient(135deg, var(--rose), var(--coral));
+  border: 1px solid var(--rose);
+  box-shadow: 0 10px 22px rgba(241, 93, 150, 0.26);
 }
 
 .secondary-button {
-  color: #0c5d58;
-  background: #e7f4f2;
-  border: 1px solid #b9ddd8;
+  color: var(--plum);
+  background: #ffe5f0;
+  border: 1px solid var(--line);
 }
 
 .ghost-button {
   padding: 0 12px;
-  color: #334155;
-  background: #ffffff;
-  border: 1px solid #c9d6df;
+  color: var(--ink);
+  background: #fffaf6;
+  border: 1px solid var(--line);
 }
 
 .ghost-button.on-dark {
@@ -308,7 +333,7 @@ h3 {
 .text-button {
   width: 100%;
   margin-top: 16px;
-  color: #0c5d58;
+  color: var(--rose-deep);
   background: transparent;
   border: 0;
 }
@@ -317,27 +342,27 @@ h3 {
   width: 40px;
   aspect-ratio: 1;
   padding: 0;
-  color: #334155;
-  background: #ffffff;
-  border: 1px solid #c9d6df;
+  color: var(--ink);
+  background: #fffaf6;
+  border: 1px solid var(--line);
   flex: 0 0 auto;
 }
 
 .icon-button.filled {
-  color: #ffffff;
-  background: #0f766e;
-  border-color: #0f766e;
+  color: #fffaf6;
+  background: var(--rose);
+  border-color: var(--rose);
 }
 
 .icon-button.subtle {
-  color: #607182;
-  background: #f6f9fb;
+  color: var(--muted);
+  background: #fff0f5;
 }
 
 .danger-button {
-  color: #ffffff;
-  background: #b42318;
-  border: 1px solid #b42318;
+  color: #fffaf6;
+  background: #b73565;
+  border: 1px solid #b73565;
 }
 
 .form-error,
@@ -349,21 +374,21 @@ h3 {
 }
 
 .form-error {
-  color: #9a3412;
-  background: #fff2e8;
-  border: 1px solid #fed7aa;
+  color: #8b1e47;
+  background: #ffe8e0;
+  border: 1px solid #ffb4b7;
 }
 
 .form-notice {
-  color: #0c5d58;
-  background: #e7f4f2;
-  border: 1px solid #b9ddd8;
+  color: var(--plum);
+  background: #fff0c9;
+  border: 1px solid #ffd978;
 }
 
 .empty-state {
-  color: #607182;
-  background: #f6f9fb;
-  border: 1px dashed #c9d6df;
+  color: var(--muted);
+  background: #fff8f3;
+  border: 1px dashed var(--line);
 }
 
 .top-bar {
@@ -373,15 +398,16 @@ h3 {
   gap: 16px;
   margin-bottom: 18px;
   padding: 10px;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid #d7e1e8;
+  background: rgba(255, 245, 237, 0.88);
+  border: 1px solid rgba(230, 171, 201, 0.8);
   border-radius: 8px;
   backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
 }
 
 .brand-button {
   padding: 0 12px 0 0;
-  color: #16212f;
+  color: var(--ink);
   background: transparent;
   border: 0;
   font-size: 1.02rem;
@@ -391,9 +417,9 @@ h3 {
   max-width: 220px;
   overflow: hidden;
   padding: 8px 12px;
-  color: #344355;
-  background: #f6f9fb;
-  border: 1px solid #d7e1e8;
+  color: var(--ink);
+  background: #fff8f3;
+  border: 1px solid var(--line);
   border-radius: 8px;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -414,10 +440,10 @@ h3 {
 .dashboard-main,
 .create-panel,
 .surface {
-  background: #ffffff;
-  border: 1px solid #d7e1e8;
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(42, 57, 74, 0.08);
+  box-shadow: var(--shadow);
 }
 
 .dashboard-main,
@@ -445,8 +471,8 @@ h3 {
 .section-title-row span {
   min-width: 32px;
   padding: 2px 8px;
-  color: #0c5d58;
-  background: #e7f4f2;
+  color: var(--plum);
+  background: #ffe5f0;
   border-radius: 999px;
   text-align: center;
   font-weight: 800;
@@ -477,9 +503,12 @@ h3 {
   min-height: 252px;
   padding: 18px;
   overflow: hidden;
-  background: #ffffff;
-  border: 1px solid #d7e1e8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), transparent 42%),
+    var(--panel-strong);
+  border: 1px solid var(--line);
   border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(73, 28, 84, 0.12);
 }
 
 .room-accent {
@@ -496,7 +525,7 @@ h3 {
 
 .module-code {
   margin-bottom: 5px;
-  color: #0c5d58;
+  color: var(--rose-deep);
   font-size: 0.78rem;
   font-weight: 900;
   letter-spacing: 0;
@@ -514,9 +543,9 @@ h3 {
 .visibility-chip {
   gap: 5px;
   padding: 5px 8px;
-  color: #435466;
-  background: #f6f9fb;
-  border: 1px solid #d7e1e8;
+  color: var(--plum);
+  background: #fff7fb;
+  border: 1px solid var(--line);
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 800;
@@ -536,8 +565,8 @@ h3 {
 
 .tag-row span {
   padding: 4px 8px;
-  color: #48596b;
-  background: #eef3f6;
+  color: var(--plum);
+  background: #ffe5f0;
   border-radius: 999px;
   font-size: 0.78rem;
   font-weight: 700;
@@ -548,7 +577,7 @@ h3 {
   gap: 8px;
   margin-top: auto;
   margin-bottom: 14px;
-  color: #607182;
+  color: var(--muted);
   font-size: 0.88rem;
 }
 
@@ -563,21 +592,21 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   padding: 4px;
-  background: #eef3f6;
+  background: #f9d5e7;
   border-radius: 8px;
 }
 
 .segmented-control button {
   min-width: 0;
-  color: #435466;
+  color: var(--plum);
   background: transparent;
   border: 0;
 }
 
 .segmented-control button.active {
-  color: #0c5d58;
-  background: #ffffff;
-  box-shadow: 0 4px 14px rgba(42, 57, 74, 0.1);
+  color: var(--rose-deep);
+  background: #fffaf6;
+  box-shadow: 0 4px 14px rgba(73, 28, 84, 0.14);
 }
 
 .room-workspace {
@@ -590,17 +619,19 @@ h3 {
   gap: 48px;
   min-height: 320px;
   padding: 22px;
-  color: #ffffff;
+  color: #fffaf6;
   background:
-    linear-gradient(135deg, var(--theme-a), color-mix(in srgb, var(--theme-b), #111 18%)),
-    linear-gradient(45deg, transparent 0 60%, rgba(255, 255, 255, 0.12) 60% 100%);
+    linear-gradient(135deg, var(--theme-a), color-mix(in srgb, var(--theme-b), #12051f 30%)),
+    linear-gradient(45deg, transparent 0 58%, rgba(255, 211, 189, 0.16) 58% 100%);
+  border: 1px solid rgba(255, 211, 189, 0.2);
   border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(16, 5, 25, 0.34);
 }
 
 .room-hero p {
   max-width: 760px;
   margin-bottom: 0;
-  color: rgba(255, 255, 255, 0.83);
+  color: rgba(255, 245, 237, 0.86);
 }
 
 .room-hero-top,
@@ -622,9 +653,9 @@ h3 {
   gap: 7px;
   min-height: 34px;
   padding: 0 10px;
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.13);
-  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: #fffaf6;
+  background: rgba(255, 245, 237, 0.13);
+  border: 1px solid rgba(255, 211, 189, 0.28);
   border-radius: 999px;
   font-weight: 800;
 }
@@ -632,12 +663,12 @@ h3 {
 .dot {
   width: 8px;
   aspect-ratio: 1;
-  background: #f59e0b;
+  background: var(--gold);
   border-radius: 50%;
 }
 
 .dot.online {
-  background: #22c55e;
+  background: var(--mint);
 }
 
 .tab-bar {
@@ -645,22 +676,23 @@ h3 {
   gap: 8px;
   overflow-x: auto;
   padding: 6px;
-  background: #ffffff;
-  border: 1px solid #d7e1e8;
+  background: rgba(255, 245, 237, 0.9);
+  border: 1px solid var(--line);
   border-radius: 8px;
+  box-shadow: var(--shadow);
 }
 
 .tab-bar button {
   min-width: 124px;
   padding: 0 12px;
-  color: #435466;
+  color: var(--plum);
   background: transparent;
   border: 0;
 }
 
 .tab-bar button.active {
-  color: #0c5d58;
-  background: #e7f4f2;
+  color: #fffaf6;
+  background: linear-gradient(135deg, var(--rose), var(--coral));
 }
 
 .workspace-grid {
@@ -687,30 +719,30 @@ h3 {
   height: clamp(340px, 52vh, 620px);
   overflow: auto;
   padding: 12px;
-  background: #f6f9fb;
-  border: 1px solid #d7e1e8;
+  background: #fff8f3;
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 
 .message {
   max-width: min(720px, 88%);
   padding: 12px;
-  background: #ffffff;
-  border: 1px solid #d7e1e8;
+  background: #fffaf6;
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 
 .own-message {
   justify-self: end;
-  background: #e7f4f2;
-  border-color: #b9ddd8;
+  background: #ffe5f0;
+  border-color: #f5a3c7;
 }
 
 .message-meta {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 6px;
-  color: #607182;
+  color: var(--muted);
   font-size: 0.78rem;
 }
 
@@ -737,8 +769,8 @@ h3 {
   gap: 12px;
   justify-content: space-between;
   padding: 12px;
-  background: #f6f9fb;
-  border: 1px solid #d7e1e8;
+  background: #fff8f3;
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 
@@ -748,8 +780,8 @@ h3 {
   aspect-ratio: 1;
   flex: 0 0 auto;
   place-items: center;
-  color: #0c5d58;
-  background: #e7f4f2;
+  color: var(--plum);
+  background: #ffe5f0;
   border-radius: 8px;
 }
 
@@ -764,7 +796,7 @@ h3 {
   align-items: center;
   gap: 5px;
   max-width: 100%;
-  color: #16212f;
+  color: var(--ink);
   font-weight: 800;
   text-decoration: none;
 }
@@ -773,7 +805,7 @@ h3 {
 .session-row p,
 .danger-zone p {
   margin-bottom: 0;
-  color: #607182;
+  color: var(--muted);
 }
 
 .session-row {

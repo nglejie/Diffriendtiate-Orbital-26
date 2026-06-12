@@ -283,7 +283,7 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
     description: String(req.body.description || "").trim(),
     visibility: req.body.visibility === "private" ? "private" : "public",
     tags: normalizeTags(req.body.tags),
-    theme: String(req.body.theme || "bay"),
+    theme: String(req.body.theme || "twilight"),
     ownerId: req.user.id,
     memberIds: [req.user.id],
     inviteCode: createInviteCode(),
@@ -328,7 +328,7 @@ app.patch("/api/rooms/:roomId", requireAuth, async (req, res) => {
   room.description = String(req.body.description ?? room.description).trim();
   room.visibility = req.body.visibility === "private" ? "private" : "public";
   room.tags = normalizeTags(req.body.tags ?? room.tags);
-  room.theme = String(req.body.theme || room.theme || "bay");
+  room.theme = String(req.body.theme || room.theme || "twilight");
   room.updatedAt = new Date().toISOString();
 
   await writeDb(db);

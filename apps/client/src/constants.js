@@ -1,23 +1,23 @@
 export const themePresets = [
   {
-    id: "bay",
-    name: "Study Bay",
-    colors: ["#0f4c5c", "#2a9d8f", "#f4a261"],
+    id: "twilight",
+    name: "Twilight Room",
+    colors: ["#1a0628", "#7b3bb2", "#ff78a6"],
   },
   {
-    id: "orchard",
-    name: "Orchard",
-    colors: ["#7f5539", "#b08968", "#ccd5ae"],
+    id: "rose",
+    name: "Rose Archive",
+    colors: ["#351244", "#c04d91", "#ffd3bd"],
   },
   {
-    id: "skyline",
-    name: "Skyline",
-    colors: ["#283618", "#606c38", "#dda15e"],
+    id: "sunset",
+    name: "Sunset Quest",
+    colors: ["#3a1751", "#f06f8f", "#ffb86b"],
   },
   {
-    id: "library",
-    name: "Library",
-    colors: ["#2b2d42", "#8d99ae", "#ef233c"],
+    id: "starlight",
+    name: "Starlight Notes",
+    colors: ["#22103c", "#9d7bff", "#ffe88a"],
   },
 ];
 
@@ -27,7 +27,7 @@ export const emptyRoomForm = {
   description: "",
   visibility: "public",
   tags: "",
-  theme: "bay",
+  theme: "twilight",
 };
 
 export function getTheme(themeId) {
