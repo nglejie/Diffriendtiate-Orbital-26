@@ -81,6 +81,9 @@ function roomDto(db, room, userId) {
   const owner = db.users.find((user) => user.id === room.ownerId);
   const messages = db.messages.filter((message) => message.roomId === room.id);
   const latestMessage = messages.at(-1);
+  const members = (room.memberIds || [])
+    .map((memberId) => publicUser(db.users.find((user) => user.id === memberId)))
+    .filter(Boolean);
 
   return {
     id: room.id,
@@ -90,8 +93,11 @@ function roomDto(db, room, userId) {
     visibility: room.visibility,
     tags: room.tags || [],
     theme: room.theme,
+    background: room.background || "aurora",
     inviteCode: isMember(room, userId) ? room.inviteCode : null,
+    channels: normalizeChannels(room.channels),
     owner: publicUser(owner),
+    members,
     isOwner: room.ownerId === userId,
     isMember: isMember(room, userId),
     memberCount: room.memberIds.length,
@@ -105,6 +111,8 @@ function roomDto(db, room, userId) {
 function messageDto(db, message) {
   return {
     ...message,
+    channel: normalizeChannel(message.channel || "general"),
+    attachments: normalizeMessageAttachments(message.attachments),
     sender: publicUser(db.users.find((user) => user.id === message.senderId)),
   };
 }
@@ -112,6 +120,7 @@ function messageDto(db, message) {
 function resourceDto(db, resource) {
   return {
     ...resource,
+    folder: resource.folder || "General",
     uploader: publicUser(db.users.find((user) => user.id === resource.uploaderId)),
   };
 }
@@ -124,14 +133,51 @@ function sessionDto(db, session) {
 }
 
 function normalizeTags(value) {
+  // Room cards are designed around at most three visible tags.
   if (Array.isArray(value)) {
-    return value.map(String).map((tag) => tag.trim()).filter(Boolean);
+    return value.map(String).map((tag) => tag.trim()).filter(Boolean).slice(0, 3);
   }
 
   return String(value || "")
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean)
+    .slice(0, 3);
+}
+
+function normalizeFolder(value) {
+  const folder = String(value || "General").trim();
+  return folder.slice(0, 48) || "General";
+}
+
+function normalizeChannel(value) {
+  const channel = String(value || "general")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_\s]/g, "")
+    .replace(/\s+/g, "-")
+    .slice(0, 32);
+
+  return channel || "general";
+}
+
+function normalizeChannels(value) {
+  const channels = Array.isArray(value) ? value : [];
+  return [...new Set(["general", ...channels.map(normalizeChannel)])].slice(0, 20);
+}
+
+function normalizeMessageAttachments(value) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((attachment) => ({
+      id: String(attachment?.id || "").trim(),
+      title: String(attachment?.title || attachment?.name || "Attachment").trim(),
+      url: String(attachment?.url || "").trim(),
+      type: String(attachment?.type || "file").trim(),
+      size: Number(attachment?.size || 0),
+    }))
+    .filter((attachment) => attachment.id && attachment.url)
     .slice(0, 8);
 }
 
@@ -271,9 +317,15 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
   const now = new Date().toISOString();
   const name = String(req.body.name || "").trim();
   const moduleCode = String(req.body.moduleCode || "").trim().toUpperCase();
+  const visibility = req.body.visibility === "private" ? "private" : "public";
+  const password = String(req.body.password || "");
 
   if (!name || !moduleCode) {
     return res.status(400).json({ message: "Room name and module code are required." });
+  }
+
+  if (visibility === "private" && !password.trim()) {
+    return res.status(400).json({ message: "Password is required for private room." });
   }
 
   const room = {
@@ -281,9 +333,13 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
     name,
     moduleCode,
     description: String(req.body.description || "").trim(),
-    visibility: req.body.visibility === "private" ? "private" : "public",
+    visibility,
     tags: normalizeTags(req.body.tags),
     theme: String(req.body.theme || "twilight"),
+    background: String(req.body.background || "aurora"),
+    channels: ["general"],
+    passwordHash:
+      visibility === "private" ? await bcrypt.hash(password.trim(), 10) : null,
     ownerId: req.user.id,
     memberIds: [req.user.id],
     inviteCode: createInviteCode(),
@@ -329,11 +385,102 @@ app.patch("/api/rooms/:roomId", requireAuth, async (req, res) => {
   room.visibility = req.body.visibility === "private" ? "private" : "public";
   room.tags = normalizeTags(req.body.tags ?? room.tags);
   room.theme = String(req.body.theme || room.theme || "twilight");
+  room.background = String(req.body.background || room.background || "aurora");
+
+  if (room.visibility === "private") {
+    const password = String(req.body.password || "");
+    if (password.trim()) {
+      room.passwordHash = await bcrypt.hash(password.trim(), 10);
+    } else if (!room.passwordHash) {
+      return res.status(400).json({ message: "Password is required for private room." });
+    }
+  } else {
+    room.passwordHash = null;
+  }
+
   room.updatedAt = new Date().toISOString();
 
   await writeDb(db);
   io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
   res.json({ room: roomDto(db, room, req.user.id) });
+});
+
+app.post("/api/rooms/:roomId/channels", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = normalizeChannel(req.body.name);
+  room.channels = normalizeChannels([...(room.channels || []), channel]);
+  room.updatedAt = new Date().toISOString();
+
+  await writeDb(db);
+  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  res.status(201).json({ room: roomDto(db, room, req.user.id), channel });
+});
+
+app.patch("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const currentChannel = normalizeChannel(req.params.channel);
+  const nextChannel = normalizeChannel(req.body.name);
+  const channels = normalizeChannels(room.channels);
+
+  if (currentChannel === "general") {
+    return res.status(400).json({ message: "The general channel cannot be renamed." });
+  }
+
+  if (!channels.includes(currentChannel)) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  if (channels.includes(nextChannel) && nextChannel !== currentChannel) {
+    return res.status(409).json({ message: "A channel with that name already exists." });
+  }
+
+  room.channels = normalizeChannels(
+    channels.map((channel) => (channel === currentChannel ? nextChannel : channel)),
+  );
+  room.updatedAt = new Date().toISOString();
+
+  db.messages = db.messages.map((message) =>
+    message.roomId === room.id && normalizeChannel(message.channel) === currentChannel
+      ? { ...message, channel: nextChannel }
+      : message,
+  );
+
+  await writeDb(db);
+  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  res.json({ room: roomDto(db, room, req.user.id), channel: nextChannel });
+});
+
+app.delete("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = normalizeChannel(req.params.channel);
+  const channels = normalizeChannels(room.channels);
+
+  if (channel === "general") {
+    return res.status(400).json({ message: "The general channel cannot be deleted." });
+  }
+
+  if (!channels.includes(channel)) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  room.channels = normalizeChannels(channels.filter((candidate) => candidate !== channel));
+  room.updatedAt = new Date().toISOString();
+  db.messages = db.messages.filter(
+    (message) => message.roomId !== room.id || normalizeChannel(message.channel) !== channel,
+  );
+
+  await writeDb(db);
+  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  res.json({ room: roomDto(db, room, req.user.id), channel: "general" });
 });
 
 app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
@@ -388,6 +535,17 @@ app.post("/api/invites/:inviteCode/join", requireAuth, async (req, res) => {
     return res.status(404).json({ message: "Invite link not found." });
   }
 
+  if (room.visibility === "private" && !isMember(room, req.user.id)) {
+    const password = String(req.body?.password || "");
+    if (!password) {
+      return res.status(403).json({ message: "Private room password is required." });
+    }
+
+    if (!room.passwordHash || !(await bcrypt.compare(password, room.passwordHash))) {
+      return res.status(403).json({ message: "Incorrect private room password." });
+    }
+  }
+
   if (!isMember(room, req.user.id)) {
     room.memberIds.push(req.user.id);
     room.updatedAt = new Date().toISOString();
@@ -415,15 +573,21 @@ app.post("/api/rooms/:roomId/messages", requireAuth, async (req, res) => {
   if (!room) return;
 
   const body = String(req.body.body || "").trim();
-  if (!body) {
+  const attachments = normalizeMessageAttachments(req.body.attachments);
+  const channel = normalizeChannel(req.body.channel);
+  if (!body && !attachments.length) {
     return res.status(400).json({ message: "Message cannot be empty." });
   }
+
+  room.channels = normalizeChannels([...(room.channels || []), channel]);
 
   const message = {
     id: createId("msg"),
     roomId: room.id,
     senderId: req.user.id,
+    channel,
     body: body.slice(0, 2000),
+    attachments,
     createdAt: new Date().toISOString(),
   };
 
@@ -455,6 +619,7 @@ app.post("/api/rooms/:roomId/resources/url", requireAuth, async (req, res) => {
 
   const title = String(req.body.title || "").trim();
   const url = String(req.body.url || "").trim();
+  const folder = normalizeFolder(req.body.folder);
 
   if (!title || !/^https?:\/\//i.test(url)) {
     return res.status(400).json({ message: "Provide a title and a valid http(s) URL." });
@@ -466,6 +631,7 @@ app.post("/api/rooms/:roomId/resources/url", requireAuth, async (req, res) => {
     uploaderId: req.user.id,
     type: "url",
     title,
+    folder,
     url,
     createdAt: new Date().toISOString(),
   };
@@ -494,6 +660,7 @@ app.post(
       uploaderId: req.user.id,
       type: "file",
       title: String(req.body.title || req.file.originalname).trim(),
+      folder: normalizeFolder(req.body.folder),
       originalName: req.file.originalname,
       storageName: req.file.filename,
       mimeType: req.file.mimetype,
@@ -629,16 +796,22 @@ io.on("connection", (socket) => {
       }
 
       const body = String(payload?.body || "").trim();
-      if (!body) {
+      const attachments = normalizeMessageAttachments(payload?.attachments);
+      const channel = normalizeChannel(payload?.channel);
+      if (!body && !attachments.length) {
         ack?.({ ok: false, message: "Message cannot be empty." });
         return;
       }
+
+      room.channels = normalizeChannels([...(room.channels || []), channel]);
 
       const message = {
         id: createId("msg"),
         roomId: room.id,
         senderId: socket.user.id,
+        channel,
         body: body.slice(0, 2000),
+        attachments,
         createdAt: new Date().toISOString(),
       };
 

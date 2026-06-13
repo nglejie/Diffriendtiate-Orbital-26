@@ -1,23 +1,48 @@
-import { LogOut } from "lucide-react";
+import {
+  LogOut,
+  Plus,
+  UserRound,
+} from "lucide-react";
+import { useState } from "react";
 
-function TopBar({ user, onLogout }) {
+function TopBar({ onCreateRoom, onLogout, user }) {
+  const [accountOpen, setAccountOpen] = useState(false);
+
   return (
-    <header className="top-bar">
-      <button
-        className="brand-button"
-        onClick={() => {
-          window.location.hash = "/";
-        }}
-        type="button"
-      >
-        <span className="brand-mark">D</span>
+    <header className="top-bar" aria-label="Main navigation">
+      <div className="top-bar-brand">
+        <span className="sidebar-logo" aria-label="Diffriendtiate">
+          D
+        </span>
         <span>Diffriendtiate</span>
-      </button>
+      </div>
 
-      <div className="top-actions">
-        <span className="user-chip">{user.name}</span>
-        <button className="icon-button" onClick={onLogout} title="Log out" type="button">
-          <LogOut size={18} />
+      <div className="top-bar-actions">
+        <div className="account-menu-shell">
+          <button
+            className="top-account-button"
+            onClick={() => setAccountOpen((current) => !current)}
+            type="button"
+          >
+            <UserRound size={18} />
+            Account
+          </button>
+          {accountOpen ? (
+            <div className="account-menu" role="menu">
+              <div>
+                <strong>{user.name}</strong>
+                <span>{user.email}</span>
+              </div>
+              <button onClick={onLogout} role="menuitem" type="button">
+                <LogOut size={16} />
+                Sign Out
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <button className="top-create-button" onClick={onCreateRoom} type="button">
+          <Plus size={18} />
+          Create Room
         </button>
       </div>
     </header>

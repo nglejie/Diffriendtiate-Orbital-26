@@ -60,8 +60,19 @@ export const api = {
     request(`/api/rooms/${roomId}`, { method: "PATCH", body }),
   deleteRoom: (roomId) => request(`/api/rooms/${roomId}`, { method: "DELETE" }),
   joinRoom: (roomId) => request(`/api/rooms/${roomId}/join`, { method: "POST" }),
-  joinInvite: (inviteCode) =>
-    request(`/api/invites/${inviteCode}/join`, { method: "POST" }),
+  joinInvite: (inviteCode, body) =>
+    request(`/api/invites/${inviteCode}/join`, { method: "POST", body }),
+  createChannel: (roomId, body) =>
+    request(`/api/rooms/${roomId}/channels`, { method: "POST", body }),
+  renameChannel: (roomId, channel, body) =>
+    request(`/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}`, {
+      method: "PATCH",
+      body,
+    }),
+  deleteChannel: (roomId, channel) =>
+    request(`/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}`, {
+      method: "DELETE",
+    }),
   getMessages: (roomId) => request(`/api/rooms/${roomId}/messages`),
   getResources: (roomId) => request(`/api/rooms/${roomId}/resources`),
   addUrlResource: (roomId, body) =>
