@@ -14,6 +14,7 @@ const initialDb = {
   messages: [],
   resources: [],
   sessions: [],
+  buddyThreads: [],
 };
 
 // DATABASE_URL is the switch between quick local JSON storage and deployed PostgreSQL.
@@ -51,6 +52,11 @@ function normalizeDb(db) {
       folder: resource.folder || "General",
     })),
     sessions: db.sessions || [],
+    buddyThreads: (db.buddyThreads || []).map((thread) => ({
+      ...thread,
+      visibility: thread.visibility === "public" ? "public" : "private",
+      messages: Array.isArray(thread.messages) ? thread.messages : [],
+    })),
   };
 }
 
@@ -144,12 +150,24 @@ async function initPostgres() {
       created_at TIMESTAMPTZ NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS buddy_threads (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      visibility TEXT NOT NULL CHECK (visibility IN ('private', 'public')),
+      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_rooms_visibility ON rooms(visibility);
     CREATE INDEX IF NOT EXISTS idx_rooms_owner ON rooms(owner_id);
     CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_resources_room_created ON resources(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_room_starts ON sessions(room_id, starts_at);
+    CREATE INDEX IF NOT EXISTS idx_buddy_threads_room_updated ON buddy_threads(room_id, updated_at);
   `);
 
   await pool.query(`
@@ -195,7 +213,8 @@ async function seedPostgresFromJsonIfEmpty() {
     db.rooms.length ||
     db.messages.length ||
     db.resources.length ||
-    db.sessions.length
+    db.sessions.length ||
+    db.buddyThreads.length
   ) {
     await writePostgresDb(db);
   }
@@ -215,7 +234,7 @@ export async function initDb() {
 export async function readDb() {
   if (!pool) return readJsonDb();
 
-  const [users, rooms, messages, resources, sessions] = await Promise.all([
+  const [users, rooms, messages, resources, sessions, buddyThreads] = await Promise.all([
     pool.query(`
       SELECT
         id,
@@ -293,6 +312,19 @@ export async function readDb() {
       FROM sessions
       ORDER BY starts_at ASC
     `),
+    pool.query(`
+      SELECT
+        id,
+        room_id AS "roomId",
+        owner_id AS "ownerId",
+        title,
+        visibility,
+        messages,
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM buddy_threads
+      ORDER BY updated_at DESC
+    `),
   ]);
 
   return normalizeDb({
@@ -320,6 +352,12 @@ export async function readDb() {
       startsAt: toIso(session.startsAt),
       createdAt: toIso(session.createdAt),
     })),
+    buddyThreads: buddyThreads.rows.map((thread) => ({
+      ...thread,
+      messages: Array.isArray(thread.messages) ? thread.messages : [],
+      createdAt: toIso(thread.createdAt),
+      updatedAt: toIso(thread.updatedAt),
+    })),
   });
 }
 
@@ -338,6 +376,7 @@ async function writePostgresDb(db) {
     await client.query("BEGIN");
 
     // Keep writes atomic while the route layer works with the normalized app snapshot.
+    await client.query("DELETE FROM buddy_threads");
     await client.query("DELETE FROM sessions");
     await client.query("DELETE FROM resources");
     await client.query("DELETE FROM messages");
@@ -454,6 +493,27 @@ async function writePostgresDb(db) {
           session.agenda || "",
           session.startsAt,
           session.createdAt,
+        ],
+      );
+    }
+
+    for (const thread of db.buddyThreads || []) {
+      await client.query(
+        `
+          INSERT INTO buddy_threads (
+            id, room_id, owner_id, title, visibility, messages, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [
+          thread.id,
+          thread.roomId,
+          thread.ownerId,
+          thread.title,
+          thread.visibility === "public" ? "public" : "private",
+          JSON.stringify(thread.messages || []),
+          thread.createdAt,
+          thread.updatedAt,
         ],
       );
     }

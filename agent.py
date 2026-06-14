@@ -38,9 +38,9 @@ Rules for answering:
 - Answer primarily from tool results, only use general knowledge if tools return no useful results
 - If tools return no relevant information, briefly say the room documents did not contain enough information before using general knowledge
 - Always be honest if you don't know something
-- Return only the final answer that the student should read
-- Do not reveal chain-of-thought, hidden reasoning, tool traces, search plans, or phrases like "let me check"
-- Do not mention tool names unless the user explicitly asks how you found the answer
+- Keep the final response clear and student-facing
+- The app may show tool and progress events separately, so avoid duplicating status updates in the final response
+- Mention tools or retrieval steps only when they help the student understand the answer
 - Preserve normal spacing, paragraphs, and bullet formatting
 - When giving steps, use a numbered list with each item on its own line
 """
@@ -52,8 +52,9 @@ Rules for answering:
 - Answer primarily from the provided context, only use general knowledge if the context is missing or insufficient
 - If room context is unavailable or irrelevant, briefly say the room documents did not contain enough information before using general knowledge
 - Always be honest if you do not know something
-- Return only the final answer that the student should read
-- Do not reveal chain-of-thought, hidden reasoning, search plans, or phrases like "let me check"
+- Keep the final response clear and student-facing
+- The app may show separate progress updates; avoid repeating those status updates in the final answer
+- Mention retrieval steps only when they help the student understand the answer
 - Preserve normal spacing, paragraphs, and bullet formatting
 - When giving steps, use a numbered list with each item on its own line
 """
@@ -251,6 +252,13 @@ class Agent:
             return text
         return f"{text[:CONTEXT_CHAR_LIMIT]}\n\n[Context truncated because the source is long.]"
 
+    def _trace_excerpt(self, text: str, limit: int = 260) -> str:
+        """Keep visible trace snippets readable without flooding the chat."""
+        cleaned = re.sub(r"\s+", " ", text or "").strip()
+        if len(cleaned) <= limit:
+            return cleaned
+        return f"{cleaned[:limit].rstrip()}..."
+
     def _source_tokens(self, text: str) -> set[str]:
         """Return meaningful lowercase tokens for source matching."""
         return {
@@ -350,7 +358,7 @@ class Agent:
         context_message = HumanMessage(
             content=(
                 "Relevant context for the next question is provided below. "
-                "Use it first when it answers the question. Return only the final answer.\n\n"
+                "Use it first when it answers the question.\n\n"
                 f"{context_text}"
             )
         )
@@ -371,6 +379,22 @@ class Agent:
         Returns:
             AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
         """
+        trace_messages = []
+        query = self._last_user_query(message_chain)
+
+        def remember_progress(step: str) -> str:
+            trace_messages.append(AIMessage(content=f"[TRACE]{step}"))
+            return f"[THINKING]{step}"
+
+        if query:
+            yield remember_progress(
+                f"I am treating the latest question as: \"{self._trace_excerpt(query, 180)}\""
+            )
+        if file_bytes and file_name:
+            yield remember_progress(f"Reading attached file: {file_name}")
+        if room_id:
+            yield remember_progress("Searching this room's resources for relevant context")
+
         messages, sources, source_candidates = self._build_direct_context(
             message_chain=message_chain,
             room_id=room_id,
@@ -378,6 +402,34 @@ class Agent:
             file_name=file_name,
         )
         answer_chunks = []
+        unique_sources = []
+        for source in sources:
+            if source not in unique_sources:
+                unique_sources.append(source)
+
+        if unique_sources:
+            source_word = "source" if len(unique_sources) == 1 else "sources"
+            yield remember_progress(
+                f"Found {len(unique_sources)} relevant {source_word}: {', '.join(unique_sources[:3])}"
+            )
+            excerpted_sources = set()
+            for candidate in source_candidates:
+                source = candidate["source"]
+                if source in excerpted_sources:
+                    continue
+                excerpted_sources.add(source)
+                yield remember_progress(
+                    f"Relevant excerpt from {source}: {self._trace_excerpt(candidate['content'])}"
+                )
+                if len(excerpted_sources) >= 2:
+                    break
+            yield remember_progress(
+                "Building the answer from the retrieved room context before adding any general explanation"
+            )
+        elif room_id:
+            yield remember_progress("No matching room context found; preparing a general response")
+
+        yield remember_progress("Writing the final response in a student-readable format")
 
         model_messages = [
             SystemMessage(
@@ -393,13 +445,13 @@ class Agent:
         async for chunk in self.llm.astream(model_messages):
             if chunk.content:
                 answer_chunks.append(chunk.content)
-                yield f"[TOKEN]{chunk.content}"
                 
         # Show the files that actually support the final answer when that can be inferred.
         answer_text = "".join(answer_chunks)
+        yield f"[ANSWER]{answer_text}"
         yield f"[SOURCES]{json.dumps(self._filter_answer_sources(answer_text, source_candidates, sources))}"
         
-        yield f"[CHAIN]{json.dumps(self._convert_messages([*messages, AIMessage(content=answer_text)]))}"
+        yield f"[CHAIN]{json.dumps(self._convert_messages([*messages, *trace_messages, AIMessage(content=answer_text)]))}"
         
         yield f"[DONE]"
                 

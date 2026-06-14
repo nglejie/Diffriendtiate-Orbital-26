@@ -87,12 +87,12 @@ class VectorStore:
             tmp.close()
             os.remove(tmp.name)
     
-    async def embed_room_documents(self, room_id: str, urls: list[str]) -> int:
+    async def embed_room_documents(self, room_id: str, urls: list) -> int:
         """Load, chunk and store a document in ChromaDB
 
         Args:
             room_id (str): room_id the documents belongs to.
-            urls (str): list of file urls served by Node (e.g. ./uploads/filename.pdf)
+            urls (str): list of file urls served by Node (e.g. ./uploads/filename.pdf) or objects with fields url and file name
 
         Returns:
             int: Number of chunks added

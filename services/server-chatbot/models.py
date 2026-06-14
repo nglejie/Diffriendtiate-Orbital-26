@@ -10,7 +10,7 @@ class EmbedRequest(BaseModel):
     """The template to expect for embedding request
     """
     room_id: str
-    urls: list[str]
+    urls: list[str | EmbedDocument]
  
 class EmbedResponse(BaseModel):
     """The embeddding response template
