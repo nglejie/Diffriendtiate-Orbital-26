@@ -36,6 +36,7 @@ services:
       PORT: 4000
       JWT_SECRET: ${JWT_SECRET:-change-this-before-deploying}
       DATABASE_URL: postgres://${POSTGRES_USER:-diffriendtiate}:${POSTGRES_PASSWORD:-diffriendtiate_password}@db:5432/${POSTGRES_DB:-diffriendtiate}
+      CHATBOT_BASE_URL: http://server-chatbot:5000
     volumes:
       - uploads_data:/app/apps/server/uploads
     depends_on:
@@ -80,8 +81,15 @@ services:
     ports:
       - "5000:5000"
     env_file: .env
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
+      CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
     volumes:
-      - chroma_db:/app/chroma_db
+      - chroma_db:${CHROMA_DIR}
     depends_on:
       ollama:
         condition: service_healthy

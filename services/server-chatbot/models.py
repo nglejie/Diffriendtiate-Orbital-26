@@ -1,6 +1,11 @@
 from pydantic import BaseModel
 from typing import Literal
 
+class EmbedDocument(BaseModel):
+    """A document URL plus its user-facing filename."""
+    url: str
+    file_name: str | None = None
+
 class EmbedRequest(BaseModel):
     """The template to expect for embedding request
     """

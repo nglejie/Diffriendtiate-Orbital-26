@@ -14,7 +14,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 
 
-SYSTEM_PROMPT = """You are a helpful study assistant. 
+SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room. 
 
 You have access to tools to help answer questions:
 - search_corpus: searches uploaded documents in the room corpus

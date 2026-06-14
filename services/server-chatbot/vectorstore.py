@@ -106,9 +106,16 @@ class VectorStore:
         }
         
         async with httpx.AsyncClient(base_url=NODE_BASE_URL, timeout=30) as client:
-            for url in urls: 
-                file_name = url.split("/")[-1]
-                suffix = os.path.splitext(file_name)[-1]
+            for item in urls:
+                if isinstance(item, str):
+                    url = item
+                    display_name = item.split("/")[-1]
+                else:
+                    url = item.url
+                    display_name = item.file_name or url.split("/")[-1]
+
+                url_file_name = url.split("/")[-1]
+                suffix = os.path.splitext(display_name or url_file_name)[-1]
                 
                 try:
                     response = await client.get(url)
@@ -120,22 +127,22 @@ class VectorStore:
                         tmp_path = tmp.name
                     
                     try:
-                        docs = self._load_file(tmp_path, file_name)
+                        docs = self._load_file(tmp_path, display_name)
                         for doc in docs:
-                            doc.metadata["file_name"] = file_name
+                            doc.metadata["file_name"] = display_name
                             doc.metadata["room_id"] = room_id
                             doc.metadata["source_url"] = url
                         
                         chunks = self.splitter.split_documents(docs)
                         self.db.add_documents(chunks)
                         
-                        results["success"].append(file_name)
+                        results["success"].append(display_name)
                         results["total_chunks"] += len(chunks)
                     finally:
                         tmp.close()
                         os.remove(tmp_path)
                 except Exception as e:
-                    results["failed"].append({"file": file_name, "error": str(e)})
+                    results["failed"].append({"file": display_name, "error": str(e)})
                     
         return results
     
