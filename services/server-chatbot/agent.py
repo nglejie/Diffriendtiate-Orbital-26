@@ -12,6 +12,7 @@ from models import HistoryMessage
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 
 
 SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room. 
@@ -26,6 +27,7 @@ Rules for answering:
 - Use both tools if needed, they may contain complementary information
 - You can call search_corpus multiple times with different queries if needed
 - Answer primarily from tool results, only use general knowledge if tools return no useful results
+- When answering please also reply with which document the part of the response is from to help with grounding the response
 - If tool return no relevant information, tell the user when replying and answer from general knowledge if possible
 - Always be honest if you don't know something
 """
@@ -36,6 +38,7 @@ class Agent:
         self.llm = ChatOllama(
             model = LLM_MODEL,
             base_url=OLLAMA_BASE_URL,
+            keep_alive=OLLAMA_KEEP_ALIVE,
         )
         
     def _build_agent(self, room_id: Optional[str] = None, file_bytes: Optional[str] = None, file_name: Optional[str] = None):
@@ -77,7 +80,7 @@ class Agent:
         system_content += "\n\n Additional Context for this request (if any):"
         
         if room_id:
-            system_content += f"\n- A room corpus is available (room_id: {room_id}). You SHOULD call search_corpus before answering"
+            system_content += f"\n- A room corpus is available (room_id: {room_id}). If you need more context to provide an answer, you should search_corpus before answering"
         if has_file:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
