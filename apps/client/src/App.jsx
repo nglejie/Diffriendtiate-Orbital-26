@@ -3,7 +3,6 @@ import { api, getAuthToken, setAuthToken } from "./api.js";
 import AuthView from "./components/AuthView.jsx";
 import Dashboard from "./components/Dashboard.jsx";
 import RoomView from "./components/RoomView.jsx";
-import TopBar from "./components/TopBar.jsx";
 
 function parseRoute() {
   const hash = window.location.hash.replace(/^#\/?/, "");
@@ -91,22 +90,28 @@ function App() {
     return <AuthView onAuthenticated={handleAuthenticated} />;
   }
 
-  return (
-    <main className="app-shell">
-      <TopBar user={user} onLogout={handleLogout} />
-
-      {route.name === "dashboard" ? (
-        <Dashboard user={user} onOpenRoom={(roomId) => navigate(`/rooms/${roomId}`)} />
-      ) : (
-        <RoomView
-          inviteCode={route.inviteCode}
-          roomId={route.roomId}
-          token={token}
+  if (route.name === "dashboard") {
+    return (
+      <main className="app-shell">
+        <Dashboard
           user={user}
-          onBack={() => navigate("/")}
+          onLogout={handleLogout}
           onOpenRoom={(roomId) => navigate(`/rooms/${roomId}`)}
         />
-      )}
+      </main>
+    );
+  }
+
+  return (
+    <main className="room-shell">
+      <RoomView
+        inviteCode={route.inviteCode}
+        roomId={route.roomId}
+        token={token}
+        user={user}
+        onBack={() => navigate("/")}
+        onOpenRoom={(roomId) => navigate(`/rooms/${roomId}`)}
+      />
     </main>
   );
 }

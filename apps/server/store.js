@@ -35,9 +35,21 @@ export function storageMode() {
 function normalizeDb(db) {
   return {
     users: db.users || [],
-    rooms: db.rooms || [],
-    messages: db.messages || [],
-    resources: db.resources || [],
+    rooms: (db.rooms || []).map((room) => ({
+      ...room,
+      channels: Array.isArray(room.channels) && room.channels.length
+        ? room.channels
+        : ["general"],
+    })),
+    messages: (db.messages || []).map((message) => ({
+      ...message,
+      channel: message.channel || "general",
+      attachments: Array.isArray(message.attachments) ? message.attachments : [],
+    })),
+    resources: (db.resources || []).map((resource) => ({
+      ...resource,
+      folder: resource.folder || "General",
+    })),
     sessions: db.sessions || [],
   };
 }
@@ -80,7 +92,10 @@ async function initPostgres() {
       description TEXT NOT NULL DEFAULT '',
       visibility TEXT NOT NULL CHECK (visibility IN ('public', 'private')),
       tags TEXT[] NOT NULL DEFAULT '{}',
-      theme TEXT NOT NULL DEFAULT 'bay',
+      theme TEXT NOT NULL DEFAULT 'twilight',
+      background TEXT NOT NULL DEFAULT 'aurora',
+      channels TEXT[] NOT NULL DEFAULT '{general}',
+      password_hash TEXT,
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       invite_code TEXT UNIQUE NOT NULL,
       created_at TIMESTAMPTZ NOT NULL,
@@ -98,7 +113,9 @@ async function initPostgres() {
       id TEXT PRIMARY KEY,
       room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
       sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL DEFAULT 'general',
       body TEXT NOT NULL,
+      attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_at TIMESTAMPTZ NOT NULL
     );
 
@@ -108,6 +125,7 @@ async function initPostgres() {
       uploader_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       type TEXT NOT NULL CHECK (type IN ('url', 'file')),
       title TEXT NOT NULL,
+      folder TEXT NOT NULL DEFAULT 'General',
       original_name TEXT,
       storage_name TEXT,
       mime_type TEXT,
@@ -132,6 +150,36 @@ async function initPostgres() {
     CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_resources_room_created ON resources(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_room_starts ON sessions(room_id, starts_at);
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS background TEXT NOT NULL DEFAULT 'aurora'
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS password_hash TEXT
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS channels TEXT[] NOT NULL DEFAULT '{general}'
+  `);
+
+  await pool.query(`
+    ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'general'
+  `);
+
+  await pool.query(`
+    ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
+
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT 'General'
   `);
 }
 
@@ -187,6 +235,9 @@ export async function readDb() {
         r.visibility,
         r.tags,
         r.theme,
+        r.background,
+        r.channels,
+        r.password_hash AS "passwordHash",
         r.owner_id AS "ownerId",
         r.invite_code AS "inviteCode",
         r.created_at AS "createdAt",
@@ -206,7 +257,9 @@ export async function readDb() {
         id,
         room_id AS "roomId",
         sender_id AS "senderId",
+        channel,
         body,
+        attachments,
         created_at AS "createdAt"
       FROM messages
       ORDER BY created_at ASC
@@ -218,6 +271,7 @@ export async function readDb() {
         uploader_id AS "uploaderId",
         type,
         title,
+        folder,
         original_name AS "originalName",
         storage_name AS "storageName",
         mime_type AS "mimeType",
@@ -306,9 +360,9 @@ async function writePostgresDb(db) {
         `
           INSERT INTO rooms (
             id, name, module_code, description, visibility, tags, theme,
-            owner_id, invite_code, created_at, updated_at
+            background, channels, password_hash, owner_id, invite_code, created_at, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         `,
         [
           room.id,
@@ -317,7 +371,10 @@ async function writePostgresDb(db) {
           room.description || "",
           room.visibility,
           room.tags || [],
-          room.theme || "bay",
+          room.theme || "twilight",
+          room.background || "aurora",
+          room.channels?.length ? room.channels : ["general"],
+          room.passwordHash || null,
           room.ownerId,
           room.inviteCode,
           room.createdAt,
@@ -340,14 +397,16 @@ async function writePostgresDb(db) {
     for (const message of db.messages) {
       await client.query(
         `
-          INSERT INTO messages (id, room_id, sender_id, body, created_at)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO messages (id, room_id, sender_id, channel, body, attachments, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
         [
           message.id,
           message.roomId,
           message.senderId,
+          message.channel || "general",
           message.body,
+          JSON.stringify(message.attachments || []),
           message.createdAt,
         ],
       );
@@ -357,10 +416,10 @@ async function writePostgresDb(db) {
       await client.query(
         `
           INSERT INTO resources (
-            id, room_id, uploader_id, type, title, original_name, storage_name,
+            id, room_id, uploader_id, type, title, folder, original_name, storage_name,
             mime_type, size, url, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `,
         [
           resource.id,
@@ -368,6 +427,7 @@ async function writePostgresDb(db) {
           resource.uploaderId,
           resource.type,
           resource.title,
+          resource.folder || "General",
           resource.originalName || null,
           resource.storageName || null,
           resource.mimeType || null,
