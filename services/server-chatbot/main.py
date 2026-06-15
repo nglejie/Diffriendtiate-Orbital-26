@@ -168,6 +168,12 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
         "[DONE]": "done",
     }
     
+    def format_sse(event_name: str, data: str = "") -> str:
+        """Format Server-Sent Events safely, including multi-line answers."""
+        lines = str(data).splitlines() or [""]
+        payload = "\n".join(f"data: {line}" for line in lines)
+        return f"event: {event_name}\n{payload}\n\n"
+    
     async def token_generator():
         async for chunk in agent.stream(message_chain = message_chain, 
                                         room_id = room_id, 
@@ -177,7 +183,8 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
             for prefix, event_name in PREFIX_MAP.items():
                 if chunk.startswith(prefix):
                     data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}
-                    yield f"event: {event_name}\ndata: {data}\n\n"
+                    # yield f"event: {event_name}\ndata: {data}\n\n"
+                    yield format_sse(event_name, data)
                     break
         
     print("---Streaming Response---")

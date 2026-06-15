@@ -30,7 +30,7 @@ def build_file_tool(file_bytes: bytes, file_name: str, vectorstore):
         if "content" not in cache:
             cache["content"] = vectorstore.load_file_content_from_bytes(file_bytes, file_name)
             
-        return f"[Source: {file_name}]\n{cache["content"]}"
+        return f"[Source: {file_name}]\n{cache['content']}"
     
     return [read_file]
 
@@ -68,7 +68,7 @@ def build_room_tools(vectorstore, room_id: str) -> list:
         results = []
         for doc in docs:
             source = doc.metadata.get("file_name", "unknown")
-            results.append(f"[Source: {source}\n{doc.page_content}]")
+            results.append(f"[Source: {source}]\n{doc.page_content}")
         
         return "\n\n---\n\n".join(results)
     

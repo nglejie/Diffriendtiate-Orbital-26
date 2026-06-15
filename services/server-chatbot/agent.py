@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
@@ -14,7 +15,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 
 
-SYSTEM_PROMPT = """You are a helpful study assistant. 
+SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room. 
 
 You have access to tools to help answer questions:
 - search_corpus: searches uploaded documents in the room corpus
@@ -26,6 +27,7 @@ Rules for answering:
 - Use both tools if needed, they may contain complementary information
 - You can call search_corpus multiple times with different queries if needed
 - Answer primarily from tool results, only use general knowledge if tools return no useful results
+- When answering please also reply with which document the part of the response is from to help with grounding the response
 - If tool return no relevant information, tell the user when replying and answer from general knowledge if possible
 - Always be honest if you don't know something
 """
@@ -38,7 +40,12 @@ class Agent:
             base_url=OLLAMA_BASE_URL,
         )
         
-    def _build_agent(self, room_id: Optional[str] = None, file_bytes: Optional[str] = None, file_name: Optional[str] = None):
+    def _build_agent(
+        self, 
+        room_id: Optional[str] = None, 
+        file_bytes: Optional[str] = None, 
+        file_name: Optional[str] = None,
+        enable_agent_tools: Optional[bool] = True):
         """Build a Langgraph agent with tools
         Global tools are always included
         Room tools only if room_id is provided
@@ -47,12 +54,13 @@ class Agent:
         Args:
             room_id (Optional[str], optional): _description_. Defaults to None.
             file_bytes (Optional[bytes]): raw bytes of uploaded file. Defaults to None.
-            file_name = (Optional[str]): name of uploaded file. Defaults to None
+            file_name (Optional[str]): name of uploaded file. Defaults to None
+            enable_agent_tools (Optional[bool]): Enable tools for models to use. Defaults to None
         """
-        tools = build_global_tools()
-        if room_id:
+        tools = build_global_tools() if enable_agent_tools else []
+        if room_id and enable_agent_tools:
             tools += build_room_tools(self.vectorstore, room_id)
-        if file_bytes and file_name:
+        if file_bytes and file_name and enable_agent_tools:
             tools += build_file_tool(file_bytes, file_name, self.vectorstore)
             
         @dynamic_prompt
@@ -77,7 +85,7 @@ class Agent:
         system_content += "\n\n Additional Context for this request (if any):"
         
         if room_id:
-            system_content += f"\n- A room corpus is available (room_id: {room_id}). You SHOULD call search_corpus before answering"
+            system_content += f"\n- A room corpus is available (room_id: {room_id}). If you need more context to provide an answer, you should search_corpus before answering"
         if has_file:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
@@ -198,8 +206,9 @@ class Agent:
         Returns:
             AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
         """
-        agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
+        agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name, enable_agent_tools = True)
         messages = self._message_chain_to_messages(message_chain)
+        print(f"DEBUG: messages\n{messages}\n")
         sources = []
         all_messages = list(messages)
         
@@ -258,8 +267,10 @@ class Agent:
                 
         # return sources after all tokens
         yield f"[SOURCES]{json.dumps(sources)}"
-        
-        yield f"[CHAIN]{json.dumps(self._convert_messages(all_messages))}"
+
+        chain = self._convert_messages(all_messages)
+        print(f"DEBUG: Message Chain\n{chain}\n")
+        yield f"[CHAIN]{json.dumps(chain)}"
         
         yield f"[DONE]"
                 
@@ -275,7 +286,7 @@ class Agent:
         Returns:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
-        agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name)
+        agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name, enable_agent_tools = True)
         messages = self._message_chain_to_messages(message_chain)
         
         result = await agent.ainvoke({"messages": messages})

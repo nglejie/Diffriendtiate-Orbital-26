@@ -16,6 +16,11 @@ const uploadDir = path.join(__dirname, "uploads");
 const port = Number(process.env.PORT || 4000);
 const jwtSecret =
   process.env.JWT_SECRET || "diffriendtiate-local-development-secret";
+const chatbotBaseUrl = (
+  process.env.CHATBOT_BASE_URL || "http://127.0.0.1:5000"
+).replace(/\/+$/, "");
+const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx"]);
+const roomCorpusSyncCache = new Map();
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -132,6 +137,124 @@ function sessionDto(db, session) {
   };
 }
 
+function normalizeBuddyVisibility(value) {
+  return value === "public" ? "public" : "private";
+}
+
+function getBuddyThinkingText(value) {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const directText =
+      value.text ??
+      value.message ??
+      value.summary ??
+      value.content ??
+      value.output ??
+      value.detail ??
+      value.description ??
+      "";
+
+    return directText && directText !== value ? getBuddyThinkingText(directText) : "";
+  }
+
+  return "";
+}
+
+function normalizeBuddyThinkingStep(step) {
+  if (step && typeof step === "object" && !Array.isArray(step)) {
+    const text = getBuddyThinkingText(step)
+      .trim()
+      .slice(0, 1500);
+
+    if (!text) return null;
+
+    return {
+      id: String(step.id || `${step.type || "thought"}:${text}`).slice(0, 260),
+      type: ["tool", "done", "thought"].includes(step.type) ? step.type : "thought",
+      text,
+      summary: getBuddyThinkingText(step.summary).slice(0, 260),
+      tool: String(step.tool || "").slice(0, 80),
+      status: String(step.status || "").slice(0, 40),
+    };
+  }
+
+  const text = String(step || "").trim().slice(0, 1500);
+  if (!text) return null;
+
+  return text;
+}
+
+function normalizeBuddyThreadMessages(value, actor) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((message) => {
+      const role = message?.role === "assistant" ? "assistant" : "user";
+      const body = String(message?.body || message?.content || "").trim().slice(0, 12000);
+      const attachments = normalizeMessageAttachments(message?.attachments);
+      const sources = Array.isArray(message?.sources)
+        ? message.sources.map(String).map((source) => source.trim()).filter(Boolean).slice(0, 8)
+        : [];
+      const thinkingSteps =
+        role === "assistant" && Array.isArray(message?.thinkingSteps)
+          ? message.thinkingSteps
+              .map(normalizeBuddyThinkingStep)
+              .filter(Boolean)
+              .slice(0, 40)
+          : [];
+
+      return {
+        id: String(message?.id || createId("bmsg")),
+        role,
+        body,
+        attachments,
+        sources,
+        thinkingSteps,
+        isThinking: false,
+        authorId: role === "user" ? String(message?.authorId || actor?.id || "") : null,
+        authorName: role === "user" ? String(message?.authorName || actor?.name || "") : null,
+        createdAt: message?.createdAt || new Date().toISOString(),
+      };
+    })
+    .filter(
+      (message) =>
+        message.body ||
+        message.attachments.length ||
+        message.sources.length ||
+        message.thinkingSteps.length,
+    )
+    .slice(-80);
+}
+
+function canViewBuddyThread(thread, userId) {
+  return thread.visibility === "public" || thread.ownerId === userId;
+}
+
+function canEditBuddyThread(thread, userId) {
+  return thread.ownerId === userId;
+}
+
+function isSubstantiveBuddyThread(thread) {
+  return normalizeBuddyThreadMessages(thread.messages).some(
+    (message) =>
+      message.id !== "welcome" &&
+      message.body !== "Send a question with any files you want me to consider.",
+  );
+}
+
+function buddyThreadDto(db, thread, userId) {
+  return {
+    ...thread,
+    visibility: normalizeBuddyVisibility(thread.visibility),
+    messages: normalizeBuddyThreadMessages(thread.messages),
+    owner: publicUser(db.users.find((user) => user.id === thread.ownerId)),
+    isOwner: thread.ownerId === userId,
+  };
+}
+
 function normalizeTags(value) {
   // Room cards are designed around at most three visible tags.
   if (Array.isArray(value)) {
@@ -179,6 +302,361 @@ function normalizeMessageAttachments(value) {
     }))
     .filter((attachment) => attachment.id && attachment.url)
     .slice(0, 8);
+}
+
+function normalizeBuddyMessages(value) {
+  if (!Array.isArray(value)) return [];
+
+  // Keep the prompt compact enough for query-based chatbot requests while preserving
+  // the most recent user/assistant context the model needs to answer coherently.
+  return value
+    .filter((message) => message?.id !== "welcome")
+    .map((message) => {
+      const role = message?.role === "assistant" ? "assistant" : "user";
+      const sources =
+        role === "assistant" && Array.isArray(message?.sources)
+          ? message.sources.filter(Boolean).slice(0, 6)
+          : [];
+      const sourceNote = sources.length
+        ? `\n\nSources used in this answer: ${sources.join(", ")}.`
+        : "";
+
+      return {
+        role,
+        content: `${String(message?.content || message?.body || "")
+          .trim()
+          .slice(0, 4000)}${sourceNote}`,
+      };
+    })
+    .filter((message) => message.content)
+    .slice(-12);
+}
+
+function isBuddyFollowUpMessage(content) {
+  const text = String(content || "").trim();
+  if (!text) return false;
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  if (wordCount > 22) return false;
+
+  return /\b(more details?|elaborate|explain more|tell me more|go deeper|continue|same|previous|above|it|this|that|those|them|what about|how about|what do you mean|what does that mean|why is that|how so)\b/i.test(
+    text,
+  );
+}
+
+function withBuddyFollowUpContext(messageChain) {
+  if (!messageChain.length) return messageChain;
+
+  const latest = messageChain.at(-1);
+  if (latest.role !== "user" || !isBuddyFollowUpMessage(latest.content)) {
+    return messageChain;
+  }
+
+  const earlierMessages = messageChain.slice(0, -1);
+  const previousUser = [...earlierMessages]
+    .reverse()
+    .find((message) => message.role === "user");
+  const previousAssistant = [...earlierMessages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+
+  if (!previousUser && !previousAssistant) return messageChain;
+
+  const nextChain = [...messageChain];
+  nextChain[nextChain.length - 1] = {
+    ...latest,
+    content: [
+      "The student is asking a follow-up in the same Rocky chat.",
+      "Resolve references like this, that, it, and more details using the previous exchange.",
+      "If the previous answer used room resources, continue using the same room context where relevant before falling back to general knowledge.",
+      previousUser ? `Previous user message: ${previousUser.content.slice(0, 900)}` : "",
+      previousAssistant
+        ? `Previous Rocky answer: ${previousAssistant.content.slice(0, 1400)}`
+        : "",
+      "",
+      `Current follow-up: ${latest.content}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+
+  return nextChain;
+}
+
+function getResourceExtension(resource) {
+  const source =
+    resource?.originalName || resource?.storageName || resource?.title || resource?.url || "";
+
+  try {
+    return path.extname(new URL(source, "http://local").pathname).toLowerCase();
+  } catch {
+    return path.extname(source).toLowerCase();
+  }
+}
+
+function isChatbotDocument(resource) {
+  return (
+    ["file", "url"].includes(resource?.type) &&
+    chatbotDocumentExtensions.has(getResourceExtension(resource))
+  );
+}
+
+function isChatbotFileResource(resource) {
+  return resource?.type === "file" && chatbotDocumentExtensions.has(getResourceExtension(resource));
+}
+
+function resourceUrlForChatbot(resource) {
+  if (!isChatbotDocument(resource)) return null;
+  return resource.url || (resource.storageName ? `/uploads/${resource.storageName}` : null);
+}
+
+function chatbotDocumentPayload(resource) {
+  const url = resourceUrlForChatbot(resource);
+  if (!url) return null;
+
+  return {
+    url,
+    file_name: resource.originalName || resource.title || resource.storageName || url,
+  };
+}
+
+function roomCorpusFingerprint(resources) {
+  return JSON.stringify(
+    resources
+      .map((resource) => ({
+        id: resource.id,
+        url: resourceUrlForChatbot(resource),
+        name: resource.originalName || resource.title || resource.storageName || "",
+        size: resource.size || 0,
+        createdAt: resource.createdAt || "",
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+}
+
+async function syncRoomResourcesWithChatbot(db, room, options = {}) {
+  const force = Boolean(options.force);
+  const supportedResources = db.resources.filter(
+    (resource) => resource.roomId === room.id && isChatbotDocument(resource),
+  );
+  const fingerprint = roomCorpusFingerprint(supportedResources);
+
+  if (!force && roomCorpusSyncCache.get(room.id) === fingerprint) {
+    return {
+      result: true,
+      success: supportedResources.map(
+        (resource) => resource.originalName || resource.title || resource.storageName,
+      ),
+      failed: [],
+      totalChunks: 0,
+      cached: true,
+      message: "Room corpus is already synced.",
+    };
+  }
+
+  const urls = supportedResources.map(chatbotDocumentPayload).filter(Boolean);
+
+  if (!urls.length) {
+    await clearChatbotCorpus(room.id);
+    roomCorpusSyncCache.set(room.id, fingerprint);
+    return {
+      result: true,
+      success: [],
+      failed: [],
+      totalChunks: 0,
+      message: "No supported PDF, TXT, or DOCX resources are available to sync.",
+    };
+  }
+
+  console.info(`[buddy] Syncing ${urls.length} resource(s) for room ${room.id}`);
+  const payload = await callChatbotJson("/embed", {
+    room_id: room.id,
+    urls,
+  });
+
+  if (payload.result) {
+    roomCorpusSyncCache.set(room.id, fingerprint);
+  }
+
+  return {
+    result: Boolean(payload.result),
+    success: payload.success || [],
+    failed: payload.failed || [],
+    totalChunks: Number(payload.total_chunks || 0),
+  };
+}
+
+function createHttpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function resolveBuddyMessagePayload(db, room, body) {
+  const messageChain = normalizeBuddyMessages(body.messages);
+  if (!messageChain.length || messageChain.at(-1).role !== "user") {
+    throw createHttpError(400, "Send a question before asking Rocky.");
+  }
+
+  const attachmentIds = Array.isArray(body.attachmentResourceIds)
+    ? body.attachmentResourceIds.map(String)
+    : [];
+  const attachedResources = attachmentIds
+    .map((resourceId) =>
+      db.resources.find(
+        (resource) => resource.id === resourceId && resource.roomId === room.id,
+      ),
+    )
+    .filter(Boolean);
+  const directResource = attachedResources.find(isChatbotFileResource);
+
+  if (attachedResources.length && !directResource) {
+    throw createHttpError(
+      400,
+      "Rocky can currently read one PDF, TXT, or DOCX attachment at a time.",
+    );
+  }
+
+  return {
+    messageChain,
+    directResource,
+    requestTitle: body.requestTitle === true,
+  };
+}
+
+function withBuddyTitleRequest(messageChain, requestTitle) {
+  if (!requestTitle || !messageChain.length) return messageChain;
+
+  const nextChain = [...messageChain];
+  const latest = nextChain.at(-1);
+  nextChain[nextChain.length - 1] = {
+    ...latest,
+    content: [
+      "This is the first message in a new Rocky chat.",
+      "Generate a concise, natural 3-7 word chat title for this conversation, then answer the student normally.",
+      "Do not shorten the answer just because a title is requested.",
+      "Give the same complete, useful answer you would provide in a normal Rocky chat, with explanations, steps, examples, or caveats when they help.",
+      "Return the title and answer in this exact shape:",
+      "<TITLE>chat title</TITLE>",
+      "<ANSWER>",
+      "your answer",
+      "</ANSWER>",
+      "",
+      "Student message:",
+      latest.content,
+    ].join("\n"),
+  };
+
+  return nextChain;
+}
+
+function safeUploadPath(storageName) {
+  const targetPath = path.resolve(uploadDir, storageName || "");
+  const uploadRoot = path.resolve(uploadDir);
+
+  if (!targetPath.startsWith(`${uploadRoot}${path.sep}`)) {
+    throw new Error("Invalid upload path.");
+  }
+
+  return targetPath;
+}
+
+function chatbotUrl(pathname) {
+  return new URL(pathname, `${chatbotBaseUrl}/`);
+}
+
+async function readChatbotPayload(response) {
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const detail = Array.isArray(payload.detail)
+      ? payload.detail.map((item) => item.msg || item.message || String(item)).join(" ")
+      : payload.detail;
+    throw new Error(detail || payload.message || "Rocky is not available right now.");
+  }
+
+  return payload;
+}
+
+async function callChatbotJson(pathname, body, timeoutMs = 180_000) {
+  const response = await fetch(chatbotUrl(pathname), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  return readChatbotPayload(response);
+}
+
+async function clearChatbotCorpus(roomId) {
+  const url = chatbotUrl("/corpus");
+  url.searchParams.set("room_id", roomId);
+
+  const response = await fetch(url, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  return readChatbotPayload(response);
+}
+
+async function createChatbotPredictRequest(pathname, { messageChain, roomId, resource }) {
+  const url = chatbotUrl(pathname);
+  url.searchParams.set("message_chain", JSON.stringify(messageChain));
+  url.searchParams.set("room_id", roomId);
+
+  const init = {
+    method: "POST",
+    signal: AbortSignal.timeout(240_000),
+  };
+
+  if (resource) {
+    const filePath = safeUploadPath(resource.storageName);
+    const fileBytes = await fs.promises.readFile(filePath);
+    const formData = new FormData();
+
+    formData.append(
+      "file",
+      new Blob([fileBytes], {
+        type: resource.mimeType || "application/octet-stream",
+      }),
+      resource.originalName || resource.title || resource.storageName,
+    );
+
+    init.body = formData;
+  }
+
+  return { url, init };
+}
+
+async function askChatbot({ messageChain, roomId, resource }) {
+  const { url, init } = await createChatbotPredictRequest("/predict", {
+    messageChain,
+    roomId,
+    resource,
+  });
+  const response = await fetch(url, init);
+  return readChatbotPayload(response);
+}
+
+async function streamChatbot({ messageChain, roomId, resource }) {
+  const { url, init } = await createChatbotPredictRequest("/predict/stream", {
+    messageChain,
+    roomId,
+    resource,
+  });
+  const response = await fetch(url, init);
+
+  if (!response.ok) {
+    await readChatbotPayload(response);
+  }
+
+  if (!response.body) {
+    throw new Error("Rocky did not return a stream.");
+  }
+
+  return response;
 }
 
 function findRoomOr404(db, roomId, res) {
@@ -503,8 +981,12 @@ app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
   db.messages = db.messages.filter((message) => message.roomId !== room.id);
   db.resources = db.resources.filter((resource) => resource.roomId !== room.id);
   db.sessions = db.sessions.filter((session) => session.roomId !== room.id);
+  db.buddyThreads = db.buddyThreads.filter((thread) => thread.roomId !== room.id);
   await writeDb(db);
 
+  clearChatbotCorpus(room.id).catch((error) => {
+    console.warn(`[buddy] Failed to clear corpus for deleted room ${room.id}: ${error.message}`);
+  });
   io.to(`room:${room.id}`).emit("room:deleted", { roomId: room.id });
   res.status(204).end();
 });
@@ -697,6 +1179,263 @@ app.delete("/api/resources/:resourceId", requireAuth, async (req, res) => {
   db.resources = db.resources.filter((candidate) => candidate.id !== resource.id);
   await writeDb(db);
   res.status(204).end();
+});
+
+app.get("/api/rooms/:roomId/buddy/threads", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const threads = (db.buddyThreads || [])
+    .filter(
+      (thread) =>
+        thread.roomId === room.id &&
+        canViewBuddyThread(thread, req.user.id) &&
+        isSubstantiveBuddyThread(thread),
+    )
+    .map((thread) => buddyThreadDto(db, thread, req.user.id))
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+
+  res.json({ threads });
+});
+
+app.post("/api/rooms/:roomId/buddy/threads", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const now = new Date().toISOString();
+  const thread = {
+    id: createId("buddy"),
+    roomId: room.id,
+    ownerId: req.user.id,
+    title: String(req.body.title || "New Chat").trim().slice(0, 60) || "New Chat",
+    visibility: normalizeBuddyVisibility(req.body.visibility),
+    messages: normalizeBuddyThreadMessages(req.body.messages, req.user),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.buddyThreads.push(thread);
+  await writeDb(db);
+  res.status(201).json({ thread: buddyThreadDto(db, thread, req.user.id) });
+});
+
+app.patch("/api/rooms/:roomId/buddy/threads/:threadId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const thread = (db.buddyThreads || []).find(
+    (candidate) => candidate.id === req.params.threadId && candidate.roomId === room.id,
+  );
+
+  if (!thread || !canViewBuddyThread(thread, req.user.id)) {
+    return res.status(404).json({ message: "Buddy chat not found." });
+  }
+
+  if (req.body.title !== undefined) {
+    if (!canEditBuddyThread(thread, req.user.id)) {
+      return res.status(403).json({ message: "Only the chat owner can rename this Buddy chat." });
+    }
+    thread.title = String(req.body.title || "New Chat").trim().slice(0, 60) || "New Chat";
+  }
+
+  if (req.body.visibility !== undefined) {
+    if (!canEditBuddyThread(thread, req.user.id)) {
+      return res.status(403).json({ message: "Only the chat owner can change visibility." });
+    }
+    thread.visibility = normalizeBuddyVisibility(req.body.visibility);
+  }
+
+  if (req.body.messages !== undefined) {
+    if (thread.visibility !== "public" && !canEditBuddyThread(thread, req.user.id)) {
+      return res.status(403).json({ message: "This Buddy chat is private." });
+    }
+    thread.messages = normalizeBuddyThreadMessages(req.body.messages, req.user);
+  }
+
+  thread.updatedAt = new Date().toISOString();
+  await writeDb(db);
+  res.json({ thread: buddyThreadDto(db, thread, req.user.id) });
+});
+
+app.delete("/api/rooms/:roomId/buddy/threads/:threadId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const thread = (db.buddyThreads || []).find(
+    (candidate) => candidate.id === req.params.threadId && candidate.roomId === room.id,
+  );
+
+  if (!thread || !canViewBuddyThread(thread, req.user.id)) {
+    return res.status(404).json({ message: "Buddy chat not found." });
+  }
+
+  if (!canEditBuddyThread(thread, req.user.id)) {
+    return res.status(403).json({ message: "Only the chat owner can delete this Buddy chat." });
+  }
+
+  db.buddyThreads = (db.buddyThreads || []).filter((candidate) => candidate.id !== thread.id);
+  await writeDb(db);
+  res.status(204).end();
+});
+
+app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  try {
+    const response = await fetch(chatbotUrl("/health"), {
+      signal: AbortSignal.timeout(10_000),
+    });
+    const payload = await readChatbotPayload(response);
+    res.json({ ok: true, service: payload.message || "Rocky" });
+  } catch (error) {
+    console.warn(`[buddy] Health check failed for ${room.id}: ${error.message}`);
+    res.status(502).json({
+      message: "Rocky is not available yet. Start the chatbot service and try again.",
+    });
+  }
+});
+
+app.post("/api/rooms/:roomId/buddy/embed", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  try {
+    res.json(await syncRoomResourcesWithChatbot(db, room, { force: true }));
+  } catch (error) {
+    console.warn(`[buddy] Resource sync failed for ${room.id}: ${error.message}`);
+    res.status(502).json({
+      message: error.message || "Unable to sync room resources with Rocky.",
+    });
+  }
+});
+
+app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  try {
+    const { messageChain, directResource, requestTitle } = resolveBuddyMessagePayload(
+      db,
+      room,
+      req.body,
+    );
+    // const chatbotMessageChain = withBuddyTitleRequest(
+    //   withBuddyFollowUpContext(messageChain),
+    //   requestTitle,
+    // );
+    const chatbotMessageChain = withBuddyFollowUpContext(messageChain);
+    await syncRoomResourcesWithChatbot(db, room);
+    console.info(
+      `[buddy] Asking room ${room.id} with ${directResource ? directResource.title : "corpus only"}`,
+    );
+    const payload = await askChatbot({
+      messageChain: chatbotMessageChain,
+      roomId: room.id,
+      resource: directResource,
+    });
+
+    res.json({
+      answer: payload.answer || "",
+      sources: payload.sources || [],
+      messageChain: payload.message_chain || [],
+      directAttachment: directResource ? resourceDto(db, directResource) : null,
+    });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    console.warn(`[buddy] Message failed for ${room.id}: ${error.message}`);
+    res.status(502).json({
+      message: error.message || "Unable to get a response from Rocky.",
+    });
+  }
+});
+
+app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  try {
+    const { messageChain, directResource, requestTitle } = resolveBuddyMessagePayload(
+      db,
+      room,
+      req.body,
+    );
+    const chatbotMessageChain = withBuddyTitleRequest(
+      withBuddyFollowUpContext(messageChain),
+      requestTitle,
+    );
+
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    res.write(": connected\n\n");
+    res.flush?.();
+
+    const writeSse = (event, data = "") => {
+      const payload = typeof data === "string" ? data : JSON.stringify(data);
+      const lines = String(payload).split(/\r?\n/);
+      res.write(`event: ${event}\n${lines.map((line) => `data: ${line}`).join("\n")}\n\n`);
+      res.flush?.();
+    };
+
+    writeSse("tool_start", {
+      id: "sync-room-resources",
+      name: "sync_resources",
+    });
+    const syncResult = await syncRoomResourcesWithChatbot(db, room);
+    writeSse("tool_end", {
+      id: "sync-room-resources",
+      name: "sync_resources",
+      result: syncResult.message || "Room resources synced.",
+    });
+
+    console.info(
+      `[buddy] Streaming room ${room.id} with ${directResource ? directResource.title : "corpus only"}`,
+    );
+    const response = await streamChatbot({
+      messageChain: chatbotMessageChain,
+      roomId: room.id,
+      resource: directResource,
+    });
+
+    const reader = response.body.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+      res.flush?.();
+    }
+
+    res.end();
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    console.warn(`[buddy] Stream failed for ${room.id}: ${error.message}`);
+    if (res.headersSent) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: error.message })}\n\n`);
+      return res.end();
+    }
+
+    return res.status(502).json({
+      message: error.message || "Unable to stream a response from Rocky.",
+    });
+  }
 });
 
 app.get("/api/rooms/:roomId/sessions", requireAuth, async (req, res) => {

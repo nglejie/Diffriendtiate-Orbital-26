@@ -48,6 +48,69 @@ async function request(path, options = {}) {
   return payload;
 }
 
+function parseSseBlock(block) {
+  let event = "message";
+  const data = [];
+
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      const value = line.slice(5);
+      data.push(value.startsWith(" ") ? value.slice(1) : value);
+    }
+  }
+
+  return { event, data: data.join("\n") };
+}
+
+async function streamRequest(path, body, onEvent, options = {}) {
+  const headers = { "Content-Type": "application/json" };
+
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || "Something went wrong.");
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || "";
+
+    for (const block of blocks) {
+      if (!block.trim()) continue;
+      const event = parseSseBlock(block);
+      onEvent?.(event.event, event.data);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const event = parseSseBlock(buffer);
+    onEvent?.(event.event, event.data);
+  }
+}
+
 export const api = {
   register: (body) => request("/api/auth/register", { method: "POST", body }),
   login: (body) => request("/api/auth/login", { method: "POST", body }),
@@ -84,6 +147,25 @@ export const api = {
     }),
   deleteResource: (resourceId) =>
     request(`/api/resources/${resourceId}`, { method: "DELETE" }),
+  getBuddyHealth: (roomId) => request(`/api/rooms/${roomId}/buddy/health`),
+  getBuddyThreads: (roomId) => request(`/api/rooms/${roomId}/buddy/threads`),
+  createBuddyThread: (roomId, body) =>
+    request(`/api/rooms/${roomId}/buddy/threads`, { method: "POST", body }),
+  updateBuddyThread: (roomId, threadId, body) =>
+    request(`/api/rooms/${roomId}/buddy/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      body,
+    }),
+  deleteBuddyThread: (roomId, threadId) =>
+    request(`/api/rooms/${roomId}/buddy/threads/${encodeURIComponent(threadId)}`, {
+      method: "DELETE",
+    }),
+  syncBuddyResources: (roomId) =>
+    request(`/api/rooms/${roomId}/buddy/embed`, { method: "POST" }),
+  askBuddy: (roomId, body) =>
+    request(`/api/rooms/${roomId}/buddy/message`, { method: "POST", body }),
+  streamBuddy: (roomId, body, onEvent, options) =>
+    streamRequest(`/api/rooms/${roomId}/buddy/message/stream`, body, onEvent, options),
   getSessions: (roomId) => request(`/api/rooms/${roomId}/sessions`),
   addSession: (roomId, body) =>
     request(`/api/rooms/${roomId}/sessions`, { method: "POST", body }),
