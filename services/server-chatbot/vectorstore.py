@@ -13,36 +13,6 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
 SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
 
-SYMBOL_FONT_REPLACEMENTS = {
-    "\uf061": "α",
-    "\uf062": "β",
-    "\uf063": "χ",
-    "\uf064": "δ",
-    "\uf065": "ε",
-    "\uf066": "φ",
-    "\uf067": "γ",
-    "\uf06c": "λ",
-    "\uf06d": "μ",
-    "\uf070": "π",
-    "\uf071": "θ",
-    "\uf072": "ρ",
-    "\uf073": "σ",
-    "\uf077": "ω",
-    "\uf0d7": "·",
-}
-
-def normalize_extracted_text(text: str) -> str:
-    """Repair common Symbol-font glyphs emitted as private-use characters.
-
-    Some PDFs store Greek letters and math operators through legacy Symbol fonts.
-    PDF loaders can extract those as private-use Unicode code points, which then
-    show up as empty boxes in the app and confuse the LLM context.
-    """
-    cleaned = text or ""
-    for broken, replacement in SYMBOL_FONT_REPLACEMENTS.items():
-        cleaned = cleaned.replace(broken, replacement)
-    return cleaned
-
 class VectorStore:
     def __init__(self):
         self.embeddings = OllamaEmbeddings(
@@ -81,8 +51,6 @@ class VectorStore:
         else:
             raise ValueError(f"Unsupported file type: {ext}")
         docs = loader.load()
-        # for doc in docs:
-        #     doc.page_content = normalize_extracted_text(doc.page_content)
         return docs
     
     def load_file_content(self, file_path: str, file_name: str) -> str:
@@ -215,7 +183,6 @@ class VectorStore:
             for document, score in scored_results:
                 document.metadata["relevance_score"] = float(score)
                 if score >= relevance_floor:
-                    document.page_content = normalize_extracted_text(document.page_content)
                     filtered_results.append(document)
 
             return filtered_results
@@ -227,8 +194,6 @@ class VectorStore:
                 k=k,
                 filter={"room_id": room_id},
             )
-            for document in documents:
-                document.page_content = normalize_extracted_text(document.page_content)
             return documents
     
     def clear(self, room_id: str):
