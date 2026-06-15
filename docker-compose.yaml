@@ -79,13 +79,13 @@ services:
       context: ./services/server-chatbot
       dockerfile: Dockerfile
     ports:
-      - "5000:5000"
-    env_file: .env
+      - "5000:5000" # Keep for DEV Purposes (remove when deploying)
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      SEARCH_MIN_RELEVANCE: ${SEARCH_MIN_RELEVANCE:-0.35}
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
     volumes:

@@ -64,7 +64,7 @@ function parseSseBlock(block) {
   return { event, data: data.join("\n") };
 }
 
-async function streamRequest(path, body, onEvent) {
+async function streamRequest(path, body, onEvent, options = {}) {
   const headers = { "Content-Type": "application/json" };
 
   if (authToken) {
@@ -75,6 +75,7 @@ async function streamRequest(path, body, onEvent) {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -163,8 +164,8 @@ export const api = {
     request(`/api/rooms/${roomId}/buddy/embed`, { method: "POST" }),
   askBuddy: (roomId, body) =>
     request(`/api/rooms/${roomId}/buddy/message`, { method: "POST", body }),
-  streamBuddy: (roomId, body, onEvent) =>
-    streamRequest(`/api/rooms/${roomId}/buddy/message/stream`, body, onEvent),
+  streamBuddy: (roomId, body, onEvent, options) =>
+    streamRequest(`/api/rooms/${roomId}/buddy/message/stream`, body, onEvent, options),
   getSessions: (roomId) => request(`/api/rooms/${roomId}/sessions`),
   addSession: (roomId, body) =>
     request(`/api/rooms/${roomId}/sessions`, { method: "POST", body }),

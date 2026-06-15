@@ -2041,7 +2041,7 @@ h3 {
   color: #ffffff;
   background: transparent;
   border: 0;
-  font-weight: 850;
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -2056,6 +2056,7 @@ h3 {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 500;
 }
 
 .recent-chat-actions {
@@ -2740,6 +2741,7 @@ h3 {
   gap: 12px;
   height: 100%;
   min-height: 0;
+  --buddy-conversation-width: 880px;
 }
 
 .chat-channel-bar {
@@ -2943,7 +2945,9 @@ h3 {
 
 .buddy-message-list {
   display: grid;
+  grid-template-columns: minmax(0, min(100%, var(--buddy-conversation-width)));
   align-content: start;
+  justify-content: center;
   gap: 12px;
   min-height: 0;
   overflow: auto;
@@ -2975,8 +2979,8 @@ h3 {
 }
 
 .buddy-message {
-  width: fit-content;
-  max-width: min(920px, calc(100% - 24px));
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   padding: 10px 4px;
   justify-self: start;
@@ -2986,7 +2990,8 @@ h3 {
 }
 
 .buddy-message.user {
-  max-width: min(520px, calc(100% - 24px));
+  width: fit-content;
+  max-width: min(520px, 100%);
   padding: 13px 14px;
   justify-self: end;
   background: rgba(124, 53, 255, 0.24);
@@ -3000,7 +3005,7 @@ h3 {
   margin-bottom: 5px;
   color: rgba(255, 255, 255, 0.56);
   font-size: 0.78rem;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .buddy-message:not(.user) > span {
@@ -3010,6 +3015,7 @@ h3 {
 .buddy-message p {
   margin: 0;
   color: #ffffff;
+  font-family: Inter, "Segoe UI", "Segoe UI Symbol", "Noto Sans", "Noto Sans Math", sans-serif;
   line-height: 1.48;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3019,8 +3025,10 @@ h3 {
 .buddy-markdown {
   display: grid;
   gap: 12px;
-  max-width: min(880px, 100%);
+  width: 100%;
+  max-width: 100%;
   color: #ffffff;
+  font-family: Inter, "Segoe UI", "Segoe UI Symbol", "Noto Sans", "Noto Sans Math", sans-serif;
   font-size: 1rem;
   line-height: 1.58;
   overflow-wrap: anywhere;
@@ -3030,6 +3038,16 @@ h3 {
 .buddy-markdown p {
   margin: 0;
   white-space: normal;
+}
+
+.buddy-markdown h1,
+.buddy-markdown h2,
+.buddy-markdown h3,
+.buddy-markdown h4 {
+  margin: 8px 0 0;
+  color: #ffffff;
+  font-size: 1.02rem;
+  line-height: 1.35;
 }
 
 .buddy-markdown ol,
@@ -3054,17 +3072,43 @@ h3 {
   padding-left: 1.25rem;
 }
 
+.buddy-markdown blockquote {
+  margin: 0;
+  padding-left: 14px;
+  border-left: 2px solid rgba(255, 255, 255, 0.24);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.buddy-markdown code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffd6df;
+  font-size: 0.92em;
+}
+
 .buddy-markdown strong {
   color: #ffffff;
-  font-weight: 900;
+  font-weight: 730;
+}
+
+.buddy-markdown .katex {
+  color: #ffffff;
+  font-size: 1.02em;
+}
+
+.buddy-markdown .katex-display {
+  margin: 10px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .buddy-thinking-steps {
   display: grid;
-  gap: 9px;
-  min-width: min(540px, 72vw);
-  margin-bottom: 18px;
-  padding: 2px 0 1px;
+  gap: 0;
+  width: min(780px, 100%);
+  margin: 4px 0 22px;
+  padding: 2px 0 4px 2px;
 }
 
 .buddy-thinking-steps.collapsed {
@@ -3076,12 +3120,15 @@ h3 {
   align-items: center;
   gap: 7px;
   width: fit-content;
+  max-width: min(780px, 100%);
   padding: 0;
   border: 0;
   background: transparent;
-  color: rgba(255, 255, 255, 0.58);
-  font-size: 0.9rem;
-  font-weight: 850;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.86rem;
+  font-weight: 520;
+  line-height: 1.4;
+  text-align: left;
   cursor: pointer;
   transition:
     color 160ms ease,
@@ -3102,26 +3149,93 @@ h3 {
 }
 
 .buddy-thinking-step {
+  position: relative;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 11px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
-  color: rgba(255, 255, 255, 0.66);
-  line-height: 1.42;
+  min-height: 36px;
+  padding: 4px 0 18px;
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.48;
+  font-size: 0.94rem;
 }
 
-.buddy-thinking-step svg {
-  margin-top: 2px;
-  color: rgba(255, 177, 216, 0.88);
+.buddy-thinking-step::before {
+  content: "";
+  position: absolute;
+  top: 30px;
+  bottom: 0;
+  left: 10px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.14);
 }
 
-.buddy-thinking-step.done svg {
+.buddy-thinking-step:last-child::before {
+  display: none;
+}
+
+.buddy-thinking-icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.buddy-thinking-icon svg {
+  color: currentColor;
+  stroke: currentColor;
+}
+
+.buddy-thinking-step.done .buddy-thinking-icon {
   color: rgba(158, 239, 188, 0.9);
 }
 
-.buddy-thinking-step span {
+.buddy-thinking-step.thought .buddy-thinking-copy {
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 450;
+}
+
+.buddy-thinking-step.tool .buddy-thinking-copy {
+  color: rgba(255, 255, 255, 0.62);
+  font-weight: 450;
+}
+
+.buddy-thinking-step.done .buddy-thinking-copy {
+  color: rgba(255, 255, 255, 0.68);
+  font-weight: 520;
+}
+
+.buddy-thinking-copy {
   min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.buddy-thinking-copy.truncated {
+  position: relative;
+}
+
+.buddy-thinking-more {
+  display: block;
+  width: fit-content;
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.buddy-thinking-more:hover {
+  color: #ffffff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .buddy-input-row {
@@ -3134,10 +3248,13 @@ h3 {
 .buddy-input-row.room-composer {
   grid-template-columns: 46px minmax(0, 1fr) 46px;
   align-items: end;
-  width: 100%;
+  width: min(100%, var(--buddy-conversation-width));
   margin: 0;
   padding: 8px;
-  border-radius: 20px;
+  border: 0;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.08);
+  justify-self: center;
 }
 
 .buddy-attach-button {
@@ -3145,7 +3262,7 @@ h3 {
   width: 42px;
   aspect-ratio: 1;
   place-items: center;
-  align-self: center;
+  align-self: end;
   color: #ffffff;
   background: rgba(255, 255, 255, 0.1);
   border: 0;
@@ -3169,17 +3286,56 @@ h3 {
 .buddy-input-row textarea {
   width: 100%;
   min-height: 46px;
-  max-height: 150px;
+  max-height: 250px;
   padding: 12px 14px;
-  border: 1px solid;
+  border: 0;
   border-radius: 12px;
   outline: 0;
 }
 
 .buddy-input-row textarea {
+  background: transparent;
   line-height: 1.4;
   resize: none;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.buddy-input-row.room-composer textarea,
+.buddy-input-row.room-composer textarea:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.buddy-send-button {
+  display: grid;
+  width: 42px;
+  aspect-ratio: 1;
+  place-items: center;
+  align-self: end;
+  color: #202232;
+  background: rgba(255, 255, 255, 0.96);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.buddy-send-button.is-stopping {
+  color: #1d1e26;
+}
+
+.buddy-send-button:hover:not(:disabled) {
+  background: #ffffff;
+  transform: translateY(-1px);
+}
+
+.buddy-send-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
 }
 
 .buddy-panel {
@@ -3217,26 +3373,48 @@ h3 {
   margin-top: 10px;
 }
 
+.attachment-preview-row {
+  width: min(100%, var(--buddy-conversation-width));
+  justify-self: center;
+}
+
 .attachment-chip-row span,
 .attachment-preview-row button,
-.buddy-source-row span {
+.buddy-source-row span,
+.buddy-source-row a {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   min-height: 28px;
-  padding: 0 9px;
+  padding: 0 10px;
   color: rgba(255, 255, 255, 0.82);
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 999px;
   font-size: 0.78rem;
   font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
 }
 
-.buddy-source-row span {
+.buddy-source-row span,
+.buddy-source-row a {
   color: rgba(255, 238, 190, 0.92);
   background: rgba(255, 196, 87, 0.12);
   border-color: rgba(255, 196, 87, 0.2);
+}
+
+.buddy-source-row a:hover {
+  color: #ffffff;
+  background: rgba(255, 196, 87, 0.18);
+  border-color: rgba(255, 215, 128, 0.34);
+}
+
+.buddy-source-row svg {
+  flex: 0 0 auto;
+  display: block;
 }
 
 .resource-docs-shell,

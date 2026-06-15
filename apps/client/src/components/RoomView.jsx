@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  ArrowUp,
   Bot,
   CalendarDays,
   CalendarPlus,
@@ -7,6 +8,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Edit3,
   ExternalLink,
   FileText,
@@ -27,12 +29,18 @@ import {
   Search,
   Send,
   Settings,
+  Square,
+  Terminal,
   Trash2,
   Upload,
   Users,
   X,
 } from "lucide-react";
+import "katex/dist/katex.min.css";
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
 import { io } from "socket.io-client";
 import { api } from "../api.js";
 import {
@@ -47,10 +55,20 @@ const UPLOADS_FOLDER = "Uploads";
 const tabs = [
   { id: "focus", label: "Home", icon: House },
   { id: "chat", label: "Chat", icon: MessageCircle },
-  { id: "buddy", label: "LLM Buddy", icon: Bot },
+  { id: "buddy", label: "Rocky", icon: Bot },
   { id: "resources", label: "Resources", icon: FolderOpen },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
 ];
+
+function isBuddyWelcomeMessage(message) {
+  return (
+    message?.role === "assistant" &&
+    message?.body === "Send a question with any files you want me to consider." &&
+    !message?.attachments?.length &&
+    !message?.sources?.length &&
+    !message?.thinkingSteps?.length
+  );
+}
 
 function createBuddyThread(title = "New Chat", id, options = {}) {
   return {
@@ -62,13 +80,9 @@ function createBuddyThread(title = "New Chat", id, options = {}) {
     isOwner: options.isOwner ?? true,
     createdAt: options.createdAt || new Date().toISOString(),
     updatedAt: options.updatedAt || new Date().toISOString(),
-    messages: options.messages?.length ? options.messages : [
-      {
-        id: "welcome",
-        role: "assistant",
-        body: "Send a question with any files you want me to consider.",
-      },
-    ],
+    messages: options.messages?.length
+      ? options.messages.filter((message) => !isBuddyWelcomeMessage(message))
+      : [],
   };
 }
 
@@ -86,6 +100,12 @@ function normalizeBuddyThread(thread, user) {
 
 function formatBuddyResponseText(value) {
   return String(value || "")
+    .replace(/\$\s*\n\s*([0-9])/g, (_match, digit) => `$${digit}`)
+    .replace(/(\d)\s*\n\s*\.(\d)/g, "$1.$2")
+    .replace(/(^|\n)(\s*)(\d+)\.(?=\S)/g, "$1$2$3. ")
+    .replace(/([.!?])\s*(-\s+\*\*)/g, "$1\n$2")
+    .replace(/([.!?])\s*(\d+\.\s+\*\*)/g, "$1\n\n$2")
+    .replace(/([^\n:])\s+-\s+/g, "$1\n- ")
     .replace(/([A-Za-z)])([.!?])(?=[A-Z])/g, "$1$2 ")
     .replace(/(^|[^\n])(\s*)(\d+)\.\s+/g, (match, prefix, _space, number) =>
       prefix.trim() ? `${prefix}\n${number}. ` : `${prefix}${number}. `,
@@ -94,19 +114,203 @@ function formatBuddyResponseText(value) {
     .trim();
 }
 
+const LOOSE_LATEX_SYMBOLS = {
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  epsilon: "ε",
+  theta: "θ",
+  lambda: "λ",
+  mu: "μ",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  tau: "τ",
+  phi: "φ",
+  omega: "ω",
+};
+
+const SYMBOL_FONT_GLYPHS = {
+  "\uf061": "α",
+  "\uf062": "β",
+  "\uf063": "χ",
+  "\uf064": "δ",
+  "\uf065": "ε",
+  "\uf066": "φ",
+  "\uf067": "γ",
+  "\uf06c": "λ",
+  "\uf06d": "μ",
+  "\uf070": "π",
+  "\uf071": "θ",
+  "\uf072": "ρ",
+  "\uf073": "σ",
+  "\uf077": "ω",
+  "\uf0d7": "·",
+};
+
+function normalizeBrokenGreekGlyphs(text) {
+  const replacements = {
+    "\u00ce\u00b1": "\u03b1",
+    "\u00ce\u00b2": "\u03b2",
+    "\u00ce\u00b3": "\u03b3",
+    "\u00ce\u00b4": "\u03b4",
+    "\u00ce\u00b5": "\u03b5",
+    "\u00ce\u00b8": "\u03b8",
+    "\u00ce\u00bb": "\u03bb",
+    "\u00ce\u00bc": "\u03bc",
+    "\u00cf\u0080": "\u03c0",
+    "\u00cf\u0081": "\u03c1",
+    "\u00cf\u0083": "\u03c3",
+    "\u00cf\u0084": "\u03c4",
+    "\u00cf\u0086": "\u03c6",
+    "\u00cf\u0087": "\u03c7",
+    "\u00cf\u0089": "\u03c9",
+    "\u00c2\u00b7": "\u00b7",
+  };
+
+  let cleaned = String(text || "");
+  Object.entries(replacements).forEach(([broken, fixed]) => {
+    cleaned = cleaned.replaceAll(broken, fixed);
+  });
+  return cleaned;
+}
+
+function normalizeMathGlyphs(text) {
+  let cleaned = String(text || "").replace(/\\{1,2}([A-Za-z]+)\b/g, (match, name) => {
+    return LOOSE_LATEX_SYMBOLS[name] || match;
+  });
+
+  Object.entries(SYMBOL_FONT_GLYPHS).forEach(([broken, replacement]) => {
+    cleaned = cleaned.replaceAll(broken, replacement);
+  });
+
+  return normalizeBrokenGreekGlyphs(cleaned);
+}
+
+function getBuddyDisplayText(value) {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(getBuddyDisplayText).filter(Boolean).join("\n");
+  }
+
+  if (typeof value === "object") {
+    const directText =
+      value.text ??
+      value.message ??
+      value.summary ??
+      value.content ??
+      value.output ??
+      value.detail ??
+      value.description ??
+      "";
+
+    if (directText && directText !== value) {
+      return getBuddyDisplayText(directText);
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+
+  return String(value || "").trim();
+}
+
+const BUDDY_WORKING_PLACEHOLDER_ID = "working-placeholder";
+
+function createBuddyThoughtItem(type, text, options = {}) {
+  const cleanedText = getBuddyDisplayText(text);
+
+  return {
+    id: options.id || `${type}:${options.tool || ""}:${cleanedText}`,
+    type,
+    text: cleanedText,
+    summary: getBuddyDisplayText(options.summary),
+    tool: options.tool || "",
+    status: options.status || "",
+  };
+}
+
+function normalizeBuddyThoughtItem(step) {
+  if (step && typeof step === "object") {
+    return createBuddyThoughtItem(step.type || "thought", getBuddyDisplayText(step), step);
+  }
+
+  const text = getBuddyDisplayText(step);
+  if (text === "[object Object]") {
+    return createBuddyThoughtItem("thought", "", { id: "invalid-object-step" });
+  }
+
+  return createBuddyThoughtItem(text === "Done" ? "done" : "thought", text, {
+    id: text === "Done" ? "done" : undefined,
+  });
+}
+
+function removeBuddyPlaceholderSteps(steps) {
+  return uniqueBuddySteps(steps).filter((step) => step.id !== BUDDY_WORKING_PLACEHOLDER_ID);
+}
+
 function uniqueBuddySteps(steps) {
+  const seen = new Set();
+
   return steps
-    .map((step) => String(step || "").trim())
-    .filter(Boolean)
-    .filter((step, index, list) => list.indexOf(step) === index);
+    .map(normalizeBuddyThoughtItem)
+    .filter((step) => step.text)
+    .filter((step) => {
+      const key = step.id || `${step.type}:${step.tool}:${step.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function mergeBuddyThoughtSteps(currentSteps, nextSteps) {
+  const merged = uniqueBuddySteps(currentSteps);
+
+  uniqueBuddySteps(Array.isArray(nextSteps) ? nextSteps : [nextSteps]).forEach((nextStep) => {
+    const existingIndex = merged.findIndex((step) => step.id === nextStep.id);
+    const duplicateThoughtIndex =
+      existingIndex < 0 && nextStep.type === "thought"
+        ? merged.findIndex(
+            (step) =>
+              step.type === "thought" &&
+              compactBuddyText(step.text) === compactBuddyText(nextStep.text),
+          )
+        : -1;
+    if (existingIndex >= 0) {
+      merged[existingIndex] = { ...merged[existingIndex], ...nextStep };
+      return;
+    }
+    if (duplicateThoughtIndex >= 0) {
+      merged[duplicateThoughtIndex] = { ...merged[duplicateThoughtIndex], ...nextStep };
+      return;
+    }
+    merged.push(nextStep);
+  });
+
+  return uniqueBuddySteps(merged);
 }
 
 function getBuddyChainFinalAnswer(chain) {
   if (!Array.isArray(chain)) return "";
 
-  for (const item of [...chain].reverse()) {
+  const lastUserIndex = chain.reduce(
+    (last, item, index) => (item?.role === "user" ? index : last),
+    -1,
+  );
+
+  for (const item of chain.slice(lastUserIndex + 1).reverse()) {
     if (item?.role !== "assistant") continue;
-    const content = String(item.content || "").trim();
+    const content = splitBuddyVisibleThinking(String(item.content || "").trim()).answer.trim();
     if (content.startsWith("[TRACE]")) continue;
     if (content) return content;
   }
@@ -114,190 +318,386 @@ function getBuddyChainFinalAnswer(chain) {
   return "";
 }
 
-function getToolDisplayName(name) {
-  if (name === "search_corpus") return "Searching room resources";
-  if (name === "read_file") return "Reading attached file";
-  return `Using ${name || "tool"}`;
+function compactBuddyText(value) {
+  return getBuddyDisplayText(value).replace(/\s+/g, " ").trim();
 }
 
-function getSourceNamesFromContent(content) {
-  return Array.from(String(content || "").matchAll(/\[Source:\s*([^\]]+)\]/g))
-    .map((match) => match[1]?.trim())
-    .filter(Boolean)
-    .filter((source, index, list) => list.indexOf(source) === index);
+const BUDDY_TITLE_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "again",
+  "answer",
+  "because",
+  "before",
+  "could",
+  "does",
+  "from",
+  "have",
+  "into",
+  "like",
+  "much",
+  "need",
+  "please",
+  "question",
+  "should",
+  "that",
+  "their",
+  "there",
+  "think",
+  "this",
+  "what",
+  "when",
+  "where",
+  "which",
+  "with",
+  "would",
+  "your",
+]);
+
+function titleCaseBuddyWord(word) {
+  if (word.length <= 3 && word === word.toUpperCase()) return word;
+  if (/[A-Z]/.test(word.slice(1))) return word;
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
-function formatBuddyChainSteps(chain) {
-  if (!Array.isArray(chain)) return [];
+function buildBuddyThreadTitle(messageText) {
+  const cleaned = compactBuddyText(messageText)
+    .replace(/[`*_#>]/g, "")
+    .replace(/^[\s"']+|[\s"'?.!,:;]+$/g, "")
+    .replace(
+      /^(can you|could you|please|tell me about|explain|help me|what do i need to know about|what do i need to know for|what is|what are|who is|how do i|how do you|how to)\s+/i,
+      "",
+    )
+    .trim();
 
-  const finalAnswer = getBuddyChainFinalAnswer(chain);
-  const steps = [];
+  if (!cleaned) return "New Chat";
 
-  for (const item of chain) {
-    const role = item?.role;
-    const type = item?.type;
-    const content = String(item?.content || "").trim();
-
-    if (role === "assistant" && content.startsWith("[TRACE]")) {
-      steps.push(content.slice("[TRACE]".length).trim());
-      continue;
-    }
-
-    if (Array.isArray(item?.tool_calls) && item.tool_calls.length) {
-      item.tool_calls.forEach((tool) => steps.push(getToolDisplayName(tool?.name)));
-    }
-
-    if (role === "tool" || type === "ToolMessage") {
-      const sources = getSourceNamesFromContent(content);
-      if (sources.length) {
-        steps.push(`Retrieved context from ${sources.slice(0, 3).join(", ")}`);
-      } else {
-        steps.push(getToolDisplayName(item?.tool_name));
-      }
-      continue;
-    }
-
-    if (role !== "assistant" || !content || content === finalAnswer) continue;
-
-    // The chatbot service includes short, user-visible progress notes in the chain.
-    // Regular assistant replies from chat history are kept out of this panel.
-    if (
-      /^(I am treating|Reading attached file|Searching this room|Found \d+ relevant|Relevant excerpt|Building the answer|No matching room context found|Writing the final response|Checking room resources|Using \d+ relevant|Composing final answer)/i.test(
-        content,
-      )
-    ) {
-      steps.push(content);
-    }
+  if (/\b(compare|competitor|alternative)\w*\b/i.test(cleaned)) {
+    return "Competitor Comparison";
   }
 
-  return uniqueBuddySteps(steps);
+  if (/\b(simple|compound|interest|deposit|bank account)\b/i.test(cleaned)) {
+    return "Interest Calculation";
+  }
+
+  const tokens =
+    cleaned.match(/[A-Za-z0-9$%]+(?:[-/][A-Za-z0-9$%]+)*/g)?.filter(Boolean) || [];
+  const meaningful = tokens.filter(
+    (word) =>
+      word.length > 2 && !BUDDY_TITLE_STOP_WORDS.has(word.toLowerCase()),
+  );
+  const selected = (meaningful.length ? meaningful : tokens).slice(0, 6);
+  const title = selected.map(titleCaseBuddyWord).join(" ").trim();
+
+  return title ? title.slice(0, 42) : "New Chat";
 }
 
-function renderInlineMarkdown(text, keyPrefix) {
-  return String(text || "")
-    .split(/(\*\*[^*]+?\*\*)/g)
-    .map((part, index) => {
-      if (part.startsWith("**") && part.endsWith("**")) {
-        return <strong key={`${keyPrefix}-strong-${index}`}>{part.slice(2, -2)}</strong>;
-      }
+function cleanBuddyTitle(value) {
+  return compactBuddyText(value)
+    .replace(/<\/?[^>]+>/g, "")
+    .replace(/^["']+|["'.!?]+$/g, "")
+    .slice(0, 60)
+    .trim();
+}
 
-      return part;
-    });
+function splitBuddyTitleEnvelope(rawText) {
+  const raw = String(rawText || "");
+  const titleMatch = raw.match(/<title>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? cleanBuddyTitle(titleMatch[1]) : "";
+  let answer = raw.replace(/<title>[\s\S]*?<\/title>/i, "");
+
+  answer = answer
+    .replace(/^\s*<answer>\s*/i, "")
+    .replace(/\s*<\/answer>\s*$/i, "")
+    .trimStart();
+
+  return { title, answer };
+}
+
+function cleanBuddyThinkingArtifacts(text) {
+  return String(text || "")
+    .replace(/<\/?\s*(?:think|thinking)\s*>/gi, "")
+    .replace(/^\s*(?:think|thinking)\s*>\s*/i, "")
+    .replace(/<\s*\/?\s*(?:think|thinking)?\s*$/i, "")
+    .trim();
+}
+
+function splitBuddyVisibleThinking(rawText) {
+  const raw = String(rawText || "");
+  const thoughts = [];
+  let answer = "";
+  let cursor = 0;
+  const openTag = /<(?:think|thinking)>/gi;
+
+  while (cursor < raw.length) {
+    openTag.lastIndex = cursor;
+    const start = openTag.exec(raw);
+
+    if (!start) {
+      answer += raw.slice(cursor);
+      break;
+    }
+
+    answer += raw.slice(cursor, start.index);
+    const closeTag = /<\/(?:think|thinking)>/gi;
+    closeTag.lastIndex = openTag.lastIndex;
+    const end = closeTag.exec(raw);
+
+    if (!end) {
+      thoughts.push(raw.slice(openTag.lastIndex));
+      break;
+    }
+
+    thoughts.push(raw.slice(openTag.lastIndex, end.index));
+    cursor = closeTag.lastIndex;
+  }
+
+  return {
+    answer: cleanBuddyThinkingArtifacts(answer.replace(/^\s+/, "")),
+    thoughts: thoughts.map(cleanBuddyThinkingArtifacts).filter(isUsefulBuddyThought),
+  };
+}
+
+function isUsefulBuddyThought(text) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return false;
+
+  const compact = cleaned.toLowerCase().replace(/[\s_-]+/g, "_");
+  const toolOnlyThoughts = new Set([
+    "search_corpus",
+    "read_file",
+    "sync_resources",
+  ]);
+
+  return !toolOnlyThoughts.has(compact);
+}
+
+function getBuddyChainProgressSteps(chain) {
+  // Chain payloads are kept for final-answer fallback and source auditing only.
+  // They may include raw retrieved corpus text and final assistant answers, so
+  // deriving progress rows from them makes the UI show "thoughts" that the
+  // model never actually emitted.
+  return [];
+}
+
+function getToolDisplayName(name) {
+  if (name === "search_corpus") return "Search corpus";
+  if (name === "read_file") return "Read file";
+
+  const cleanedName = String(name || "tool")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleanedName
+    ? `${cleanedName.charAt(0).toUpperCase()}${cleanedName.slice(1)}`
+    : "Tool";
+}
+
+function getEventDisplayLabel(event, fallback) {
+  return (
+    getBuddyDisplayText(event.display) ||
+    getBuddyDisplayText(event.label) ||
+    getBuddyDisplayText(event.summary) ||
+    getBuddyDisplayText(event.message) ||
+    fallback
+  );
+}
+
+function formatBuddyToolEvent(rawEvent) {
+  try {
+    const wrapper =
+      rawEvent && typeof rawEvent === "object" && rawEvent.payload !== undefined
+        ? rawEvent
+        : null;
+    const event =
+      wrapper
+        ? typeof wrapper.payload === "string"
+          ? JSON.parse(wrapper.payload || "{}")
+          : wrapper.payload || {}
+        : typeof rawEvent === "string"
+          ? JSON.parse(rawEvent || "{}")
+          : rawEvent && typeof rawEvent === "object"
+          ? rawEvent
+          : {};
+    const eventName = wrapper?.event || event.event || "";
+    const toolName = event.tool || event.name;
+    if (toolName === "sync_resources") {
+      return createBuddyThoughtItem("tool", "", {
+        id: event.id || "sync-room-resources",
+        tool: toolName,
+        status: event.status || "",
+      });
+    }
+
+    const input = event.input || {};
+    const status =
+      event.status ||
+      (eventName === "tool_start"
+        ? "running"
+        : eventName === "tool_end"
+          ? "done"
+          : "");
+    const toolId = event.id || `${toolName || "tool"}:${JSON.stringify(input)}`;
+
+    if (!toolName) {
+      const label = getEventDisplayLabel(event, "");
+      if (label) {
+        return createBuddyThoughtItem(event.type || "thought", label, {
+          id: event.id || `${event.type || "thought"}:${label}`,
+          status: event.status || "",
+          summary: event.summary || label,
+        });
+      }
+    }
+
+    if (toolName) {
+      const label = getEventDisplayLabel(event, getToolDisplayName(toolName));
+      return createBuddyThoughtItem("tool", label, {
+        id: toolId,
+        tool: toolName,
+        status,
+        summary: getToolDisplayName(toolName),
+      });
+    }
+  } catch {
+    return createBuddyThoughtItem("thought", getBuddyDisplayText(rawEvent));
+  }
+
+  return createBuddyThoughtItem("thought", getBuddyDisplayText(rawEvent));
+}
+
+function getBuddyThoughtIcon(step) {
+  if (step.type === "done") return CheckCircle2;
+  if (step.type === "tool") {
+    if (step.tool === "search_corpus") return Search;
+    if (step.tool === "read_file") return FileText;
+    return Terminal;
+  }
+  return Clock;
+}
+
+function getBuddyThoughtSummary(message) {
+  const steps = uniqueBuddySteps(message.thinkingSteps || []);
+  const firstThought = steps.find((step) => step.type === "thought" && step.text);
+  const lastThought = [...steps].reverse().find((step) => step.type === "thought" && step.text);
+  const lastTool = [...steps].reverse().find((step) => step.type === "tool" && step.text);
+  const sourceNames = Array.isArray(message.sources)
+    ? message.sources.filter(Boolean)
+    : [];
+
+  if (message.isThinking) {
+    return (
+      lastTool?.summary ||
+      lastTool?.text ||
+      lastThought?.summary ||
+      firstThought?.summary ||
+      "Working on your question"
+    );
+  }
+
+  if (sourceNames.length) {
+    return `Answered using ${sourceNames.slice(0, 2).join(", ")}${
+      sourceNames.length > 2 ? ` and ${sourceNames.length - 2} more` : ""
+    }`;
+  }
+
+  const searchedWithoutMatch = steps.some(
+    (step) =>
+      step.tool === "search_corpus" &&
+      /no relevant|no matching|not found/i.test(step.text || step.summary || "")
+  );
+  if (searchedWithoutMatch) return "Answered from general knowledge";
+
+  if (lastTool?.summary) return lastTool.summary;
+  if (lastTool?.text) return `Completed after ${lastTool.text.toLowerCase()}`;
+  return lastThought?.summary || firstThought?.summary || "Answered directly";
+}
+
+function normalizeBuddyMarkdown(text) {
+  return normalizeMathGlyphs(formatBuddyResponseText(text))
+    .replace(/\\(#{1,6})/g, "$1")
+    .replace(/(^|\n)[ \t]+(#{1,6}\s+)/g, "$1$2")
+    .replace(/(^|\n)\s*\d+\.\s*(#{1,6}\s+)/g, "$1$2")
+    .replace(/([^\n])\s+(#{1,6}\s+)/g, "$1\n\n$2")
+    .replace(/(^|\n)(#{1,6}\s*[^\n]+?)\s*:\s*/g, "$1$2\n\n")
+    .replace(/(^|\n)([A-Z][A-Za-z0-9\- /()]{2,70}:)(?=\s*\S)/g, "$1**$2**\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\\\\\[/g, () => "$$")
+    .replace(/\\\\\]/g, () => "$$")
+    .replace(/\\\[/g, () => "$$")
+    .replace(/\\\]/g, () => "$$")
+    .replace(/\\\\\(/g, () => "$")
+    .replace(/\\\\\)/g, () => "$")
+    .replace(/\\\(/g, () => "$")
+    .replace(/\\\)/g, () => "$");
 }
 
 function renderBuddyMarkdown(text) {
-  const blocks = [];
-  let paragraphLines = [];
-  let activeList = null;
-
-  function flushParagraph() {
-    if (!paragraphLines.length) return;
-    blocks.push({ type: "paragraph", text: paragraphLines.join(" ") });
-    paragraphLines = [];
-  }
-
-  function closeList() {
-    activeList = null;
-  }
-
-  function ensureList(type) {
-    if (activeList?.type === type) return activeList;
-    activeList = { type, items: [] };
-    blocks.push(activeList);
-    return activeList;
-  }
-
-  String(text || "")
-    .split(/\r?\n/)
-    .forEach((line) => {
-      const trimmed = line.trim();
-      const orderedMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
-      const bulletMatch = trimmed.match(/^[-*]\s+(.*)$/);
-
-      if (!trimmed) {
-        flushParagraph();
-        closeList();
-        return;
-      }
-
-      if (orderedMatch) {
-        flushParagraph();
-        const list = ensureList("ordered");
-        list.items.push({ text: orderedMatch[2], bullets: [] });
-        return;
-      }
-
-      if (bulletMatch) {
-        flushParagraph();
-        if (activeList?.type === "ordered" && activeList.items.length) {
-          activeList.items.at(-1).bullets.push(bulletMatch[1]);
-          return;
-        }
-
-        const list = ensureList("unordered");
-        list.items.push(bulletMatch[1]);
-        return;
-      }
-
-      closeList();
-      paragraphLines.push(trimmed);
-    });
-
-  flushParagraph();
-
-  if (!blocks.length) return null;
+  const markdown = normalizeBuddyMarkdown(text);
+  if (!markdown) return null;
 
   return (
-    <div className="buddy-markdown">
-      {blocks.map((block, blockIndex) => {
-        if (block.type === "paragraph") {
-          return (
-            <p key={`paragraph-${blockIndex}`}>
-              {renderInlineMarkdown(block.text, `paragraph-${blockIndex}`)}
-            </p>
-          );
-        }
+    <ReactMarkdown
+      className="buddy-markdown"
+      remarkPlugins={[remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
+}
 
-        if (block.type === "ordered") {
-          return (
-            <ol key={`ordered-${blockIndex}`}>
-              {block.items.map((item, itemIndex) => (
-                <li key={`ordered-${blockIndex}-${itemIndex}`}>
-                  <p>
-                    {renderInlineMarkdown(
-                      item.text,
-                      `ordered-${blockIndex}-${itemIndex}`,
-                    )}
-                  </p>
-                  {item.bullets.length ? (
-                    <ul>
-                      {item.bullets.map((bullet, bulletIndex) => (
-                        <li key={`ordered-${blockIndex}-${itemIndex}-${bulletIndex}`}>
-                          {renderInlineMarkdown(
-                            bullet,
-                            `ordered-${blockIndex}-${itemIndex}-${bulletIndex}`,
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          );
-        }
+function normalizeSourceKey(value) {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return "";
 
-        return (
-          <ul key={`unordered-${blockIndex}`}>
-            {block.items.map((item, itemIndex) => (
-              <li key={`unordered-${blockIndex}-${itemIndex}`}>
-                {renderInlineMarkdown(item, `unordered-${blockIndex}-${itemIndex}`)}
-              </li>
-            ))}
-          </ul>
-        );
-      })}
-    </div>
+  const withoutQuery = cleaned.split(/[?#]/)[0];
+  const fileName = withoutQuery.split(/[\\/]/).pop() || withoutQuery;
+
+  try {
+    return decodeURIComponent(fileName).toLowerCase();
+  } catch {
+    return fileName.toLowerCase();
+  }
+}
+
+function buildSourceResourceMap(resources = []) {
+  const map = new Map();
+
+  resources.forEach((resource) => {
+    [
+      resource.title,
+      resource.originalName,
+      resource.storageName,
+      resource.url,
+    ].forEach((candidate) => {
+      const key = normalizeSourceKey(candidate);
+      if (key && !map.has(key)) map.set(key, resource);
+    });
+  });
+
+  return map;
+}
+
+function BuddyThinkingText({ text }) {
+  const [expanded, setExpanded] = useState(false);
+  const cleanedText = normalizeMathGlyphs(text).trim();
+  const isLong = cleanedText.length > 420 || cleanedText.split(/\r?\n/).length > 5;
+  const preview = `${cleanedText.slice(0, 420).trim()}...`;
+
+  return (
+    <span className={`buddy-thinking-copy ${isLong && !expanded ? "truncated" : ""}`}>
+      {isLong && !expanded ? preview : cleanedText}
+      {isLong ? (
+        <button
+          className="buddy-thinking-more"
+          onClick={() => setExpanded((current) => !current)}
+          type="button"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </span>
   );
 }
 
@@ -325,6 +725,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [buddySyncing, setBuddySyncing] = useState(false);
   const [buddyThreads, setBuddyThreads] = useState([]);
   const [activeBuddyThreadId, setActiveBuddyThreadId] = useState("");
+  const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
 
   const theme = getTheme(room?.theme);
   const background = getBackground(room?.background);
@@ -525,13 +926,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   }
 
   async function askBuddy(messagesForThread, attachmentResources = [], handlers = {}) {
-    if (!room?.id) throw new Error("Open a room before asking LLM Buddy.");
+    if (!room?.id) throw new Error("Open a room before asking Rocky.");
 
     return api.streamBuddy(
       room.id,
       {
         messages: messagesForThread,
         attachmentResourceIds: attachmentResources.map((resource) => resource.id),
+        requestTitle: handlers.requestTitle === true,
       },
       (event, data) => {
         if (event === "token") {
@@ -545,7 +947,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         }
 
         if (event === "tool_start" || event === "tool_end") {
-          handlers.onThinking?.(data);
+          handlers.onThinking?.({ event, payload: data });
           return;
         }
 
@@ -579,9 +981,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           } catch {
             payload = {};
           }
-          throw new Error(payload.message || "Unable to stream LLM Buddy response.");
+          throw new Error(payload.message || "Unable to stream Rocky's response.");
         }
       },
+      { signal: handlers.signal },
     );
   }
 
@@ -939,8 +1342,8 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           inviteCopied={inviteCopied}
           onCloseSidebar={() => setContextOpen(false)}
           onCreateChannel={() => setChannelModalOpen(true)}
-          onDeleteBuddyThread={deleteBuddyThread}
           onDeleteChannel={deleteChatChannel}
+          onRequestDeleteBuddyThread={setBuddyDeleteTarget}
           onStartGroupBuddyThread={startGroupBuddyThread}
           onNewBuddyThread={startBuddyThread}
           onRenameBuddyThread={renameBuddyThread}
@@ -1002,6 +1405,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
                 onRenameThread={renameActiveBuddyThread}
                 onSyncResources={syncBuddyResources}
                 onUploadFiles={uploadSharedFiles}
+                resources={resources}
                 syncingResources={buddySyncing}
                 threadTitle={activeBuddyThread.title || "New Chat"}
                 user={user}
@@ -1070,6 +1474,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             onCreate={createChatChannel}
           />
         ) : null}
+
+        {buddyDeleteTarget ? (
+          <ConfirmDialog
+            confirmLabel="Delete"
+            message={`Delete "${buddyDeleteTarget.title}"?`}
+            onCancel={() => setBuddyDeleteTarget(null)}
+            onConfirm={async () => {
+              await deleteBuddyThread(buddyDeleteTarget.id);
+              setBuddyDeleteTarget(null);
+            }}
+            title="Delete Chat"
+          />
+        ) : null}
       </main>
     </div>
   );
@@ -1086,11 +1503,11 @@ function RoomContextPanel({
   inviteCopied,
   onCloseSidebar,
   onCreateChannel,
-  onDeleteBuddyThread,
   onDeleteChannel,
   onNewBuddyThread,
   onRenameBuddyThread,
   onRenameChannel,
+  onRequestDeleteBuddyThread,
   onSelectChannel,
   onSelectBuddyThread,
   onSelectResourceFolder,
@@ -1104,7 +1521,6 @@ function RoomContextPanel({
   const members = buildVisibleMembers(room, user);
   const [buddySearch, setBuddySearch] = useState("");
   const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
-  const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
   const [buddyMenuTargetId, setBuddyMenuTargetId] = useState("");
   const [channelRenameTarget, setChannelRenameTarget] = useState(null);
   const [channelDeleteTarget, setChannelDeleteTarget] = useState(null);
@@ -1211,7 +1627,7 @@ function RoomContextPanel({
   if (activeTab === "buddy") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="LLM Buddy" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Rocky" />
         <PanelDivider />
         <div className="buddy-sidebar-nav">
           <button className="buddy-nav-action" onClick={onNewBuddyThread} type="button">
@@ -1299,7 +1715,7 @@ function RoomContextPanel({
                       className="danger"
                       disabled={!thread.isOwner}
                       onClick={() => {
-                        setBuddyDeleteTarget(thread);
+                        onRequestDeleteBuddyThread(thread);
                         setBuddyMenuTargetId("");
                       }}
                       role="menuitem"
@@ -1327,18 +1743,6 @@ function RoomContextPanel({
             }}
             placeholder="Study plan"
             title="Rename Chat"
-          />
-        ) : null}
-        {buddyDeleteTarget ? (
-          <ConfirmDialog
-            confirmLabel="Delete"
-            message={`Delete "${buddyDeleteTarget.title}"?`}
-            onCancel={() => setBuddyDeleteTarget(null)}
-            onConfirm={async () => {
-              onDeleteBuddyThread(buddyDeleteTarget.id);
-              setBuddyDeleteTarget(null);
-            }}
-            title="Delete Chat"
           />
         ) : null}
       </>
@@ -1848,9 +2252,9 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
 
 function BuddyEmptyPanel({ onNewBuddyThread }) {
   return (
-    <section className="buddy-empty-panel" aria-label="No LLM Buddy chat selected">
+    <section className="buddy-empty-panel" aria-label="No Rocky chat selected">
       <Bot size={30} />
-      <h2>No Buddy chats yet</h2>
+      <h2>No Rocky chats yet</h2>
       <p>Create a private chat, or open a public chat shared by this room.</p>
       <button className="primary-button compact" onClick={onNewBuddyThread} type="button">
         <Edit3 size={17} />
@@ -1869,6 +2273,7 @@ function BuddyPanel({
   onRenameThread,
   onSyncResources,
   onUploadFiles,
+  resources = [],
   syncingResources,
   threadTitle,
   user,
@@ -1881,11 +2286,35 @@ function BuddyPanel({
   const [syncStatus, setSyncStatus] = useState("");
   const [collapsedThoughts, setCollapsedThoughts] = useState({});
   const fileInputRef = useRef(null);
+  const draftInputRef = useRef(null);
   const listRef = useRef(null);
+  const abortControllerRef = useRef(null);
+  const sourceResourceMap = useMemo(() => buildSourceResourceMap(resources), [resources]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages.length]);
+
+  useEffect(() => {
+    return () => abortControllerRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    const textarea = draftInputRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    const styles = window.getComputedStyle(textarea);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 20;
+    const padding =
+      (Number.parseFloat(styles.paddingTop) || 0) +
+      (Number.parseFloat(styles.paddingBottom) || 0);
+    const maxHeight = lineHeight * 10 + padding;
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [draft]);
 
   function addAttachments(fileList) {
     setAttachments((current) => [...current, ...Array.from(fileList || [])]);
@@ -1937,6 +2366,10 @@ function BuddyPanel({
     }
   }
 
+  function handleStopResponse() {
+    abortControllerRef.current?.abort();
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     const trimmed = draft.trim();
@@ -1944,6 +2377,12 @@ function BuddyPanel({
 
     setThinking(true);
     let pendingAssistantId = "";
+    let attemptedMessages = [];
+    let interruptedAssistantMessage = null;
+    let latestSources = [];
+    let latestThinkingSteps = [];
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const uploaded = attachments.length
@@ -1966,37 +2405,207 @@ function BuddyPanel({
         role: "assistant",
         body: "",
         sources: [],
-        thinkingSteps: ["Preparing a room-aware response"],
+        thinkingSteps: [
+          createBuddyThoughtItem("thought", "Thinking...", {
+            id: BUDDY_WORKING_PLACEHOLDER_ID,
+            summary: "Thinking",
+          }),
+        ],
         isThinking: true,
         createdAt: new Date().toISOString(),
       };
       let streamedBody = "";
+      let streamedRawBody = "";
+      let preToolRawBody = "";
+      let sawModelToolEvent = false;
       let streamedSources = [];
       let streamedChain = [];
       let visibleThinkingSteps = [...assistantMessage.thinkingSteps];
+      // const shouldRequestTitle = threadTitle === "New Chat" && Boolean(trimmed || uploaded.length);
+      const shouldRequestTitle = false
+      const fallbackThreadTitle = buildBuddyThreadTitle(
+        trimmed || uploaded[0]?.title || uploaded[0]?.originalName || "Attached file review",
+      );
+      let titleBuffer = "";
+      let answerTagBuffer = "";
+      let titleResolved = !shouldRequestTitle;
       pendingAssistantId = assistantId;
+      attemptedMessages = nextMessages;
+      interruptedAssistantMessage = assistantMessage;
+      latestThinkingSteps = visibleThinkingSteps;
 
       onMessagesChange([...nextMessages, assistantMessage]);
-      if (threadTitle === "New Chat" && trimmed) {
-        void onRenameThread(trimmed.slice(0, 42));
-      }
       setDraft("");
       setAttachments([]);
       setLiveAssistantId(assistantId);
 
+      function applyGeneratedTitle(title) {
+        const cleanedTitle = cleanBuddyTitle(title) || fallbackThreadTitle;
+        if (!cleanedTitle || cleanedTitle === "New Chat") return;
+        void onRenameThread(cleanedTitle);
+      }
+
+      function consumeTitleToken(token) {
+        if (!shouldRequestTitle || titleResolved) return token;
+
+        titleBuffer += token;
+        const envelope = splitBuddyTitleEnvelope(titleBuffer);
+        if (envelope.title) {
+          titleResolved = true;
+          titleBuffer = "";
+          applyGeneratedTitle(envelope.title);
+          return envelope.answer;
+        }
+
+        if (titleBuffer.length > 600 || (!/<title/i.test(titleBuffer) && titleBuffer.length > 120)) {
+          titleResolved = true;
+          const buffered = titleBuffer;
+          titleBuffer = "";
+          applyGeneratedTitle(fallbackThreadTitle);
+          return buffered;
+        }
+
+        return "";
+      }
+
+      function consumeAnswerEnvelopeToken(token) {
+        if (!shouldRequestTitle || !titleResolved || !token) return token;
+
+        answerTagBuffer += token;
+        const stripped = answerTagBuffer
+          .replace(/^\s*<answer>\s*/i, "")
+          .replace(/<\/answer>/gi, "");
+
+        if (stripped !== answerTagBuffer) {
+          answerTagBuffer = "";
+          return stripped;
+        }
+
+        const compact = answerTagBuffer.trimStart().toLowerCase();
+        if ("<answer>".startsWith(compact) && compact.length < "<answer>".length) {
+          return "";
+        }
+
+        const released = answerTagBuffer;
+        answerTagBuffer = "";
+        return released.replace(/<\/answer>/gi, "");
+      }
+
+      function stripTitleEnvelope(text) {
+        const envelope = splitBuddyTitleEnvelope(text);
+        if (envelope.title) {
+          titleResolved = true;
+          applyGeneratedTitle(envelope.title);
+        }
+
+        return envelope.answer;
+      }
+
       await onAskBuddy(nextMessages, uploaded, {
+        requestTitle: shouldRequestTitle,
+        signal: controller.signal,
         onToken: (token) => {
-          streamedBody += token;
-        },
-        onThinking: (step) => {
-          const cleanedStep = String(step || "").trim();
-          if (!cleanedStep) return;
-          visibleThinkingSteps = uniqueBuddySteps([...visibleThinkingSteps, cleanedStep]);
+          const visibleToken = consumeAnswerEnvelopeToken(consumeTitleToken(token));
+          if (!visibleToken) return;
+
+          if (!sawModelToolEvent) {
+            preToolRawBody += visibleToken;
+            const visiblePreTool = splitBuddyVisibleThinking(preToolRawBody);
+            streamedBody = "";
+
+            if (visiblePreTool.thoughts.length) {
+              visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
+              visibleThinkingSteps = mergeBuddyThoughtSteps(
+                visibleThinkingSteps,
+                visiblePreTool.thoughts.map((thought, index) =>
+                  createBuddyThoughtItem("thought", thought, {
+                    id: `model-pre-tool-thinking:${index}`,
+                    summary: compactBuddyText(thought).slice(0, 120),
+                  }),
+                ),
+              );
+            }
+
+            onMessagesChange((current) =>
+              current.map((message) =>
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      body: streamedBody,
+                      isThinking: true,
+                      thinkingSteps: visibleThinkingSteps,
+                    }
+                  : message,
+              ),
+            );
+            latestThinkingSteps = visibleThinkingSteps;
+            return;
+          }
+
+          streamedRawBody += visibleToken;
+          const visibleStream = splitBuddyVisibleThinking(streamedRawBody);
+          streamedBody = visibleStream.answer;
+
+          if (visibleStream.thoughts.length) {
+            visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
+            visibleThinkingSteps = mergeBuddyThoughtSteps(
+              visibleThinkingSteps,
+              visibleStream.thoughts.map((thought, index) =>
+                createBuddyThoughtItem("thought", thought, {
+                  id: `model-thinking:${index}`,
+                  summary: compactBuddyText(thought).slice(0, 120),
+                }),
+              ),
+            );
+          }
+
           onMessagesChange((current) =>
             current.map((message) =>
               message.id === assistantId
                 ? {
                     ...message,
+                    body: streamedBody,
+                    isThinking: true,
+                    thinkingSteps: visibleThinkingSteps,
+                  }
+                : message,
+            ),
+          );
+          latestThinkingSteps = visibleThinkingSteps;
+        },
+        onThinking: (step) => {
+          const cleanedStep = formatBuddyToolEvent(step);
+          if (!cleanedStep.text) return;
+          const isModelToolEvent = cleanedStep.tool !== "sync_resources";
+          if (isModelToolEvent) {
+            sawModelToolEvent = true;
+            visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
+          }
+          const preToolVisible = splitBuddyVisibleThinking(preToolRawBody || streamedBody);
+          const preToolModelText = preToolVisible.thoughts
+            .filter(Boolean)
+            .join("\n\n")
+            .trim();
+          if (isModelToolEvent && cleanedStep.status === "running" && preToolModelText) {
+            visibleThinkingSteps = mergeBuddyThoughtSteps(
+              visibleThinkingSteps,
+              createBuddyThoughtItem("thought", preToolModelText, {
+                id: `model-before-${cleanedStep.id}`,
+                summary: compactBuddyText(preToolModelText).slice(0, 120),
+              }),
+            );
+            streamedBody = "";
+            streamedRawBody = "";
+            preToolRawBody = "";
+          }
+          visibleThinkingSteps = mergeBuddyThoughtSteps(visibleThinkingSteps, cleanedStep);
+          latestThinkingSteps = visibleThinkingSteps;
+          onMessagesChange((current) =>
+            current.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    body: streamedBody,
                     isThinking: true,
                     thinkingSteps: visibleThinkingSteps,
                   }
@@ -2005,34 +2614,45 @@ function BuddyPanel({
           );
         },
         onAnswer: (answer) => {
-          streamedBody = answer;
-        },
-        onChain: (chain) => {
-          streamedChain = Array.isArray(chain) ? chain : [];
-          const chainAnswer = getBuddyChainFinalAnswer(streamedChain);
-          const chainSteps = formatBuddyChainSteps(streamedChain);
-          if (chainAnswer && chainAnswer.length >= streamedBody.length) {
-            streamedBody = chainAnswer;
-          }
-          if (chainSteps.length) {
-            visibleThinkingSteps = uniqueBuddySteps([
-              ...visibleThinkingSteps,
-              ...chainSteps,
-            ]);
-            onMessagesChange((current) =>
-              current.map((message) =>
-                message.id === assistantId
-                  ? {
-                      ...message,
-                      thinkingSteps: visibleThinkingSteps,
-                    }
-                  : message,
+          const visibleAnswer = splitBuddyVisibleThinking(stripTitleEnvelope(answer));
+          streamedBody = visibleAnswer.answer;
+          streamedRawBody = visibleAnswer.answer;
+          if (visibleAnswer.thoughts.length) {
+            visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
+            visibleThinkingSteps = mergeBuddyThoughtSteps(
+              visibleThinkingSteps,
+              visibleAnswer.thoughts.map((thought, index) =>
+                createBuddyThoughtItem("thought", thought, {
+                  id: `model-answer-thinking:${index}`,
+                  summary: compactBuddyText(thought).slice(0, 120),
+                }),
               ),
             );
           }
+          latestThinkingSteps = visibleThinkingSteps;
+        },
+        onChain: (chain) => {
+          streamedChain = Array.isArray(chain) ? chain : [];
+          const chainAnswer = stripTitleEnvelope(getBuddyChainFinalAnswer(streamedChain));
+          if (chainAnswer && chainAnswer.length >= streamedBody.length) {
+            streamedBody = chainAnswer;
+          }
+          onMessagesChange((current) =>
+            current.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    body: streamedBody,
+                    isThinking: true,
+                    thinkingSteps: visibleThinkingSteps,
+                  }
+                : message,
+            ),
+          );
         },
         onSources: (sources) => {
           streamedSources = Array.isArray(sources) ? sources : [];
+          latestSources = streamedSources;
           onMessagesChange((current) =>
             current.map((message) =>
               message.id === assistantId
@@ -2043,15 +2663,33 @@ function BuddyPanel({
         },
       });
 
+      const finalThinkingBase = removeBuddyPlaceholderSteps(visibleThinkingSteps).filter(
+        (step) => step.type !== "done",
+      );
+      const finalThinkingSteps = finalThinkingBase.length
+        ? mergeBuddyThoughtSteps(
+            finalThinkingBase,
+            createBuddyThoughtItem("done", "Done", { id: "done" }),
+          )
+        : [];
+      const finalBody = splitBuddyVisibleThinking(
+        stripTitleEnvelope(
+          streamedBody ||
+            getBuddyChainFinalAnswer(streamedChain) ||
+            preToolRawBody ||
+            titleBuffer,
+        ),
+      ).answer;
+      if (shouldRequestTitle && !titleResolved) {
+        applyGeneratedTitle(fallbackThreadTitle);
+      }
       const finalAssistantMessage = {
         ...assistantMessage,
         body:
-          formatBuddyResponseText(
-            streamedBody || getBuddyChainFinalAnswer(streamedChain),
-          ) ||
+          formatBuddyResponseText(finalBody) ||
           "I could not generate a response from the current context.",
         sources: streamedSources,
-        thinkingSteps: uniqueBuddySteps([...visibleThinkingSteps, "Done"]),
+        thinkingSteps: finalThinkingSteps,
         isThinking: false,
       };
       const finalMessages = [...nextMessages, finalAssistantMessage];
@@ -2059,6 +2697,27 @@ function BuddyPanel({
       onMessagesChange(finalMessages);
       await onPersistMessages?.(finalMessages);
     } catch (err) {
+      if (err?.name === "AbortError" && pendingAssistantId && interruptedAssistantMessage) {
+        const interruptedThinkingSteps = removeBuddyPlaceholderSteps(latestThinkingSteps).filter(
+          (step) => step.type !== "done",
+        );
+        const finalMessages = [
+          ...attemptedMessages,
+          {
+            ...interruptedAssistantMessage,
+            body: "Rocky's response was interrupted.",
+            sources: latestSources,
+            thinkingSteps: interruptedThinkingSteps,
+            isThinking: false,
+            interrupted: true,
+          },
+        ];
+
+        onMessagesChange(finalMessages);
+        await onPersistMessages?.(finalMessages);
+        return;
+      }
+
       if (pendingAssistantId) {
         onMessagesChange((current) =>
           current.filter(
@@ -2068,6 +2727,7 @@ function BuddyPanel({
       }
       onError(err.message);
     } finally {
+      abortControllerRef.current = null;
       setLiveAssistantId("");
       setThinking(false);
     }
@@ -2076,7 +2736,7 @@ function BuddyPanel({
   return (
     <section
       className={`buddy-panel ${draggingFiles ? "dragging-files" : ""}`}
-      aria-label="LLM Buddy chat"
+      aria-label="Rocky chat"
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
@@ -2090,7 +2750,7 @@ function BuddyPanel({
           className="buddy-sync-button"
           disabled={thinking || syncingResources}
           onClick={handleSyncResources}
-          title="Sync room resources with LLM Buddy"
+          title="Sync room resources with Rocky"
           type="button"
         >
           <RefreshCw size={15} />
@@ -2100,10 +2760,17 @@ function BuddyPanel({
 
       <div className="buddy-message-list" ref={listRef}>
         {messages.map((message) => {
-          const hasThinkingSteps = Boolean(message.thinkingSteps?.length);
-          const thoughtCollapsed = message.isThinking
-            ? false
-            : (collapsedThoughts[message.id] ?? true);
+          const normalizedThinkingSteps = uniqueBuddySteps(message.thinkingSteps || []);
+          const hasThinkingSteps = Boolean(normalizedThinkingSteps.length);
+          const hasOnlyWorkingPlaceholder =
+            normalizedThinkingSteps.length === 1 &&
+            normalizedThinkingSteps[0]?.id === BUDDY_WORKING_PLACEHOLDER_ID;
+          const thoughtCollapsed =
+            collapsedThoughts[message.id] ?? (message.isThinking ? false : true);
+          const thoughtSummary = getBuddyThoughtSummary({
+            ...message,
+            thinkingSteps: normalizedThinkingSteps,
+          });
 
           return (
             <article
@@ -2115,14 +2782,14 @@ function BuddyPanel({
                   ? message.authorId === user?.id
                     ? "You"
                     : message.authorName || "Member"
-                  : "Buddy"}
+                  : "Rocky"}
               </span>
               {hasThinkingSteps ? (
                 <div
                   className={`buddy-thinking-steps ${
                     thoughtCollapsed ? "collapsed" : ""
                   }`}
-                  aria-label="LLM Buddy progress"
+                  aria-label="Rocky progress"
                 >
                   <button
                     aria-expanded={!thoughtCollapsed}
@@ -2136,22 +2803,26 @@ function BuddyPanel({
                     type="button"
                   >
                     <ChevronRight size={15} />
-                    {message.isThinking ? "Thinking..." : "Thought Process"}
+                    {hasOnlyWorkingPlaceholder ? "Thinking..." : thoughtSummary}
                   </button>
-                  {!thoughtCollapsed
-                    ? message.thinkingSteps.map((step, index) => (
-                        <div
-                          className={
-                            !message.isThinking && step === "Done"
-                              ? "buddy-thinking-step done"
-                              : "buddy-thinking-step"
-                          }
-                          key={`${step}-${index}`}
-                        >
-                          <CheckCircle2 size={15} />
-                          <span>{step}</span>
-                        </div>
-                      ))
+                  {!thoughtCollapsed && !hasOnlyWorkingPlaceholder
+                    ? normalizedThinkingSteps.map((step, index) => {
+                        const ThoughtIcon = getBuddyThoughtIcon(step);
+
+                        return (
+                          <div
+                            className={`buddy-thinking-step ${step.type} ${
+                              step.status ? `status-${step.status}` : ""
+                            }`}
+                            key={`${step.id}-${index}`}
+                          >
+                            <span className="buddy-thinking-icon">
+                              <ThoughtIcon size={16} />
+                            </span>
+                            <BuddyThinkingText text={step.text} />
+                          </div>
+                        );
+                      })
                     : null}
                 </div>
               ) : null}
@@ -2172,12 +2843,30 @@ function BuddyPanel({
               ) : null}
               {message.sources?.length ? (
                 <div className="buddy-source-row">
-                  {message.sources.map((source) => (
-                    <span key={source}>
-                      <FileText size={13} />
-                      {source}
-                    </span>
-                  ))}
+                  {message.sources.map((source) => {
+                    const resource = sourceResourceMap.get(normalizeSourceKey(source));
+                    const chipContent = (
+                      <>
+                        <FileText size={13} />
+                        {source}
+                      </>
+                    );
+
+                    return resource?.url ? (
+                      <a
+                        download={resource.type === "file" ? resource.originalName || resource.title || source : undefined}
+                        href={resource.url}
+                        key={source}
+                        rel="noreferrer"
+                        target={resource.type === "file" ? undefined : "_blank"}
+                        title={resource.type === "file" ? "Download source file" : "Open source link"}
+                      >
+                        {chipContent}
+                      </a>
+                    ) : (
+                      <span key={source}>{chipContent}</span>
+                    );
+                  })}
                 </div>
               ) : null}
             </article>
@@ -2185,8 +2874,8 @@ function BuddyPanel({
         })}
         {thinking && !liveAssistantId ? (
           <article className="buddy-message">
-            <span>Buddy</span>
-            <p>Preparing a room-aware response...</p>
+            <span>Rocky</span>
+            <p>Preparing a response...</p>
           </article>
         ) : null}
       </div>
@@ -2232,6 +2921,7 @@ function BuddyPanel({
           <Plus size={20} />
         </button>
         <textarea
+          ref={draftInputRef}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -2244,12 +2934,13 @@ function BuddyPanel({
           value={draft}
         />
         <button
-          className="icon-button filled"
-          disabled={thinking || (!draft.trim() && !attachments.length)}
-          title="Send"
-          type="submit"
+          className={`buddy-send-button ${thinking ? "is-stopping" : ""}`}
+          disabled={!thinking && !draft.trim() && !attachments.length}
+          onClick={thinking ? handleStopResponse : undefined}
+          title={thinking ? "Stop response" : "Send"}
+          type={thinking ? "button" : "submit"}
         >
-          <Send size={18} />
+          {thinking ? <Square fill="currentColor" size={13} /> : <ArrowUp size={19} />}
         </button>
       </form>
     </section>

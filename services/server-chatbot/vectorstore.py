@@ -11,6 +11,37 @@ CHROMA_DIR = os.getenv("CHROMA_DIR", "/app/chroma_db")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
+SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
+
+SYMBOL_FONT_REPLACEMENTS = {
+    "\uf061": "α",
+    "\uf062": "β",
+    "\uf063": "χ",
+    "\uf064": "δ",
+    "\uf065": "ε",
+    "\uf066": "φ",
+    "\uf067": "γ",
+    "\uf06c": "λ",
+    "\uf06d": "μ",
+    "\uf070": "π",
+    "\uf071": "θ",
+    "\uf072": "ρ",
+    "\uf073": "σ",
+    "\uf077": "ω",
+    "\uf0d7": "·",
+}
+
+def normalize_extracted_text(text: str) -> str:
+    """Repair common Symbol-font glyphs emitted as private-use characters.
+
+    Some PDFs store Greek letters and math operators through legacy Symbol fonts.
+    PDF loaders can extract those as private-use Unicode code points, which then
+    show up as empty boxes in the app and confuse the LLM context.
+    """
+    cleaned = text or ""
+    for broken, replacement in SYMBOL_FONT_REPLACEMENTS.items():
+        cleaned = cleaned.replace(broken, replacement)
+    return cleaned
 
 class VectorStore:
     def __init__(self):
@@ -49,7 +80,10 @@ class VectorStore:
             loader = Docx2txtLoader(file_path)
         else:
             raise ValueError(f"Unsupported file type: {ext}")
-        return loader.load()
+        docs = loader.load()
+        # for doc in docs:
+        #     doc.page_content = normalize_extracted_text(doc.page_content)
+        return docs
     
     def load_file_content(self, file_path: str, file_name: str) -> str:
         """Load a file and return its raw text content
@@ -92,7 +126,7 @@ class VectorStore:
 
         Args:
             room_id (str): room_id the documents belongs to.
-            urls (str): list of file urls served by Node (e.g. ./uploads/filename.pdf) or objects with fields url and file name
+            urls list: list of file urls served by Node (e.g. ./uploads/filename.pdf) or objects with fields url and file name
 
         Returns:
             int: Number of chunks added
@@ -164,13 +198,38 @@ class VectorStore:
         print("---Search for Chunks---")
         print("Chunk count:", self.db._collection.count())
     
-        results = self.db.similarity_search(
-            query=query,
-            k=k,
-            filter={"room_id": room_id}
-        )
+        try:
+            scored_results = self.db.similarity_search_with_relevance_scores(
+                query=query,
+                k=k,
+                filter={"room_id": room_id},
+            )
+            
+            best_score = max((float(score) for _, score in scored_results), default=0.0)
+            # Keep documents that are both absolutely relevant and close enough to
+            # the best match. This avoids citing weak side hits that share a keyword
+            # but do not actually answer the question.
+            relevance_floor = max(SEARCH_MIN_RELEVANCE, best_score * 0.7)
 
-        return results
+            filtered_results = []
+            for document, score in scored_results:
+                document.metadata["relevance_score"] = float(score)
+                if score >= relevance_floor:
+                    document.page_content = normalize_extracted_text(document.page_content)
+                    filtered_results.append(document)
+
+            return filtered_results
+        
+        except Exception as error:
+            print(f"DEBUG: relevance search failed, falling back to similarity search: {error}")
+            documents = self.db.similarity_search(
+                query=query,
+                k=k,
+                filter={"room_id": room_id},
+            )
+            for document in documents:
+                document.page_content = normalize_extracted_text(document.page_content)
+            return documents
     
     def clear(self, room_id: str):
         """Clear documents from ChromaDB
