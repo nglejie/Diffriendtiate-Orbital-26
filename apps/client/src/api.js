@@ -17,6 +17,11 @@ export function setAuthToken(token) {
   }
 }
 
+/**
+ * Shared JSON/FormData request wrapper for the browser app.
+ * It attaches the current bearer token and normalizes API errors into Error objects
+ * so feature components can show user-friendly modal messages.
+ */
 async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) };
 
@@ -48,6 +53,10 @@ async function request(path, options = {}) {
   return payload;
 }
 
+/**
+ * Parses one Server-Sent Events block from the Intelligrate streaming endpoint.
+ * The parser keeps `event:` and multi-line `data:` support in one place.
+ */
 function parseSseBlock(block) {
   let event = "message";
   const data = [];
@@ -64,6 +73,10 @@ function parseSseBlock(block) {
   return { event, data: data.join("\n") };
 }
 
+/**
+ * Streams a POST request and forwards each SSE event as it arrives.
+ * The caller owns cancellation through AbortController so Intelligrate responses can be stopped.
+ */
 async function streamRequest(path, body, onEvent, options = {}) {
   const headers = { "Content-Type": "application/json" };
 
@@ -151,6 +164,8 @@ export const api = {
   getBuddyThreads: (roomId) => request(`/api/rooms/${roomId}/buddy/threads`),
   createBuddyThread: (roomId, body) =>
     request(`/api/rooms/${roomId}/buddy/threads`, { method: "POST", body }),
+  generateBuddyTitle: (roomId, body) =>
+    request(`/api/rooms/${roomId}/buddy/title`, { method: "POST", body }),
   updateBuddyThread: (roomId, threadId, body) =>
     request(`/api/rooms/${roomId}/buddy/threads/${encodeURIComponent(threadId)}`, {
       method: "PATCH",

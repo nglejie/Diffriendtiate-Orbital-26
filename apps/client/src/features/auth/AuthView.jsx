@@ -1,14 +1,8 @@
 import { ArrowRight, ChevronLeft, Eye, EyeOff } from "lucide-react";
-import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { useState } from "react";
+import { api } from "../../api.js";
 
-function formatClockTime() {
-  const now = new Date();
-  const hours = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
+/** Login/register screen that owns form state and delegates saved auth to App. */
 function AuthView({ onAuthenticated }) {
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({
@@ -19,18 +13,13 @@ function AuthView({ onAuthenticated }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
-  const [displayTime, setDisplayTime] = useState(formatClockTime);
 
   const isRegistering = mode === "register";
 
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setDisplayTime(formatClockTime());
-    }, 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, []);
-
+  /**
+   * Keeps all auth fields in one object so switching between login/register
+   * preserves shared email/password input while only showing the fields needed.
+   */
   function updateField(event) {
     setForm((current) => ({
       ...current,
@@ -38,6 +27,10 @@ function AuthView({ onAuthenticated }) {
     }));
   }
 
+  /**
+   * Uses the same submit path for login and registration, then lets App own the
+   * resulting token/user state. This keeps auth storage out of the view layer.
+   */
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
@@ -64,6 +57,12 @@ function AuthView({ onAuthenticated }) {
         <small>shape your study space</small>
       </div>
 
+      <div className="auth-shooting-stars" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+
       <section className="auth-glass-panel" aria-labelledby="auth-title">
         {isRegistering ? (
           <button
@@ -79,18 +78,14 @@ function AuthView({ onAuthenticated }) {
           </button>
         ) : null}
 
-        <div className="auth-clock" aria-hidden="true">
-          {displayTime}
-        </div>
-
         <form className="auth-form flocus-form" onSubmit={handleSubmit}>
           <div className="form-heading">
             <h1 id="auth-title" className={isRegistering ? "register-title" : ""}>
-              {isRegistering ? "Ready to Start Learning?" : "Welcome Back!"}
+              {isRegistering ? "Want to shape your very own study room?" : "Welcome Back!"}
             </h1>
             <p>
               {isRegistering
-                ? "Create to start studying with your friends."
+                ? "Create an account to start now!"
                 : "Log in below."}
             </p>
           </div>
@@ -102,7 +97,7 @@ function AuthView({ onAuthenticated }) {
                 autoComplete="name"
                 name="name"
                 onChange={updateField}
-                placeholder="first name"
+                placeholder="First name"
                 value={form.name}
               />
             </label>
@@ -149,24 +144,37 @@ function AuthView({ onAuthenticated }) {
             <ArrowRight size={18} />
           </button>
 
-          <button
-            className="auth-mode-link"
-            onClick={() => {
-              setMode(isRegistering ? "login" : "register");
-              setError("");
-            }}
-            type="button"
-          >
+          <p className="auth-mode-copy">
             {isRegistering ? (
               <>
-                Have an account? <span>Log in</span>
+                Have an account?{" "}
+                <button
+                  className="auth-mode-link"
+                  onClick={() => {
+                    setMode("login");
+                    setError("");
+                  }}
+                  type="button"
+                >
+                  Log in
+                </button>
               </>
             ) : (
               <>
-                Don't have an account? <span>Sign up here.</span>
+                Don't have an account?{" "}
+                <button
+                  className="auth-mode-link"
+                  onClick={() => {
+                    setMode("register");
+                    setError("");
+                  }}
+                  type="button"
+                >
+                  Sign up here.
+                </button>
               </>
             )}
-          </button>
+          </p>
         </form>
       </section>
     </main>

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { api, getAuthToken, setAuthToken } from "./api.js";
-import AuthView from "./components/AuthView.jsx";
-import Dashboard from "./components/Dashboard.jsx";
-import RoomView from "./components/RoomView.jsx";
+import AuthView from "./features/auth/AuthView.jsx";
+import Dashboard from "./features/dashboard/Dashboard.jsx";
+import RoomView from "./features/room/RoomView.jsx";
 
+/** Reads the current hash route without introducing a routing dependency yet. */
 function parseRoute() {
   const hash = window.location.hash.replace(/^#\/?/, "");
   const [segment, value] = hash.split("/");
@@ -19,6 +20,10 @@ function parseRoute() {
   return { name: "dashboard" };
 }
 
+/**
+ * Owns top-level authentication state and hash-based routing.
+ * Keeping routing here keeps feature screens focused on their own workflows.
+ */
 function App() {
   const [token, setToken] = useState(getAuthToken());
   const [user, setUser] = useState(null);
@@ -61,12 +66,14 @@ function App() {
     };
   }, [token]);
 
+  /** Stores a successful login/register payload in app state and local storage. */
   function handleAuthenticated(payload) {
     setAuthToken(payload.token);
     setToken(payload.token);
     setUser(payload.user);
   }
 
+  /** Clears auth state and returns the user to the public auth screen. */
   function handleLogout() {
     setAuthToken("");
     setToken("");
@@ -74,6 +81,7 @@ function App() {
     window.location.hash = "/";
   }
 
+  /** Updates the hash route used by the lightweight router above. */
   function navigate(path) {
     window.location.hash = path;
   }
