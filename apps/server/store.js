@@ -33,6 +33,10 @@ export function storageMode() {
   return pool ? "postgres" : "json";
 }
 
+/**
+ * Normalizes persisted records into the shape expected by the rest of the server.
+ * This lets older JSON files continue working after new fields are introduced.
+ */
 function normalizeDb(db) {
   return {
     users: db.users || [],
@@ -60,6 +64,9 @@ function normalizeDb(db) {
   };
 }
 
+/**
+ * Converts user-provided or stored timestamps into ISO strings for consistent API output.
+ */
 function toIso(value) {
   if (!value) return value;
   if (value instanceof Date) return value.toISOString();
@@ -81,6 +88,9 @@ function writeJsonDb(db) {
   fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
 }
 
+/**
+ * Creates the PostgreSQL schema used in deployed environments.
+ */
 async function initPostgres() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -201,6 +211,9 @@ async function initPostgres() {
   `);
 }
 
+/**
+ * Migrates local JSON seed data into PostgreSQL only when the database is empty.
+ */
 async function seedPostgresFromJsonIfEmpty() {
   if (!fs.existsSync(dbPath)) return;
 
@@ -220,6 +233,9 @@ async function seedPostgresFromJsonIfEmpty() {
   }
 }
 
+/**
+ * Initializes either JSON storage or PostgreSQL depending on DATABASE_URL.
+ */
 export async function initDb() {
   if (!pool) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -231,6 +247,10 @@ export async function initDb() {
   await seedPostgresFromJsonIfEmpty();
 }
 
+/**
+ * Reads the complete logical database. The app is small enough for this shape now,
+ * while the normalization step keeps JSON and PostgreSQL callers identical.
+ */
 export async function readDb() {
   if (!pool) return readJsonDb();
 
@@ -361,6 +381,9 @@ export async function readDb() {
   });
 }
 
+/**
+ * Persists the complete logical database back to the active storage backend.
+ */
 export async function writeDb(db) {
   if (!pool) {
     writeJsonDb(db);
@@ -370,6 +393,9 @@ export async function writeDb(db) {
   await writePostgresDb(normalizeDb(db));
 }
 
+/**
+ * Replaces PostgreSQL table contents in one transaction so related records stay in sync.
+ */
 async function writePostgresDb(db) {
   const client = await pool.connect();
   try {

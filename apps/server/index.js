@@ -49,6 +49,10 @@ function signToken(user) {
   return jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: "7d" });
 }
 
+/**
+ * Resolves a bearer token into the latest user record.
+ * Reading the database each time means deleted users lose access immediately.
+ */
 async function getUserByToken(token) {
   if (!token) return null;
 
@@ -61,6 +65,9 @@ async function getUserByToken(token) {
   }
 }
 
+/**
+ * Express guard for authenticated routes.
+ */
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -82,6 +89,10 @@ function canViewRoom(room, userId) {
   return room.visibility === "public" || isMember(room, userId);
 }
 
+/**
+ * Converts a stored room into the client-facing shape, including derived
+ * membership, owner, and latest-activity metadata.
+ */
 function roomDto(db, room, userId) {
   const owner = db.users.find((user) => user.id === room.ownerId);
   const messages = db.messages.filter((message) => message.roomId === room.id);
@@ -238,11 +249,7 @@ function canEditBuddyThread(thread, userId) {
 }
 
 function isSubstantiveBuddyThread(thread) {
-  return normalizeBuddyThreadMessages(thread.messages).some(
-    (message) =>
-      message.id !== "welcome" &&
-      message.body !== "Send a question with any files you want me to consider.",
-  );
+  return normalizeBuddyThreadMessages(thread.messages).length > 0;
 }
 
 function buddyThreadDto(db, thread, userId) {
@@ -304,83 +311,25 @@ function normalizeMessageAttachments(value) {
     .slice(0, 8);
 }
 
-function normalizeBuddyMessages(value) {
+function normalizeBuddyMessageChain(value) {
   if (!Array.isArray(value)) return [];
 
-  // Keep the prompt compact enough for query-based chatbot requests while preserving
-  // the most recent user/assistant context the model needs to answer coherently.
+  // Keep only the real chat text that the member and Intelligrate exchanged. The app
+  // should not add extra assistant notes or instructions here.
   return value
-    .filter((message) => message?.id !== "welcome")
+    .filter((message) => !message?.interrupted)
     .map((message) => {
       const role = message?.role === "assistant" ? "assistant" : "user";
-      const sources =
-        role === "assistant" && Array.isArray(message?.sources)
-          ? message.sources.filter(Boolean).slice(0, 6)
-          : [];
-      const sourceNote = sources.length
-        ? `\n\nSources used in this answer: ${sources.join(", ")}.`
-        : "";
 
       return {
         role,
-        content: `${String(message?.content || message?.body || "")
+        content: String(message?.content || message?.body || "")
           .trim()
-          .slice(0, 4000)}${sourceNote}`,
+          .slice(0, 4000),
       };
     })
     .filter((message) => message.content)
     .slice(-12);
-}
-
-function isBuddyFollowUpMessage(content) {
-  const text = String(content || "").trim();
-  if (!text) return false;
-
-  const wordCount = text.split(/\s+/).filter(Boolean).length;
-  if (wordCount > 22) return false;
-
-  return /\b(more details?|elaborate|explain more|tell me more|go deeper|continue|same|previous|above|it|this|that|those|them|what about|how about|what do you mean|what does that mean|why is that|how so)\b/i.test(
-    text,
-  );
-}
-
-function withBuddyFollowUpContext(messageChain) {
-  if (!messageChain.length) return messageChain;
-
-  const latest = messageChain.at(-1);
-  if (latest.role !== "user" || !isBuddyFollowUpMessage(latest.content)) {
-    return messageChain;
-  }
-
-  const earlierMessages = messageChain.slice(0, -1);
-  const previousUser = [...earlierMessages]
-    .reverse()
-    .find((message) => message.role === "user");
-  const previousAssistant = [...earlierMessages]
-    .reverse()
-    .find((message) => message.role === "assistant");
-
-  if (!previousUser && !previousAssistant) return messageChain;
-
-  const nextChain = [...messageChain];
-  nextChain[nextChain.length - 1] = {
-    ...latest,
-    content: [
-      "The student is asking a follow-up in the same Rocky chat.",
-      "Resolve references like this, that, it, and more details using the previous exchange.",
-      "If the previous answer used room resources, continue using the same room context where relevant before falling back to general knowledge.",
-      previousUser ? `Previous user message: ${previousUser.content.slice(0, 900)}` : "",
-      previousAssistant
-        ? `Previous Rocky answer: ${previousAssistant.content.slice(0, 1400)}`
-        : "",
-      "",
-      `Current follow-up: ${latest.content}`,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  };
-
-  return nextChain;
 }
 
 function getResourceExtension(resource) {
@@ -434,6 +383,10 @@ function roomCorpusFingerprint(resources) {
   );
 }
 
+/**
+ * Embeds supported room resources in Intelligrate's corpus.
+ * A fingerprint cache avoids repeated embedding when room documents are unchanged.
+ */
 async function syncRoomResourcesWithChatbot(db, room, options = {}) {
   const force = Boolean(options.force);
   const supportedResources = db.resources.filter(
@@ -492,10 +445,14 @@ function createHttpError(status, message) {
   return error;
 }
 
+/**
+ * Validates an Intelligrate request and resolves attachment IDs into room-owned resources.
+ * This keeps the chatbot service from seeing files outside the active room.
+ */
 function resolveBuddyMessagePayload(db, room, body) {
-  const messageChain = normalizeBuddyMessages(body.messages);
+  const messageChain = normalizeBuddyMessageChain(body.messages);
   if (!messageChain.length || messageChain.at(-1).role !== "user") {
-    throw createHttpError(400, "Send a question before asking Rocky.");
+    throw createHttpError(400, "Send a question before asking Intelligrate.");
   }
 
   const attachmentIds = Array.isArray(body.attachmentResourceIds)
@@ -513,41 +470,14 @@ function resolveBuddyMessagePayload(db, room, body) {
   if (attachedResources.length && !directResource) {
     throw createHttpError(
       400,
-      "Rocky can currently read one PDF, TXT, or DOCX attachment at a time.",
+      "Intelligrate can currently read one PDF, TXT, or DOCX attachment at a time.",
     );
   }
 
   return {
     messageChain,
     directResource,
-    requestTitle: body.requestTitle === true,
   };
-}
-
-function withBuddyTitleRequest(messageChain, requestTitle) {
-  if (!requestTitle || !messageChain.length) return messageChain;
-
-  const nextChain = [...messageChain];
-  const latest = nextChain.at(-1);
-  nextChain[nextChain.length - 1] = {
-    ...latest,
-    content: [
-      "This is the first message in a new Rocky chat.",
-      "Generate a concise, natural 3-7 word chat title for this conversation, then answer the student normally.",
-      "Do not shorten the answer just because a title is requested.",
-      "Give the same complete, useful answer you would provide in a normal Rocky chat, with explanations, steps, examples, or caveats when they help.",
-      "Return the title and answer in this exact shape:",
-      "<TITLE>chat title</TITLE>",
-      "<ANSWER>",
-      "your answer",
-      "</ANSWER>",
-      "",
-      "Student message:",
-      latest.content,
-    ].join("\n"),
-  };
-
-  return nextChain;
 }
 
 function safeUploadPath(storageName) {
@@ -572,7 +502,7 @@ async function readChatbotPayload(response) {
     const detail = Array.isArray(payload.detail)
       ? payload.detail.map((item) => item.msg || item.message || String(item)).join(" ")
       : payload.detail;
-    throw new Error(detail || payload.message || "Rocky is not available right now.");
+    throw new Error(detail || payload.message || "Intelligrate is not available right now.");
   }
 
   return payload;
@@ -587,6 +517,39 @@ async function callChatbotJson(pathname, body, timeoutMs = 180_000) {
   });
 
   return readChatbotPayload(response);
+}
+
+function cleanGeneratedBuddyTitle(value, fallback) {
+  const cleaned = String(value || "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/^title\s*:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return (cleaned || fallback || "New Chat").slice(0, 60);
+}
+
+async function generateBuddyTitle(message) {
+  const prompt = [
+    "Generate a concise study chat title for this first user message.",
+    "Return only the title, with no quotes, no markdown, and no explanation.",
+    "Keep it under 6 words.",
+    "",
+    `Message: ${String(message || "").slice(0, 1200)}`,
+  ].join("\n");
+  const url = chatbotUrl("/predict");
+  url.searchParams.set(
+    "message_chain",
+    JSON.stringify([{ role: "user", content: prompt }]),
+  );
+
+  const response = await fetch(url, {
+    method: "POST",
+    signal: AbortSignal.timeout(45_000),
+  });
+  const payload = await readChatbotPayload(response);
+
+  return cleanGeneratedBuddyTitle(payload.answer, "New Chat");
 }
 
 async function clearChatbotCorpus(roomId) {
@@ -630,6 +593,9 @@ async function createChatbotPredictRequest(pathname, { messageChain, roomId, res
   return { url, init };
 }
 
+/**
+ * Non-streaming Intelligrate request path retained for simpler API callers and debugging.
+ */
 async function askChatbot({ messageChain, roomId, resource }) {
   const { url, init } = await createChatbotPredictRequest("/predict", {
     messageChain,
@@ -640,6 +606,9 @@ async function askChatbot({ messageChain, roomId, resource }) {
   return readChatbotPayload(response);
 }
 
+/**
+ * Streaming Intelligrate request path used by the web UI for token-by-token responses.
+ */
 async function streamChatbot({ messageChain, roomId, resource }) {
   const { url, init } = await createChatbotPredictRequest("/predict/stream", {
     messageChain,
@@ -653,12 +622,15 @@ async function streamChatbot({ messageChain, roomId, resource }) {
   }
 
   if (!response.body) {
-    throw new Error("Rocky did not return a stream.");
+    throw new Error("Intelligrate did not return a stream.");
   }
 
   return response;
 }
 
+/**
+ * Shared room lookup helper for routes that need consistent 404 handling.
+ */
 function findRoomOr404(db, roomId, res) {
   const room = db.rooms.find((candidate) => candidate.id === roomId);
   if (!room) {
@@ -1292,11 +1264,32 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
       signal: AbortSignal.timeout(10_000),
     });
     const payload = await readChatbotPayload(response);
-    res.json({ ok: true, service: payload.message || "Rocky" });
+    res.json({ ok: true, service: payload.message || "Intelligrate" });
   } catch (error) {
     console.warn(`[buddy] Health check failed for ${room.id}: ${error.message}`);
     res.status(502).json({
-      message: "Rocky is not available yet. Start the chatbot service and try again.",
+      message: "Intelligrate is not available yet. Start the chatbot service and try again.",
+    });
+  }
+});
+
+app.post("/api/rooms/:roomId/buddy/title", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const message = String(req.body.message || "").trim();
+  if (!message) {
+    return res.status(400).json({ message: "Provide a message to title." });
+  }
+
+  try {
+    const title = await generateBuddyTitle(message);
+    res.json({ title });
+  } catch (error) {
+    console.warn(`[buddy] Title generation failed for ${room.id}: ${error.message}`);
+    res.status(502).json({
+      message: error.message || "Unable to generate an Intelligrate chat title.",
     });
   }
 });
@@ -1311,7 +1304,7 @@ app.post("/api/rooms/:roomId/buddy/embed", requireAuth, async (req, res) => {
   } catch (error) {
     console.warn(`[buddy] Resource sync failed for ${room.id}: ${error.message}`);
     res.status(502).json({
-      message: error.message || "Unable to sync room resources with Rocky.",
+      message: error.message || "Unable to sync room resources with Intelligrate.",
     });
   }
 });
@@ -1322,22 +1315,13 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
   if (!room) return;
 
   try {
-    const { messageChain, directResource, requestTitle } = resolveBuddyMessagePayload(
-      db,
-      room,
-      req.body,
-    );
-    // const chatbotMessageChain = withBuddyTitleRequest(
-    //   withBuddyFollowUpContext(messageChain),
-    //   requestTitle,
-    // );
-    const chatbotMessageChain = withBuddyFollowUpContext(messageChain);
+    const { messageChain, directResource } = resolveBuddyMessagePayload(db, room, req.body);
     await syncRoomResourcesWithChatbot(db, room);
     console.info(
       `[buddy] Asking room ${room.id} with ${directResource ? directResource.title : "corpus only"}`,
     );
     const payload = await askChatbot({
-      messageChain: chatbotMessageChain,
+      messageChain,
       roomId: room.id,
       resource: directResource,
     });
@@ -1355,7 +1339,7 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
 
     console.warn(`[buddy] Message failed for ${room.id}: ${error.message}`);
     res.status(502).json({
-      message: error.message || "Unable to get a response from Rocky.",
+      message: error.message || "Unable to get a response from Intelligrate.",
     });
   }
 });
@@ -1366,15 +1350,7 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
   if (!room) return;
 
   try {
-    const { messageChain, directResource, requestTitle } = resolveBuddyMessagePayload(
-      db,
-      room,
-      req.body,
-    );
-    const chatbotMessageChain = withBuddyTitleRequest(
-      withBuddyFollowUpContext(messageChain),
-      requestTitle,
-    );
+    const { messageChain, directResource } = resolveBuddyMessagePayload(db, room, req.body);
 
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -1392,22 +1368,13 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
       res.flush?.();
     };
 
-    writeSse("tool_start", {
-      id: "sync-room-resources",
-      name: "sync_resources",
-    });
-    const syncResult = await syncRoomResourcesWithChatbot(db, room);
-    writeSse("tool_end", {
-      id: "sync-room-resources",
-      name: "sync_resources",
-      result: syncResult.message || "Room resources synced.",
-    });
+    await syncRoomResourcesWithChatbot(db, room);
 
     console.info(
       `[buddy] Streaming room ${room.id} with ${directResource ? directResource.title : "corpus only"}`,
     );
     const response = await streamChatbot({
-      messageChain: chatbotMessageChain,
+      messageChain,
       roomId: room.id,
       resource: directResource,
     });
@@ -1433,7 +1400,7 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
     }
 
     return res.status(502).json({
-      message: error.message || "Unable to stream a response from Rocky.",
+      message: error.message || "Unable to stream a response from Intelligrate.",
     });
   }
 });
@@ -1574,7 +1541,7 @@ app.use((error, _req, res, _next) => {
 await initDb();
 
 server.listen(port, () => {
-  console.log(
+  console.info(
     `Diffriendtiate API running on http://127.0.0.1:${port} using ${storageMode()} storage`,
   );
 });

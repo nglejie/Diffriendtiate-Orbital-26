@@ -15,228 +15,28 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { api } from "../api.js";
-import TopBar from "./TopBar.jsx";
+import { useState } from "react";
+import { MAX_ROOM_TAGS } from "./dashboardConstants.js";
+import {
+  createFilterOptions,
+  matchesBackgroundFilters,
+  normaliseTags,
+} from "./dashboardUtils.js";
 import {
   backgroundPresets,
   createCustomBackgroundValue,
   createCustomImageBackgroundValue,
-  emptyRoomForm,
   getBackground,
   getTheme,
   moduleCodeOptions,
-} from "../constants.js";
+} from "../../constants.js";
 
-const MAX_TAGS = 3;
-
-function Dashboard({ onLogout, onOpenRoom, user }) {
-  const [rooms, setRooms] = useState([]);
-  const [form, setForm] = useState(emptyRoomForm);
-  const [search, setSearch] = useState("");
-  const [activeScope, setActiveScope] = useState("my");
-  const [alertMessage, setAlertMessage] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [selectedRoom, setSelectedRoom] = useState(null);
-
-  const myRooms = useMemo(() => rooms.filter((room) => room.isMember), [rooms]);
-  // Explore deliberately excludes private rooms; private discovery should happen by invite only.
-  const exploreRooms = useMemo(
-    () => rooms.filter((room) => !room.isMember && room.visibility === "public"),
-    [rooms],
-  );
-  const visibleRooms = activeScope === "my" ? myRooms : exploreRooms;
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      loadRooms(search);
-    }, 180);
-
-    return () => window.clearTimeout(timeout);
-  }, [search]);
-
-  async function loadRooms(nextSearch = search) {
-    setLoading(true);
-
-    try {
-      const payload = await api.listRooms(nextSearch);
-      setRooms(payload.rooms);
-    } catch (err) {
-      setAlertMessage(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function openCreateModal() {
-    setForm(emptyRoomForm);
-    setCreateOpen(true);
-  }
-
-  function updateForm(event) {
-    setForm((current) => ({
-      ...current,
-      [event.target.name]: event.target.value,
-    }));
-  }
-
-  function validateRoomForm() {
-    const tags = normaliseTags(form.tags);
-
-    if (!form.name.trim()) {
-      setAlertMessage("Room name is required.");
-      return false;
-    }
-
-    if (!form.moduleCode.trim()) {
-      setAlertMessage("Module code is required.");
-      return false;
-    }
-
-    if (form.visibility === "private" && !form.password.trim()) {
-      setAlertMessage("Password is required for private room.");
-      return false;
-    }
-
-    if (tags.length > MAX_TAGS) {
-      setAlertMessage("Each room can only have up to 3 tags.");
-      return false;
-    }
-
-    return true;
-  }
-
-  async function createRoom(event) {
-    event.preventDefault();
-    if (!validateRoomForm()) return;
-
-    setCreating(true);
-
-    try {
-      const payload = await api.createRoom({
-        ...form,
-        // The API accepts either arrays or comma-separated tags; arrays keep the cap explicit here.
-        tags: normaliseTags(form.tags),
-      });
-      setCreateOpen(false);
-      setForm(emptyRoomForm);
-      await loadRooms("");
-      onOpenRoom(payload.room.id);
-    } catch (err) {
-      setAlertMessage(err.message);
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function joinRoom(roomId) {
-    try {
-      const payload = await api.joinRoom(roomId);
-      setSelectedRoom(null);
-      await loadRooms(search);
-      onOpenRoom(payload.room.id);
-    } catch (err) {
-      setAlertMessage(err.message);
-    }
-  }
-
-  return (
-    <>
-      <TopBar onCreateRoom={openCreateModal} onLogout={onLogout} user={user} />
-      <div className="home-page">
-      <section className="home-controls" aria-label="Room browser">
-        <div className="scope-tabs" role="tablist" aria-label="Room lists">
-          <button
-            aria-selected={activeScope === "my"}
-            className={activeScope === "my" ? "active" : ""}
-            onClick={() => setActiveScope("my")}
-            role="tab"
-            type="button"
-          >
-            My Rooms
-          </button>
-          <button
-            aria-selected={activeScope === "explore"}
-            className={activeScope === "explore" ? "active" : ""}
-            onClick={() => setActiveScope("explore")}
-            role="tab"
-            type="button"
-          >
-            Explore Rooms
-          </button>
-        </div>
-
-        <div className="home-toolbar">
-          <label className="home-search">
-            <Search size={18} />
-            <input
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search rooms, modules, or tags"
-              value={search}
-            />
-          </label>
-        </div>
-      </section>
-
-      <section className="room-gallery" aria-label="Room gallery">
-        {visibleRooms.length ? (
-          visibleRooms.map((room) => (
-            <RoomTile
-              key={room.id}
-              mode={activeScope}
-              onPreviewRoom={setSelectedRoom}
-              onOpenRoom={onOpenRoom}
-              room={room}
-            />
-          ))
-        ) : (
-          <div className="empty-room-tile">
-            <p>
-              {loading
-                ? "Loading rooms..."
-                : activeScope === "my"
-                  ? "Create or join a room to see it here."
-                  : "Nothing to see here for now"}
-            </p>
-          </div>
-        )}
-      </section>
-
-      {createOpen ? (
-        <CreateRoomModal
-          creating={creating}
-          form={form}
-          onClose={() => setCreateOpen(false)}
-          onCreate={createRoom}
-          onUpdateField={updateForm}
-          setAlertMessage={setAlertMessage}
-          setForm={setForm}
-        />
-      ) : null}
-
-      {selectedRoom ? (
-        <ExploreRoomModal
-          onClose={() => setSelectedRoom(null)}
-          onJoinRoom={joinRoom}
-          room={selectedRoom}
-        />
-      ) : null}
-
-      {alertMessage ? (
-        <AlertDialog message={alertMessage} onClose={() => setAlertMessage("")} />
-      ) : null}
-      </div>
-    </>
-  );
-}
-
+/** Room card used by both My Rooms and Explore Rooms. */
 function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
   const theme = getTheme(room.theme);
   const background = getBackground(room.background);
   const ownerName = room.owner?.name || "Room owner";
-  const roomTags = (room.tags || []).slice(0, MAX_TAGS);
+  const roomTags = (room.tags || []).slice(0, MAX_ROOM_TAGS);
   const isExploreCard = mode === "explore";
   const VisibilityIcon = room.visibility === "private" ? Lock : Globe2;
 
@@ -293,10 +93,11 @@ function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
   );
 }
 
+/** Modal shown before a member joins a public room from Explore Rooms. */
 function ExploreRoomModal({ onClose, onJoinRoom, room }) {
   const theme = getTheme(room.theme);
   const background = getBackground(room.background);
-  const roomTags = (room.tags || []).slice(0, MAX_TAGS);
+  const roomTags = (room.tags || []).slice(0, MAX_ROOM_TAGS);
 
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -360,6 +161,7 @@ function ExploreRoomModal({ onClose, onJoinRoom, room }) {
   );
 }
 
+/** Full room creation workflow, including visibility, tags, and theme choice. */
 function CreateRoomModal({
   creating,
   form,
@@ -394,6 +196,7 @@ function CreateRoomModal({
     (item) => item.type !== "Gradient",
   );
 
+  /** Updates one color stop in the custom gradient builder. */
   function updateCustomColor(index, value) {
     setCustomBackground((current) => ({
       ...current,
@@ -403,6 +206,7 @@ function CreateRoomModal({
     }));
   }
 
+  /** Saves the current custom gradient into the form's background field. */
   function useCustomBackground() {
     setForm((current) => ({
       ...current,
@@ -413,10 +217,12 @@ function CreateRoomModal({
     }));
   }
 
+  /** Applies a theme-library filter without losing the other filter values. */
   function updateBackgroundFilter(name, value) {
     setBackgroundFilters((current) => ({ ...current, [name]: value }));
   }
 
+  /** Converts a small uploaded image into a room background value. */
   function handleBackgroundUpload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -445,15 +251,17 @@ function CreateRoomModal({
     reader.readAsDataURL(file);
   }
 
+  /** Stores room tags as the comma-separated shape expected by the form. */
   function updateTags(nextTags) {
     setForm((current) => ({ ...current, tags: nextTags.join(", ") }));
   }
 
+  /** Validates and adds a tag while enforcing the room-card display limit. */
   function addTag() {
     const nextTag = tagDraft.trim();
     if (!nextTag) return;
 
-    if (roomTags.length >= MAX_TAGS) {
+    if (roomTags.length >= MAX_ROOM_TAGS) {
       setAlertMessage("Each room can only have up to 3 tags.");
       return;
     }
@@ -467,6 +275,7 @@ function CreateRoomModal({
     setTagDraft("");
   }
 
+  /** Lets Enter add a tag instead of submitting the whole room form. */
   function handleTagKeyDown(event) {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -541,15 +350,15 @@ function CreateRoomModal({
               <div className="tag-editor-input">
                 <input
                   autoComplete="off"
-                  disabled={roomTags.length >= MAX_TAGS}
+                  disabled={roomTags.length >= MAX_ROOM_TAGS}
                   onChange={(event) => setTagDraft(event.target.value)}
                   onKeyDown={handleTagKeyDown}
-                  placeholder={roomTags.length >= MAX_TAGS ? "Maximum 3 tags" : "Add tag"}
+                  placeholder={roomTags.length >= MAX_ROOM_TAGS ? "Maximum 3 tags" : "Add tag"}
                   value={tagDraft}
                 />
                 <button
                   className="secondary-button compact"
-                  disabled={roomTags.length >= MAX_TAGS}
+                  disabled={roomTags.length >= MAX_ROOM_TAGS}
                   onClick={addTag}
                   type="button"
                 >
@@ -701,6 +510,7 @@ function CreateRoomModal({
   );
 }
 
+/** Searchable module-code field with a few demo codes and free typing. */
 function ModuleCodeCombobox({ onChange, options, value }) {
   const [open, setOpen] = useState(false);
   const normalisedValue = value.trim().toLowerCase();
@@ -708,6 +518,7 @@ function ModuleCodeCombobox({ onChange, options, value }) {
     .filter((option) => option.toLowerCase().includes(normalisedValue))
     .slice(0, 8);
 
+  /** Selects one suggested module code and closes the option list. */
   function chooseOption(option) {
     onChange(option);
     setOpen(false);
@@ -758,9 +569,11 @@ function ModuleCodeCombobox({ onChange, options, value }) {
   );
 }
 
+/** Small custom select used by the theme-library filters. */
 function SelectMenu({ label, onChange, options, value }) {
   const [open, setOpen] = useState(false);
 
+  /** Applies one filter value and closes the menu. */
   function chooseOption(option) {
     onChange(option);
     setOpen(false);
@@ -801,6 +614,7 @@ function SelectMenu({ label, onChange, options, value }) {
   );
 }
 
+/** Displays a section of available background presets. */
 function BackgroundSection({ activeId, items, onSelect, title }) {
   if (!items.length) return null;
 
@@ -832,41 +646,4 @@ function BackgroundSection({ activeId, items, onSelect, title }) {
   );
 }
 
-function AlertDialog({ message, onClose }) {
-  return (
-    <div className="modal-backdrop alert-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="alert-modal" role="alertdialog" aria-modal="true">
-        <p>{message}</p>
-        <div className="modal-actions">
-          <button className="primary-button compact" onClick={onClose} type="button">
-            OK
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function normaliseTags(value) {
-  if (Array.isArray(value)) {
-    return value.map(String).map((tag) => tag.trim()).filter(Boolean);
-  }
-
-  return String(value || "")
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
-function createFilterOptions(items, key) {
-  return ["All", ...new Set(items.map((item) => item[key]).filter(Boolean))];
-}
-
-function matchesBackgroundFilters(item, filters) {
-  return Object.entries(filters).every(([key, value]) => {
-    if (value === "All") return true;
-    return item[key] === value;
-  });
-}
-
-export default Dashboard;
+export { BackgroundSection, CreateRoomModal, ExploreRoomModal, RoomTile };

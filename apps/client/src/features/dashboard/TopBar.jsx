@@ -5,6 +5,11 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+/**
+ * Dashboard navigation bar. Account actions live here so the dashboard no longer
+ * needs a separate sidebar just to sign out or create a room.
+ */
+/** Top-level dashboard actions: account menu and room creation entry point. */
 function TopBar({ onCreateRoom, onLogout, user }) {
   const [accountOpen, setAccountOpen] = useState(false);
 

@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  ArrowUp,
   Bot,
   CalendarDays,
   CalendarPlus,
@@ -8,7 +7,6 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Edit3,
   ExternalLink,
   FileText,
@@ -16,690 +14,60 @@ import {
   FolderPlus,
   Hash,
   House,
+  Info,
   Link as LinkIcon,
   Lock,
   LogOut,
   MessageCircle,
-  MoreHorizontal,
+  MoreVertical,
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
   Plus,
-  RefreshCw,
   Search,
   Send,
   Settings,
-  Square,
-  Terminal,
   Trash2,
   Upload,
   Users,
   X,
 } from "lucide-react";
-import "katex/dist/katex.min.css";
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import remarkMath from "remark-math";
 import { io } from "socket.io-client";
-import { api } from "../api.js";
+import { api } from "../../api.js";
+import { BuddyPanel } from "./BuddyPanel.jsx";
+import { UPLOADS_FOLDER } from "./roomConstants.js";
+import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.js";
+import AlertDialog from "../../shared/ui/AlertDialog.jsx";
+import ConfirmDialog from "../../shared/ui/ConfirmDialog.jsx";
+import TextInputDialog from "../../shared/ui/TextInputDialog.jsx";
+import {
+  buildVisibleMembers,
+  buildWeekDays,
+  formatBytes,
+  formatDateTime,
+  formatMonthYear,
+  formatTimeOnly,
+  formatWeekday,
+  getInitial,
+  getWeekStart,
+  resourceToAttachment,
+  sessionFallsInSlot,
+} from "../../shared/utils/room.js";
 import {
   backgroundPresets,
   getBackground,
   getTheme,
   themePresets,
-} from "../constants.js";
-
-const UPLOADS_FOLDER = "Uploads";
+} from "../../constants.js";
 
 const tabs = [
   { id: "focus", label: "Home", icon: House },
   { id: "chat", label: "Chat", icon: MessageCircle },
-  { id: "buddy", label: "Rocky", icon: Bot },
+  { id: "buddy", label: "Intelligrate", icon: Bot },
   { id: "resources", label: "Resources", icon: FolderOpen },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
 ];
-
-function isBuddyWelcomeMessage(message) {
-  return (
-    message?.role === "assistant" &&
-    message?.body === "Send a question with any files you want me to consider." &&
-    !message?.attachments?.length &&
-    !message?.sources?.length &&
-    !message?.thinkingSteps?.length
-  );
-}
-
-function createBuddyThread(title = "New Chat", id, options = {}) {
-  return {
-    id: id || `buddy-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    title,
-    visibility: options.visibility || "private",
-    ownerId: options.ownerId || "",
-    owner: options.owner || null,
-    isOwner: options.isOwner ?? true,
-    createdAt: options.createdAt || new Date().toISOString(),
-    updatedAt: options.updatedAt || new Date().toISOString(),
-    messages: options.messages?.length
-      ? options.messages.filter((message) => !isBuddyWelcomeMessage(message))
-      : [],
-  };
-}
-
-function normalizeBuddyThread(thread, user) {
-  return createBuddyThread(thread.title || "New Chat", thread.id, {
-    visibility: thread.visibility === "public" ? "public" : "private",
-    ownerId: thread.ownerId || thread.owner?.id || user?.id || "",
-    owner: thread.owner || null,
-    isOwner: Boolean(thread.isOwner),
-    createdAt: thread.createdAt,
-    updatedAt: thread.updatedAt,
-    messages: thread.messages,
-  });
-}
-
-function formatBuddyResponseText(value) {
-  return String(value || "")
-    .replace(/\$\s*\n\s*([0-9])/g, (_match, digit) => `$${digit}`)
-    .replace(/(\d)\s*\n\s*\.(\d)/g, "$1.$2")
-    .replace(/(^|\n)(\s*)(\d+)\.(?=\S)/g, "$1$2$3. ")
-    .replace(/([.!?])\s*(-\s+\*\*)/g, "$1\n$2")
-    .replace(/([.!?])\s*(\d+\.\s+\*\*)/g, "$1\n\n$2")
-    .replace(/([^\n:])\s+-\s+/g, "$1\n- ")
-    .replace(/([A-Za-z)])([.!?])(?=[A-Z])/g, "$1$2 ")
-    .replace(/(^|[^\n])(\s*)(\d+)\.\s+/g, (match, prefix, _space, number) =>
-      prefix.trim() ? `${prefix}\n${number}. ` : `${prefix}${number}. `,
-    )
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-const LOOSE_LATEX_SYMBOLS = {
-  alpha: "α",
-  beta: "β",
-  gamma: "γ",
-  delta: "δ",
-  epsilon: "ε",
-  theta: "θ",
-  lambda: "λ",
-  mu: "μ",
-  pi: "π",
-  rho: "ρ",
-  sigma: "σ",
-  tau: "τ",
-  phi: "φ",
-  omega: "ω",
-};
-
-const SYMBOL_FONT_GLYPHS = {
-  "\uf061": "α",
-  "\uf062": "β",
-  "\uf063": "χ",
-  "\uf064": "δ",
-  "\uf065": "ε",
-  "\uf066": "φ",
-  "\uf067": "γ",
-  "\uf06c": "λ",
-  "\uf06d": "μ",
-  "\uf070": "π",
-  "\uf071": "θ",
-  "\uf072": "ρ",
-  "\uf073": "σ",
-  "\uf077": "ω",
-  "\uf0d7": "·",
-};
-
-function normalizeBrokenGreekGlyphs(text) {
-  const replacements = {
-    "\u00ce\u00b1": "\u03b1",
-    "\u00ce\u00b2": "\u03b2",
-    "\u00ce\u00b3": "\u03b3",
-    "\u00ce\u00b4": "\u03b4",
-    "\u00ce\u00b5": "\u03b5",
-    "\u00ce\u00b8": "\u03b8",
-    "\u00ce\u00bb": "\u03bb",
-    "\u00ce\u00bc": "\u03bc",
-    "\u00cf\u0080": "\u03c0",
-    "\u00cf\u0081": "\u03c1",
-    "\u00cf\u0083": "\u03c3",
-    "\u00cf\u0084": "\u03c4",
-    "\u00cf\u0086": "\u03c6",
-    "\u00cf\u0087": "\u03c7",
-    "\u00cf\u0089": "\u03c9",
-    "\u00c2\u00b7": "\u00b7",
-  };
-
-  let cleaned = String(text || "");
-  Object.entries(replacements).forEach(([broken, fixed]) => {
-    cleaned = cleaned.replaceAll(broken, fixed);
-  });
-  return cleaned;
-}
-
-function normalizeMathGlyphs(text) {
-  let cleaned = String(text || "").replace(/\\{1,2}([A-Za-z]+)\b/g, (match, name) => {
-    return LOOSE_LATEX_SYMBOLS[name] || match;
-  });
-
-  Object.entries(SYMBOL_FONT_GLYPHS).forEach(([broken, replacement]) => {
-    cleaned = cleaned.replaceAll(broken, replacement);
-  });
-
-  return normalizeBrokenGreekGlyphs(cleaned);
-}
-
-function getBuddyDisplayText(value) {
-  if (typeof value === "string") return value.trim();
-  if (value == null) return "";
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(getBuddyDisplayText).filter(Boolean).join("\n");
-  }
-
-  if (typeof value === "object") {
-    const directText =
-      value.text ??
-      value.message ??
-      value.summary ??
-      value.content ??
-      value.output ??
-      value.detail ??
-      value.description ??
-      "";
-
-    if (directText && directText !== value) {
-      return getBuddyDisplayText(directText);
-    }
-
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "";
-    }
-  }
-
-  return String(value || "").trim();
-}
-
-const BUDDY_WORKING_PLACEHOLDER_ID = "working-placeholder";
-
-function createBuddyThoughtItem(type, text, options = {}) {
-  const cleanedText = getBuddyDisplayText(text);
-
-  return {
-    id: options.id || `${type}:${options.tool || ""}:${cleanedText}`,
-    type,
-    text: cleanedText,
-    summary: getBuddyDisplayText(options.summary),
-    tool: options.tool || "",
-    status: options.status || "",
-  };
-}
-
-function normalizeBuddyThoughtItem(step) {
-  if (step && typeof step === "object") {
-    return createBuddyThoughtItem(step.type || "thought", getBuddyDisplayText(step), step);
-  }
-
-  const text = getBuddyDisplayText(step);
-  if (text === "[object Object]") {
-    return createBuddyThoughtItem("thought", "", { id: "invalid-object-step" });
-  }
-
-  return createBuddyThoughtItem(text === "Done" ? "done" : "thought", text, {
-    id: text === "Done" ? "done" : undefined,
-  });
-}
-
-function removeBuddyPlaceholderSteps(steps) {
-  return uniqueBuddySteps(steps).filter((step) => step.id !== BUDDY_WORKING_PLACEHOLDER_ID);
-}
-
-function uniqueBuddySteps(steps) {
-  const seen = new Set();
-
-  return steps
-    .map(normalizeBuddyThoughtItem)
-    .filter((step) => step.text)
-    .filter((step) => {
-      const key = step.id || `${step.type}:${step.tool}:${step.text}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function mergeBuddyThoughtSteps(currentSteps, nextSteps) {
-  const merged = uniqueBuddySteps(currentSteps);
-
-  uniqueBuddySteps(Array.isArray(nextSteps) ? nextSteps : [nextSteps]).forEach((nextStep) => {
-    const existingIndex = merged.findIndex((step) => step.id === nextStep.id);
-    const duplicateThoughtIndex =
-      existingIndex < 0 && nextStep.type === "thought"
-        ? merged.findIndex(
-            (step) =>
-              step.type === "thought" &&
-              compactBuddyText(step.text) === compactBuddyText(nextStep.text),
-          )
-        : -1;
-    if (existingIndex >= 0) {
-      merged[existingIndex] = { ...merged[existingIndex], ...nextStep };
-      return;
-    }
-    if (duplicateThoughtIndex >= 0) {
-      merged[duplicateThoughtIndex] = { ...merged[duplicateThoughtIndex], ...nextStep };
-      return;
-    }
-    merged.push(nextStep);
-  });
-
-  return uniqueBuddySteps(merged);
-}
-
-function getBuddyChainFinalAnswer(chain) {
-  if (!Array.isArray(chain)) return "";
-
-  const lastUserIndex = chain.reduce(
-    (last, item, index) => (item?.role === "user" ? index : last),
-    -1,
-  );
-
-  for (const item of chain.slice(lastUserIndex + 1).reverse()) {
-    if (item?.role !== "assistant") continue;
-    const content = splitBuddyVisibleThinking(String(item.content || "").trim()).answer.trim();
-    if (content.startsWith("[TRACE]")) continue;
-    if (content) return content;
-  }
-
-  return "";
-}
-
-function compactBuddyText(value) {
-  return getBuddyDisplayText(value).replace(/\s+/g, " ").trim();
-}
-
-const BUDDY_TITLE_STOP_WORDS = new Set([
-  "about",
-  "after",
-  "again",
-  "answer",
-  "because",
-  "before",
-  "could",
-  "does",
-  "from",
-  "have",
-  "into",
-  "like",
-  "much",
-  "need",
-  "please",
-  "question",
-  "should",
-  "that",
-  "their",
-  "there",
-  "think",
-  "this",
-  "what",
-  "when",
-  "where",
-  "which",
-  "with",
-  "would",
-  "your",
-]);
-
-function titleCaseBuddyWord(word) {
-  if (word.length <= 3 && word === word.toUpperCase()) return word;
-  if (/[A-Z]/.test(word.slice(1))) return word;
-  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-}
-
-function buildBuddyThreadTitle(messageText) {
-  const cleaned = compactBuddyText(messageText)
-    .replace(/[`*_#>]/g, "")
-    .replace(/^[\s"']+|[\s"'?.!,:;]+$/g, "")
-    .replace(
-      /^(can you|could you|please|tell me about|explain|help me|what do i need to know about|what do i need to know for|what is|what are|who is|how do i|how do you|how to)\s+/i,
-      "",
-    )
-    .trim();
-
-  if (!cleaned) return "New Chat";
-
-  if (/\b(compare|competitor|alternative)\w*\b/i.test(cleaned)) {
-    return "Competitor Comparison";
-  }
-
-  if (/\b(simple|compound|interest|deposit|bank account)\b/i.test(cleaned)) {
-    return "Interest Calculation";
-  }
-
-  const tokens =
-    cleaned.match(/[A-Za-z0-9$%]+(?:[-/][A-Za-z0-9$%]+)*/g)?.filter(Boolean) || [];
-  const meaningful = tokens.filter(
-    (word) =>
-      word.length > 2 && !BUDDY_TITLE_STOP_WORDS.has(word.toLowerCase()),
-  );
-  const selected = (meaningful.length ? meaningful : tokens).slice(0, 6);
-  const title = selected.map(titleCaseBuddyWord).join(" ").trim();
-
-  return title ? title.slice(0, 42) : "New Chat";
-}
-
-function cleanBuddyTitle(value) {
-  return compactBuddyText(value)
-    .replace(/<\/?[^>]+>/g, "")
-    .replace(/^["']+|["'.!?]+$/g, "")
-    .slice(0, 60)
-    .trim();
-}
-
-function splitBuddyTitleEnvelope(rawText) {
-  const raw = String(rawText || "");
-  const titleMatch = raw.match(/<title>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? cleanBuddyTitle(titleMatch[1]) : "";
-  let answer = raw.replace(/<title>[\s\S]*?<\/title>/i, "");
-
-  answer = answer
-    .replace(/^\s*<answer>\s*/i, "")
-    .replace(/\s*<\/answer>\s*$/i, "")
-    .trimStart();
-
-  return { title, answer };
-}
-
-function cleanBuddyThinkingArtifacts(text) {
-  return String(text || "")
-    .replace(/<\/?\s*(?:think|thinking)\s*>/gi, "")
-    .replace(/^\s*(?:think|thinking)\s*>\s*/i, "")
-    .replace(/<\s*\/?\s*(?:think|thinking)?\s*$/i, "")
-    .trim();
-}
-
-function splitBuddyVisibleThinking(rawText) {
-  const raw = String(rawText || "");
-  const thoughts = [];
-  let answer = "";
-  let cursor = 0;
-  const openTag = /<(?:think|thinking)>/gi;
-
-  while (cursor < raw.length) {
-    openTag.lastIndex = cursor;
-    const start = openTag.exec(raw);
-
-    if (!start) {
-      answer += raw.slice(cursor);
-      break;
-    }
-
-    answer += raw.slice(cursor, start.index);
-    const closeTag = /<\/(?:think|thinking)>/gi;
-    closeTag.lastIndex = openTag.lastIndex;
-    const end = closeTag.exec(raw);
-
-    if (!end) {
-      thoughts.push(raw.slice(openTag.lastIndex));
-      break;
-    }
-
-    thoughts.push(raw.slice(openTag.lastIndex, end.index));
-    cursor = closeTag.lastIndex;
-  }
-
-  return {
-    answer: cleanBuddyThinkingArtifacts(answer.replace(/^\s+/, "")),
-    thoughts: thoughts.map(cleanBuddyThinkingArtifacts).filter(isUsefulBuddyThought),
-  };
-}
-
-function isUsefulBuddyThought(text) {
-  const cleaned = String(text || "").trim();
-  if (!cleaned) return false;
-
-  const compact = cleaned.toLowerCase().replace(/[\s_-]+/g, "_");
-  const toolOnlyThoughts = new Set([
-    "search_corpus",
-    "read_file",
-    "sync_resources",
-  ]);
-
-  return !toolOnlyThoughts.has(compact);
-}
-
-function getBuddyChainProgressSteps(chain) {
-  // Chain payloads are kept for final-answer fallback and source auditing only.
-  // They may include raw retrieved corpus text and final assistant answers, so
-  // deriving progress rows from them makes the UI show "thoughts" that the
-  // model never actually emitted.
-  return [];
-}
-
-function getToolDisplayName(name) {
-  if (name === "search_corpus") return "Search corpus";
-  if (name === "read_file") return "Read file";
-
-  const cleanedName = String(name || "tool")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleanedName
-    ? `${cleanedName.charAt(0).toUpperCase()}${cleanedName.slice(1)}`
-    : "Tool";
-}
-
-function getEventDisplayLabel(event, fallback) {
-  return (
-    getBuddyDisplayText(event.display) ||
-    getBuddyDisplayText(event.label) ||
-    getBuddyDisplayText(event.summary) ||
-    getBuddyDisplayText(event.message) ||
-    fallback
-  );
-}
-
-function formatBuddyToolEvent(rawEvent) {
-  try {
-    const wrapper =
-      rawEvent && typeof rawEvent === "object" && rawEvent.payload !== undefined
-        ? rawEvent
-        : null;
-    const event =
-      wrapper
-        ? typeof wrapper.payload === "string"
-          ? JSON.parse(wrapper.payload || "{}")
-          : wrapper.payload || {}
-        : typeof rawEvent === "string"
-          ? JSON.parse(rawEvent || "{}")
-          : rawEvent && typeof rawEvent === "object"
-          ? rawEvent
-          : {};
-    const eventName = wrapper?.event || event.event || "";
-    const toolName = event.tool || event.name;
-    if (toolName === "sync_resources") {
-      return createBuddyThoughtItem("tool", "", {
-        id: event.id || "sync-room-resources",
-        tool: toolName,
-        status: event.status || "",
-      });
-    }
-
-    const input = event.input || {};
-    const status =
-      event.status ||
-      (eventName === "tool_start"
-        ? "running"
-        : eventName === "tool_end"
-          ? "done"
-          : "");
-    const toolId = event.id || `${toolName || "tool"}:${JSON.stringify(input)}`;
-
-    if (!toolName) {
-      const label = getEventDisplayLabel(event, "");
-      if (label) {
-        return createBuddyThoughtItem(event.type || "thought", label, {
-          id: event.id || `${event.type || "thought"}:${label}`,
-          status: event.status || "",
-          summary: event.summary || label,
-        });
-      }
-    }
-
-    if (toolName) {
-      const label = getEventDisplayLabel(event, getToolDisplayName(toolName));
-      return createBuddyThoughtItem("tool", label, {
-        id: toolId,
-        tool: toolName,
-        status,
-        summary: getToolDisplayName(toolName),
-      });
-    }
-  } catch {
-    return createBuddyThoughtItem("thought", getBuddyDisplayText(rawEvent));
-  }
-
-  return createBuddyThoughtItem("thought", getBuddyDisplayText(rawEvent));
-}
-
-function getBuddyThoughtIcon(step) {
-  if (step.type === "done") return CheckCircle2;
-  if (step.type === "tool") {
-    if (step.tool === "search_corpus") return Search;
-    if (step.tool === "read_file") return FileText;
-    return Terminal;
-  }
-  return Clock;
-}
-
-function getBuddyThoughtSummary(message) {
-  const steps = uniqueBuddySteps(message.thinkingSteps || []);
-  const firstThought = steps.find((step) => step.type === "thought" && step.text);
-  const lastThought = [...steps].reverse().find((step) => step.type === "thought" && step.text);
-  const lastTool = [...steps].reverse().find((step) => step.type === "tool" && step.text);
-  const sourceNames = Array.isArray(message.sources)
-    ? message.sources.filter(Boolean)
-    : [];
-
-  if (message.isThinking) {
-    return (
-      lastTool?.summary ||
-      lastTool?.text ||
-      lastThought?.summary ||
-      firstThought?.summary ||
-      "Working on your question"
-    );
-  }
-
-  if (sourceNames.length) {
-    return `Answered using ${sourceNames.slice(0, 2).join(", ")}${
-      sourceNames.length > 2 ? ` and ${sourceNames.length - 2} more` : ""
-    }`;
-  }
-
-  const searchedWithoutMatch = steps.some(
-    (step) =>
-      step.tool === "search_corpus" &&
-      /no relevant|no matching|not found/i.test(step.text || step.summary || "")
-  );
-  if (searchedWithoutMatch) return "Answered from general knowledge";
-
-  if (lastTool?.summary) return lastTool.summary;
-  if (lastTool?.text) return `Completed after ${lastTool.text.toLowerCase()}`;
-  return lastThought?.summary || firstThought?.summary || "Answered directly";
-}
-
-function normalizeBuddyMarkdown(text) {
-  return normalizeMathGlyphs(formatBuddyResponseText(text))
-    .replace(/\\(#{1,6})/g, "$1")
-    .replace(/(^|\n)[ \t]+(#{1,6}\s+)/g, "$1$2")
-    .replace(/(^|\n)\s*\d+\.\s*(#{1,6}\s+)/g, "$1$2")
-    .replace(/([^\n])\s+(#{1,6}\s+)/g, "$1\n\n$2")
-    .replace(/(^|\n)(#{1,6}\s*[^\n]+?)\s*:\s*/g, "$1$2\n\n")
-    .replace(/(^|\n)([A-Z][A-Za-z0-9\- /()]{2,70}:)(?=\s*\S)/g, "$1**$2**\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\\\\\[/g, () => "$$")
-    .replace(/\\\\\]/g, () => "$$")
-    .replace(/\\\[/g, () => "$$")
-    .replace(/\\\]/g, () => "$$")
-    .replace(/\\\\\(/g, () => "$")
-    .replace(/\\\\\)/g, () => "$")
-    .replace(/\\\(/g, () => "$")
-    .replace(/\\\)/g, () => "$");
-}
-
-function renderBuddyMarkdown(text) {
-  const markdown = normalizeBuddyMarkdown(text);
-  if (!markdown) return null;
-
-  return (
-    <ReactMarkdown
-      className="buddy-markdown"
-      remarkPlugins={[remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-    >
-      {markdown}
-    </ReactMarkdown>
-  );
-}
-
-function normalizeSourceKey(value) {
-  const cleaned = String(value || "").trim();
-  if (!cleaned) return "";
-
-  const withoutQuery = cleaned.split(/[?#]/)[0];
-  const fileName = withoutQuery.split(/[\\/]/).pop() || withoutQuery;
-
-  try {
-    return decodeURIComponent(fileName).toLowerCase();
-  } catch {
-    return fileName.toLowerCase();
-  }
-}
-
-function buildSourceResourceMap(resources = []) {
-  const map = new Map();
-
-  resources.forEach((resource) => {
-    [
-      resource.title,
-      resource.originalName,
-      resource.storageName,
-      resource.url,
-    ].forEach((candidate) => {
-      const key = normalizeSourceKey(candidate);
-      if (key && !map.has(key)) map.set(key, resource);
-    });
-  });
-
-  return map;
-}
-
-function BuddyThinkingText({ text }) {
-  const [expanded, setExpanded] = useState(false);
-  const cleanedText = normalizeMathGlyphs(text).trim();
-  const isLong = cleanedText.length > 420 || cleanedText.split(/\r?\n/).length > 5;
-  const preview = `${cleanedText.slice(0, 420).trim()}...`;
-
-  return (
-    <span className={`buddy-thinking-copy ${isLong && !expanded ? "truncated" : ""}`}>
-      {isLong && !expanded ? preview : cleanedText}
-      {isLong ? (
-        <button
-          className="buddy-thinking-more"
-          onClick={() => setExpanded((current) => !current)}
-          type="button"
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      ) : null}
-    </span>
-  );
-}
 
 function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [room, setRoom] = useState(null);
@@ -725,7 +93,11 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [buddySyncing, setBuddySyncing] = useState(false);
   const [buddyThreads, setBuddyThreads] = useState([]);
   const [activeBuddyThreadId, setActiveBuddyThreadId] = useState("");
+  const [draftBuddyThread, setDraftBuddyThread] = useState(null);
+  const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
+  const [roomToast, setRoomToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
 
   const theme = getTheme(room?.theme);
   const background = getBackground(room?.background);
@@ -735,13 +107,49 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return ["All files", ...Array.from(names).sort((a, b) => a.localeCompare(b))];
   }, [customResourceFolders, resources]);
   const activeBuddyThread =
-    buddyThreads.find((thread) => thread.id === activeBuddyThreadId) || buddyThreads[0];
+    draftBuddyThread ||
+    buddyThreads.find((thread) => thread.id === activeBuddyThreadId) ||
+    buddyThreads[0];
+
+  /** Builds an unsaved Intelligrate chat that becomes persistent after first send. */
+  function createDraftBuddyThread() {
+    return createBuddyThread("New Chat", `draft-buddy-${Date.now()}`, {
+      isDraft: true,
+      ownerId: user?.id || "",
+      owner: user,
+    });
+  }
 
   useEffect(() => {
     if (!notice) return undefined;
     const timeoutId = window.setTimeout(() => setNotice(""), 2600);
     return () => window.clearTimeout(timeoutId);
   }, [notice]);
+
+  useEffect(() => {
+    return () => window.clearTimeout(toastTimeoutRef.current);
+  }, []);
+
+  // Keep the Intelligrate tab usable even before a saved chat exists.
+  useEffect(() => {
+    if (loading || !room?.isMember || activeTab !== "buddy") return;
+    if (!draftBuddyThread && !buddyThreads.length) {
+      setDraftBuddyThread(createDraftBuddyThread());
+      setActiveBuddyThreadId("");
+    }
+  }, [activeTab, buddyThreads.length, draftBuddyThread, loading, room?.isMember]);
+
+  /** Shows compact room feedback without interrupting the current workflow. */
+  function showRoomToast(message) {
+    if (!message) return;
+
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.clearTimeout(toastTimeoutRef.current);
+    setRoomToast({ id, message });
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setRoomToast((current) => (current?.id === id ? null : current));
+    }, 3600);
+  }
 
   useEffect(() => {
     if (inviteCode) {
@@ -787,6 +195,8 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       }
     });
 
+    // Chat panel children send messages through this room-scoped socket.
+    // The reference is cleared on unmount to avoid leaking a stale connection.
     window.diffriendtiateSocket = socket;
 
     return () => {
@@ -797,6 +207,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     };
   }, [room?.id, room?.isMember, token]);
 
+  /**
+   * Fetches the room and all member-only data needed by the active room workspace.
+   * Loading the bundle together prevents panels from briefly showing stale room data.
+   */
   async function loadRoomBundle(nextRoomId = room?.id) {
     if (!nextRoomId) return;
     setLoading(true);
@@ -830,6 +244,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         } else {
           setBuddyThreads([]);
           setActiveBuddyThreadId("");
+          setDraftBuddyThread(createDraftBuddyThread());
         }
       } else {
         setMessages([]);
@@ -837,6 +252,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         setSessions([]);
         setBuddyThreads([]);
         setActiveBuddyThreadId("");
+        setDraftBuddyThread(null);
       }
     } catch (err) {
       setError(err.message);
@@ -845,6 +261,9 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /**
+   * Resolves invite links, including the password retry path for private rooms.
+   */
   async function joinInviteRoom(password = "") {
     if (!inviteCode) return;
 
@@ -869,6 +288,9 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /**
+   * Lets a signed-in user join a public room after previewing it.
+   */
   async function joinPublicRoom() {
     if (!room) return;
     setError("");
@@ -883,10 +305,16 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /**
+   * Routes feature errors through the shared modal instead of browser alerts.
+   */
   function showError(message) {
     setAlertMessage(message || "Something went wrong.");
   }
 
+  /**
+   * Reloads resources after uploads, deletes, or Intelligrate corpus syncs.
+   */
   async function refreshResources() {
     if (!room?.id) return [];
     const payload = await api.getResources(room.id);
@@ -894,6 +322,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return payload.resources;
   }
 
+  /**
+   * Uploads files into the room resource library, then returns the saved resources
+   * so chat/Intelligrate can attach the canonical server records.
+   */
   async function uploadSharedFiles(fileList, folder = UPLOADS_FOLDER) {
     const files = Array.from(fileList || []);
     if (!files.length || !room?.id) return [];
@@ -912,6 +344,9 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return uploaded;
   }
 
+  /**
+   * Requests a room-corpus sync for Intelligrate and refreshes visible resources after it.
+   */
   async function syncBuddyResources() {
     if (!room?.id || buddySyncing) return null;
 
@@ -925,15 +360,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /**
+   * Adapts Intelligrate's SSE stream into UI callbacks for tokens, tool events, sources,
+   * and persisted chain data. The backend owns model behavior; this layer only
+   * translates stream events into React state updates.
+   */
   async function askBuddy(messagesForThread, attachmentResources = [], handlers = {}) {
-    if (!room?.id) throw new Error("Open a room before asking Rocky.");
+    if (!room?.id) throw new Error("Open a room before asking Intelligrate.");
 
     return api.streamBuddy(
       room.id,
       {
         messages: messagesForThread,
         attachmentResourceIds: attachmentResources.map((resource) => resource.id),
-        requestTitle: handlers.requestTitle === true,
       },
       (event, data) => {
         if (event === "token") {
@@ -981,13 +420,17 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           } catch {
             payload = {};
           }
-          throw new Error(payload.message || "Unable to stream Rocky's response.");
+          throw new Error(payload.message || "Unable to stream Intelligrate's response.");
         }
       },
       { signal: handlers.signal },
     );
   }
 
+  /**
+   * Sends a chat message over the active room socket and exposes Socket.IO acks as
+   * a Promise so panels can use normal async error handling.
+   */
   function sendViaSocket(body, options = {}) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
@@ -1024,6 +467,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Creates a new text channel and immediately switches the room chat to it. */
   async function createChatChannel(name) {
     if (!room?.id) return;
 
@@ -1037,6 +481,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Renames a channel locally after the API confirms the change. */
   async function renameChatChannel(channel, name) {
     if (!room?.id) return;
 
@@ -1059,6 +504,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Removes a channel and refreshes messages so deleted-channel content disappears. */
   async function deleteChatChannel(channel) {
     if (!room?.id) return;
 
@@ -1076,29 +522,53 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Keeps the detail sidebar open whenever a room tool is selected. */
   function selectRoomTab(tabId) {
     setActiveTab(tabId);
     setContextOpen(true);
   }
 
+  /** Opens a local draft chat; persistence starts only after the first message. */
   async function startBuddyThread() {
     if (!room?.id) return;
 
-    try {
-      const payload = await api.createBuddyThread(room.id, {
-        title: "New Chat",
-        visibility: "private",
-        messages: createBuddyThread().messages,
-      });
-      const thread = normalizeBuddyThread(payload.thread, user);
-      setBuddyThreads((current) => [thread, ...current]);
-      setActiveBuddyThreadId(thread.id);
-      setContextOpen(true);
-    } catch (err) {
-      showError(err.message);
-    }
+    setDraftBuddyThread(createDraftBuddyThread());
+    setActiveBuddyThreadId("");
+    setActiveTab("buddy");
+    setContextOpen(true);
   }
 
+  /** Creates the saved Intelligrate chat once the first message is actually sent. */
+  async function ensureBuddyThreadForFirstMessage(userMessage) {
+    if (!room?.id) throw new Error("Open a room before asking Intelligrate.");
+    if (activeBuddyThread && !activeBuddyThread.isDraft) return activeBuddyThread;
+
+    const fallbackTitle = userMessage.body
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 48) || "New Chat";
+    let title = fallbackTitle;
+
+    try {
+      const payload = await api.generateBuddyTitle(room.id, { message: userMessage.body });
+      title = payload.title || fallbackTitle;
+    } catch {
+      title = fallbackTitle;
+    }
+
+    const payload = await api.createBuddyThread(room.id, {
+      title,
+      visibility: "private",
+      messages: [userMessage],
+    });
+    const thread = normalizeBuddyThread(payload.thread, user);
+    setDraftBuddyThread(null);
+    setBuddyThreads((current) => [thread, ...current]);
+    setActiveBuddyThreadId(thread.id);
+    return thread;
+  }
+
+  /** Updates the saved title for an Intelligrate chat without touching its messages. */
   async function renameBuddyThread(threadId, title) {
     const trimmedTitle = String(title || "").trim();
     if (!trimmedTitle || !room?.id) return;
@@ -1112,10 +582,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         current.map((thread) =>
           thread.id === threadId
             ? {
-                ...updatedThread,
-                // Preserve in-flight optimistic messages while metadata updates return.
-                messages: thread.messages,
-              }
+              ...updatedThread,
+              // Preserve in-flight optimistic messages while metadata updates return.
+              messages: thread.messages,
+            }
             : thread,
         ),
       );
@@ -1124,6 +594,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Deletes one Intelligrate chat and moves selection to the next available chat. */
   async function deleteBuddyThread(threadId) {
     if (!room?.id) return;
 
@@ -1137,11 +608,13 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
         return nextThreads;
       });
+      showRoomToast("Chat deleted");
     } catch (err) {
       showError(err.message);
     }
   }
 
+  /** Duplicates a private Intelligrate chat into a public room-visible thread. */
   async function startGroupBuddyThread(threadId) {
     if (!room?.id) return;
 
@@ -1171,6 +644,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Persists Intelligrate messages after each successful or interrupted response. */
   async function saveBuddyThreadMessages(threadId, nextMessages) {
     if (!room?.id || !threadId) return;
 
@@ -1183,10 +657,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         current.map((thread) =>
           thread.id === threadId
             ? {
-                ...thread,
-                messages: updatedThread.messages,
-                updatedAt: updatedThread.updatedAt,
-              }
+              ...thread,
+              messages: updatedThread.messages,
+              updatedAt: updatedThread.updatedAt,
+            }
             : thread,
         ),
       );
@@ -1195,6 +669,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Adds a local resource folder option for organizing future uploads. */
   function createResourceFolder(folderName) {
     setCustomResourceFolders((current) =>
       current.includes(folderName) ? current : [...current, folderName],
@@ -1202,20 +677,35 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     setSelectedResourceFolder(folderName);
   }
 
-  function updateActiveBuddyMessages(updater) {
+  /** Applies message updates to a saved or draft Intelligrate thread. */
+  function updateBuddyMessages(targetThreadId, updater) {
+    if (draftBuddyThread?.id === targetThreadId) {
+      setDraftBuddyThread((current) =>
+        current
+          ? {
+            ...current,
+            messages:
+              typeof updater === "function" ? updater(current.messages) : updater,
+          }
+          : current,
+      );
+      return;
+    }
+
     setBuddyThreads((current) =>
       current.map((thread) =>
-        thread.id === activeBuddyThread?.id
+        thread.id === targetThreadId
           ? {
-              ...thread,
-              messages:
-                typeof updater === "function" ? updater(thread.messages) : updater,
-            }
+            ...thread,
+            messages:
+              typeof updater === "function" ? updater(thread.messages) : updater,
+          }
           : thread,
       ),
     );
   }
 
+  /** Renames the active Intelligrate thread from the sidebar text dialog. */
   async function renameActiveBuddyThread(title) {
     if (!activeBuddyThread?.id) return;
     await renameBuddyThread(activeBuddyThread.id, title);
@@ -1344,12 +834,15 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           onCreateChannel={() => setChannelModalOpen(true)}
           onDeleteChannel={deleteChatChannel}
           onRequestDeleteBuddyThread={setBuddyDeleteTarget}
+          onRequestRenameBuddyThread={setBuddyRenameTarget}
           onStartGroupBuddyThread={startGroupBuddyThread}
           onNewBuddyThread={startBuddyThread}
-          onRenameBuddyThread={renameBuddyThread}
           onRenameChannel={renameChatChannel}
           onSelectChannel={setActiveChatChannel}
-          onSelectBuddyThread={(threadId) => setActiveBuddyThreadId(threadId)}
+          onSelectBuddyThread={(threadId) => {
+            setDraftBuddyThread(null);
+            setActiveBuddyThreadId(threadId);
+          }}
           room={room}
           resourceFolders={resourceFolders}
           selectedResourceFolder={selectedResourceFolder}
@@ -1392,27 +885,30 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         ) : null}
 
         {room.isMember && activeTab === "buddy" ? (
-          <section className="room-content-panel">
+          <section className="room-content-panel buddy-content-panel">
             {activeBuddyThread ? (
               <BuddyPanel
+                isDraftThread={Boolean(activeBuddyThread.isDraft)}
                 messages={activeBuddyThread.messages || []}
                 onAskBuddy={askBuddy}
-                onMessagesChange={updateActiveBuddyMessages}
-                onError={showError}
-                onPersistMessages={(nextMessages) =>
-                  saveBuddyThreadMessages(activeBuddyThread.id, nextMessages)
+                onEnsureThread={ensureBuddyThreadForFirstMessage}
+                onMessagesChange={(updater, targetThreadId) =>
+                  updateBuddyMessages(targetThreadId || activeBuddyThread.id, updater)
                 }
-                onRenameThread={renameActiveBuddyThread}
+                onError={showError}
+                onPersistMessages={(nextMessages, targetThreadId) =>
+                  saveBuddyThreadMessages(targetThreadId || activeBuddyThread.id, nextMessages)
+                }
                 onSyncResources={syncBuddyResources}
                 onUploadFiles={uploadSharedFiles}
+                onNotify={showRoomToast}
                 resources={resources}
                 syncingResources={buddySyncing}
+                threadId={activeBuddyThread.id}
                 threadTitle={activeBuddyThread.title || "New Chat"}
                 user={user}
               />
-            ) : (
-              <BuddyEmptyPanel onNewBuddyThread={startBuddyThread} />
-            )}
+            ) : null}
           </section>
         ) : null}
 
@@ -1451,21 +947,35 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
               >
                 <X size={18} />
               </button>
-            <SettingsPanel
-              onBack={onBack}
-              onChanged={(updatedRoom) => {
-                setRoom(updatedRoom);
-                setNotice("Room updated.");
-              }}
-              onError={showError}
-              room={room}
-            />
+              <SettingsPanel
+                onBack={onBack}
+                onChanged={(updatedRoom) => {
+                  setRoom(updatedRoom);
+                  setNotice("Room updated.");
+                }}
+                onError={showError}
+                room={room}
+              />
             </div>
           </div>
         ) : null}
 
         {alertMessage ? (
           <AlertDialog message={alertMessage} onClose={() => setAlertMessage("")} />
+        ) : null}
+
+        {roomToast ? (
+          <div className="room-toast" role="status" aria-live="polite">
+            <Info size={18} />
+            <span>{roomToast.message}</span>
+            <button
+              aria-label="Dismiss notification"
+              onClick={() => setRoomToast(null)}
+              type="button"
+            >
+              <X size={17} />
+            </button>
+          </div>
         ) : null}
 
         {channelModalOpen ? (
@@ -1487,11 +997,27 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             title="Delete Chat"
           />
         ) : null}
+
+        {buddyRenameTarget ? (
+          <TextInputDialog
+            confirmLabel="Rename"
+            initialValue={buddyRenameTarget.title}
+            label="Chat name"
+            onCancel={() => setBuddyRenameTarget(null)}
+            onSubmit={async (title) => {
+              await renameBuddyThread(buddyRenameTarget.id, title);
+              setBuddyRenameTarget(null);
+            }}
+            placeholder="Study plan"
+            title="Rename Chat"
+          />
+        ) : null}
       </main>
     </div>
   );
 }
 
+/** Sidebar content that changes based on the active room tool. */
 function RoomContextPanel({
   activeTab,
   activeChannel,
@@ -1505,8 +1031,8 @@ function RoomContextPanel({
   onCreateChannel,
   onDeleteChannel,
   onNewBuddyThread,
-  onRenameBuddyThread,
   onRenameChannel,
+  onRequestRenameBuddyThread,
   onRequestDeleteBuddyThread,
   onSelectChannel,
   onSelectBuddyThread,
@@ -1520,13 +1046,24 @@ function RoomContextPanel({
 }) {
   const members = buildVisibleMembers(room, user);
   const [buddySearch, setBuddySearch] = useState("");
-  const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyMenuTargetId, setBuddyMenuTargetId] = useState("");
   const [channelRenameTarget, setChannelRenameTarget] = useState(null);
   const [channelDeleteTarget, setChannelDeleteTarget] = useState(null);
   const filteredBuddyThreads = buddyThreads.filter((thread) =>
     thread.title.toLowerCase().includes(buddySearch.trim().toLowerCase()),
   );
+
+  // Chat option menus should behave like native popovers: click elsewhere to close.
+  useEffect(() => {
+    if (!buddyMenuTargetId) return undefined;
+
+    function closeBuddyMenu() {
+      setBuddyMenuTargetId("");
+    }
+
+    window.addEventListener("click", closeBuddyMenu);
+    return () => window.removeEventListener("click", closeBuddyMenu);
+  }, [buddyMenuTargetId]);
 
   if (activeTab === "chat") {
     return (
@@ -1627,7 +1164,7 @@ function RoomContextPanel({
   if (activeTab === "buddy") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Rocky" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Intelligrate" />
         <PanelDivider />
         <div className="buddy-sidebar-nav">
           <button className="buddy-nav-action" onClick={onNewBuddyThread} type="button">
@@ -1672,23 +1209,28 @@ function RoomContextPanel({
                   <button
                     aria-expanded={buddyMenuTargetId === thread.id}
                     aria-label={`Open ${thread.title} menu`}
-                    onClick={() =>
+                    onClick={(event) => {
+                      event.stopPropagation();
                       setBuddyMenuTargetId((current) =>
                         current === thread.id ? "" : thread.id,
-                      )
-                    }
+                      );
+                    }}
                     title="Chat options"
                     type="button"
                   >
-                    <MoreHorizontal size={15} />
+                    <MoreVertical size={15} />
                   </button>
                 </span>
                 {buddyMenuTargetId === thread.id ? (
-                  <div className="recent-chat-menu" role="menu">
+                  <div
+                    className="recent-chat-menu"
+                    onClick={(event) => event.stopPropagation()}
+                    role="menu"
+                  >
                     <button
                       disabled={!thread.isOwner}
                       onClick={() => {
-                        setBuddyRenameTarget(thread);
+                        onRequestRenameBuddyThread(thread);
                         setBuddyMenuTargetId("");
                       }}
                       role="menuitem"
@@ -1728,23 +1270,11 @@ function RoomContextPanel({
                 ) : null}
               </article>
             ))}
-            {!filteredBuddyThreads.length ? <p>No chats found.</p> : null}
+            {!filteredBuddyThreads.length && buddySearch.trim() ? (
+              <p>No chats found.</p>
+            ) : null}
           </div>
         </section>
-        {buddyRenameTarget ? (
-          <TextInputDialog
-            confirmLabel="Rename"
-            initialValue={buddyRenameTarget.title}
-            label="Chat name"
-            onCancel={() => setBuddyRenameTarget(null)}
-            onSubmit={async (title) => {
-              onRenameBuddyThread(buddyRenameTarget.id, title);
-              setBuddyRenameTarget(null);
-            }}
-            placeholder="Study plan"
-            title="Rename Chat"
-          />
-        ) : null}
       </>
     );
   }
@@ -1839,6 +1369,7 @@ function RoomContextPanel({
   );
 }
 
+/** Landing view for a room, intentionally limited to core room identity. */
 function HomePanel({ room }) {
   return (
     <section className="room-home-panel" aria-label="Room overview">
@@ -1851,6 +1382,7 @@ function HomePanel({ room }) {
   );
 }
 
+/** Shared sidebar header with a collapse control aligned to the title. */
 function PanelHeader({ eyebrow, onCloseSidebar, title, subtitle }) {
   return (
     <div className="context-panel-topline">
@@ -1871,127 +1403,17 @@ function PanelHeader({ eyebrow, onCloseSidebar, title, subtitle }) {
   );
 }
 
+/** Simple visual separator used between sidebar headings and controls. */
 function PanelDivider() {
   return <span className="context-divider" aria-hidden="true" />;
 }
 
-function AlertDialog({ message, onClose }) {
-  return (
-    <div
-      className="modal-backdrop alert-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <section className="alert-modal" role="alertdialog" aria-modal="true">
-        <p>{message}</p>
-        <div className="modal-actions">
-          <button className="primary-button compact" onClick={onClose} type="button">
-            OK
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function TextInputDialog({
-  confirmLabel,
-  initialValue = "",
-  label,
-  onCancel,
-  onSubmit,
-  placeholder,
-  title,
-}) {
-  const [value, setValue] = useState(initialValue);
-  const [submitting, setSubmitting] = useState(false);
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const trimmedValue = value.trim();
-    if (!trimmedValue) return;
-
-    setSubmitting(true);
-    await onSubmit(trimmedValue);
-    setSubmitting(false);
-  }
-
-  return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
-    >
-      <form className="room-form-modal compact-dialog" onSubmit={handleSubmit}>
-        <header>
-          <h2>{title}</h2>
-          <button onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
-        </header>
-        <label className="field">
-          <span>{label}</span>
-          <input
-            autoFocus
-            onChange={(event) => setValue(event.target.value)}
-            placeholder={placeholder}
-            value={value}
-          />
-        </label>
-        <div className="modal-actions">
-          <button className="secondary-button compact" onClick={onCancel} type="button">
-            Cancel
-          </button>
-          <button
-            className="primary-button compact"
-            disabled={submitting || !value.trim()}
-            type="submit"
-          >
-            {submitting ? "Saving" : confirmLabel}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function ConfirmDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
-  const [submitting, setSubmitting] = useState(false);
-
-  async function handleConfirm() {
-    setSubmitting(true);
-    await onConfirm();
-    setSubmitting(false);
-  }
-
-  return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
-    >
-      <section className="room-form-modal compact-dialog" role="alertdialog" aria-modal="true">
-        <header>
-          <h2>{title}</h2>
-          <button onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
-        </header>
-        <p className="dialog-copy">{message}</p>
-        <div className="modal-actions">
-          <button className="secondary-button compact" onClick={onCancel} type="button">
-            Cancel
-          </button>
-          <button className="danger-button compact" disabled={submitting} onClick={handleConfirm} type="button">
-            {submitting ? "Deleting" : confirmLabel}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
+/** Modal for creating a new room chat channel. */
 function ChannelDialog({ onCancel, onCreate }) {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  /** Validates the typed channel name before passing it to the room API. */
   async function handleSubmit(event) {
     event.preventDefault();
     const trimmed = name.trim();
@@ -2036,7 +1458,9 @@ function ChannelDialog({ onCancel, onCreate }) {
   );
 }
 
+/** Modal for scheduling a study session on the room calendar. */
 function MeetingDialog({ form, onCancel, onChange, onSubmit, submitting }) {
+  /** Updates one meeting field while preserving the rest of the draft. */
   function updateField(event) {
     onChange((current) => ({ ...current, [event.target.name]: event.target.value }));
   }
@@ -2094,10 +1518,12 @@ function MeetingDialog({ form, onCancel, onChange, onSubmit, submitting }) {
   );
 }
 
+/** Small owner label used beside room members. */
 function CrownBadge() {
   return <span className="crown-badge">Owner</span>;
 }
 
+/** Discord-style room chat panel with channel messages and shared attachments. */
 function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) {
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState([]);
@@ -2112,17 +1538,20 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [channelMessages.length]);
 
+  /** Adds files to the pending chat message without uploading until send. */
   function addAttachments(fileList) {
     setAttachments((current) => [...current, ...Array.from(fileList || [])]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  /** Removes one pending attachment from the chat composer. */
   function removeAttachment(indexToRemove) {
     setAttachments((current) =>
       current.filter((_file, index) => index !== indexToRemove),
     );
   }
 
+  /** Uploads pending files, sends the socket message, then clears the composer. */
   async function handleSubmit(event) {
     event.preventDefault();
     const trimmed = body.trim();
@@ -2250,703 +1679,7 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
   );
 }
 
-function BuddyEmptyPanel({ onNewBuddyThread }) {
-  return (
-    <section className="buddy-empty-panel" aria-label="No Rocky chat selected">
-      <Bot size={30} />
-      <h2>No Rocky chats yet</h2>
-      <p>Create a private chat, or open a public chat shared by this room.</p>
-      <button className="primary-button compact" onClick={onNewBuddyThread} type="button">
-        <Edit3 size={17} />
-        New Chat
-      </button>
-    </section>
-  );
-}
-
-function BuddyPanel({
-  messages,
-  onAskBuddy,
-  onMessagesChange,
-  onError,
-  onPersistMessages,
-  onRenameThread,
-  onSyncResources,
-  onUploadFiles,
-  resources = [],
-  syncingResources,
-  threadTitle,
-  user,
-}) {
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState([]);
-  const [thinking, setThinking] = useState(false);
-  const [draggingFiles, setDraggingFiles] = useState(false);
-  const [liveAssistantId, setLiveAssistantId] = useState("");
-  const [syncStatus, setSyncStatus] = useState("");
-  const [collapsedThoughts, setCollapsedThoughts] = useState({});
-  const fileInputRef = useRef(null);
-  const draftInputRef = useRef(null);
-  const listRef = useRef(null);
-  const abortControllerRef = useRef(null);
-  const sourceResourceMap = useMemo(() => buildSourceResourceMap(resources), [resources]);
-
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages.length]);
-
-  useEffect(() => {
-    return () => abortControllerRef.current?.abort();
-  }, []);
-
-  useEffect(() => {
-    const textarea = draftInputRef.current;
-    if (!textarea) return;
-
-    textarea.style.height = "auto";
-    const styles = window.getComputedStyle(textarea);
-    const lineHeight = Number.parseFloat(styles.lineHeight) || 20;
-    const padding =
-      (Number.parseFloat(styles.paddingTop) || 0) +
-      (Number.parseFloat(styles.paddingBottom) || 0);
-    const maxHeight = lineHeight * 10 + padding;
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
-
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
-  }, [draft]);
-
-  function addAttachments(fileList) {
-    setAttachments((current) => [...current, ...Array.from(fileList || [])]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }
-
-  function removeAttachment(indexToRemove) {
-    setAttachments((current) =>
-      current.filter((_file, index) => index !== indexToRemove),
-    );
-  }
-
-  function handleDragOver(event) {
-    if (thinking) return;
-    event.preventDefault();
-    if (event.dataTransfer?.types?.includes("Files")) {
-      setDraggingFiles(true);
-    }
-  }
-
-  function handleDragLeave(event) {
-    if (event.currentTarget.contains(event.relatedTarget)) return;
-    setDraggingFiles(false);
-  }
-
-  function handleDrop(event) {
-    event.preventDefault();
-    setDraggingFiles(false);
-    if (thinking) return;
-    addAttachments(event.dataTransfer.files);
-  }
-
-  async function handleSyncResources() {
-    if (syncingResources) return;
-
-    try {
-      const payload = await onSyncResources();
-      if (!payload) return;
-
-      const successCount = payload.success?.length || 0;
-      const failedCount = payload.failed?.length || 0;
-      setSyncStatus(
-        payload.message ||
-          `Synced ${successCount} file${successCount === 1 ? "" : "s"} into ${payload.totalChunks || 0} chunk${payload.totalChunks === 1 ? "" : "s"}${failedCount ? `, ${failedCount} failed` : ""}.`,
-      );
-      window.setTimeout(() => setSyncStatus(""), 3600);
-    } catch (err) {
-      onError(err.message);
-    }
-  }
-
-  function handleStopResponse() {
-    abortControllerRef.current?.abort();
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const trimmed = draft.trim();
-    if ((!trimmed && !attachments.length) || thinking) return;
-
-    setThinking(true);
-    let pendingAssistantId = "";
-    let attemptedMessages = [];
-    let interruptedAssistantMessage = null;
-    let latestSources = [];
-    let latestThinkingSteps = [];
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    try {
-      const uploaded = attachments.length
-        ? await onUploadFiles(attachments, UPLOADS_FOLDER)
-        : [];
-      const sharedAttachments = uploaded.map(resourceToAttachment);
-      const userMessage = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        body: trimmed || "Please review the attached files.",
-        attachments: sharedAttachments,
-        authorId: user?.id || "",
-        authorName: user?.name || "You",
-        createdAt: new Date().toISOString(),
-      };
-      const nextMessages = [...messages, userMessage];
-      const assistantId = `assistant-${Date.now()}`;
-      const assistantMessage = {
-        id: assistantId,
-        role: "assistant",
-        body: "",
-        sources: [],
-        thinkingSteps: [
-          createBuddyThoughtItem("thought", "Thinking...", {
-            id: BUDDY_WORKING_PLACEHOLDER_ID,
-            summary: "Thinking",
-          }),
-        ],
-        isThinking: true,
-        createdAt: new Date().toISOString(),
-      };
-      let streamedBody = "";
-      let streamedRawBody = "";
-      let preToolRawBody = "";
-      let sawModelToolEvent = false;
-      let streamedSources = [];
-      let streamedChain = [];
-      let visibleThinkingSteps = [...assistantMessage.thinkingSteps];
-      // const shouldRequestTitle = threadTitle === "New Chat" && Boolean(trimmed || uploaded.length);
-      const shouldRequestTitle = false
-      const fallbackThreadTitle = buildBuddyThreadTitle(
-        trimmed || uploaded[0]?.title || uploaded[0]?.originalName || "Attached file review",
-      );
-      let titleBuffer = "";
-      let answerTagBuffer = "";
-      let titleResolved = !shouldRequestTitle;
-      pendingAssistantId = assistantId;
-      attemptedMessages = nextMessages;
-      interruptedAssistantMessage = assistantMessage;
-      latestThinkingSteps = visibleThinkingSteps;
-
-      onMessagesChange([...nextMessages, assistantMessage]);
-      setDraft("");
-      setAttachments([]);
-      setLiveAssistantId(assistantId);
-
-      function applyGeneratedTitle(title) {
-        const cleanedTitle = cleanBuddyTitle(title) || fallbackThreadTitle;
-        if (!cleanedTitle || cleanedTitle === "New Chat") return;
-        void onRenameThread(cleanedTitle);
-      }
-
-      function consumeTitleToken(token) {
-        if (!shouldRequestTitle || titleResolved) return token;
-
-        titleBuffer += token;
-        const envelope = splitBuddyTitleEnvelope(titleBuffer);
-        if (envelope.title) {
-          titleResolved = true;
-          titleBuffer = "";
-          applyGeneratedTitle(envelope.title);
-          return envelope.answer;
-        }
-
-        if (titleBuffer.length > 600 || (!/<title/i.test(titleBuffer) && titleBuffer.length > 120)) {
-          titleResolved = true;
-          const buffered = titleBuffer;
-          titleBuffer = "";
-          applyGeneratedTitle(fallbackThreadTitle);
-          return buffered;
-        }
-
-        return "";
-      }
-
-      function consumeAnswerEnvelopeToken(token) {
-        if (!shouldRequestTitle || !titleResolved || !token) return token;
-
-        answerTagBuffer += token;
-        const stripped = answerTagBuffer
-          .replace(/^\s*<answer>\s*/i, "")
-          .replace(/<\/answer>/gi, "");
-
-        if (stripped !== answerTagBuffer) {
-          answerTagBuffer = "";
-          return stripped;
-        }
-
-        const compact = answerTagBuffer.trimStart().toLowerCase();
-        if ("<answer>".startsWith(compact) && compact.length < "<answer>".length) {
-          return "";
-        }
-
-        const released = answerTagBuffer;
-        answerTagBuffer = "";
-        return released.replace(/<\/answer>/gi, "");
-      }
-
-      function stripTitleEnvelope(text) {
-        const envelope = splitBuddyTitleEnvelope(text);
-        if (envelope.title) {
-          titleResolved = true;
-          applyGeneratedTitle(envelope.title);
-        }
-
-        return envelope.answer;
-      }
-
-      await onAskBuddy(nextMessages, uploaded, {
-        requestTitle: shouldRequestTitle,
-        signal: controller.signal,
-        onToken: (token) => {
-          const visibleToken = consumeAnswerEnvelopeToken(consumeTitleToken(token));
-          if (!visibleToken) return;
-
-          if (!sawModelToolEvent) {
-            preToolRawBody += visibleToken;
-            const visiblePreTool = splitBuddyVisibleThinking(preToolRawBody);
-            streamedBody = "";
-
-            if (visiblePreTool.thoughts.length) {
-              visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
-              visibleThinkingSteps = mergeBuddyThoughtSteps(
-                visibleThinkingSteps,
-                visiblePreTool.thoughts.map((thought, index) =>
-                  createBuddyThoughtItem("thought", thought, {
-                    id: `model-pre-tool-thinking:${index}`,
-                    summary: compactBuddyText(thought).slice(0, 120),
-                  }),
-                ),
-              );
-            }
-
-            onMessagesChange((current) =>
-              current.map((message) =>
-                message.id === assistantId
-                  ? {
-                      ...message,
-                      body: streamedBody,
-                      isThinking: true,
-                      thinkingSteps: visibleThinkingSteps,
-                    }
-                  : message,
-              ),
-            );
-            latestThinkingSteps = visibleThinkingSteps;
-            return;
-          }
-
-          streamedRawBody += visibleToken;
-          const visibleStream = splitBuddyVisibleThinking(streamedRawBody);
-          streamedBody = visibleStream.answer;
-
-          if (visibleStream.thoughts.length) {
-            visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
-            visibleThinkingSteps = mergeBuddyThoughtSteps(
-              visibleThinkingSteps,
-              visibleStream.thoughts.map((thought, index) =>
-                createBuddyThoughtItem("thought", thought, {
-                  id: `model-thinking:${index}`,
-                  summary: compactBuddyText(thought).slice(0, 120),
-                }),
-              ),
-            );
-          }
-
-          onMessagesChange((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    body: streamedBody,
-                    isThinking: true,
-                    thinkingSteps: visibleThinkingSteps,
-                  }
-                : message,
-            ),
-          );
-          latestThinkingSteps = visibleThinkingSteps;
-        },
-        onThinking: (step) => {
-          const cleanedStep = formatBuddyToolEvent(step);
-          if (!cleanedStep.text) return;
-          const isModelToolEvent = cleanedStep.tool !== "sync_resources";
-          if (isModelToolEvent) {
-            sawModelToolEvent = true;
-            visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
-          }
-          const preToolVisible = splitBuddyVisibleThinking(preToolRawBody || streamedBody);
-          const preToolModelText = preToolVisible.thoughts
-            .filter(Boolean)
-            .join("\n\n")
-            .trim();
-          if (isModelToolEvent && cleanedStep.status === "running" && preToolModelText) {
-            visibleThinkingSteps = mergeBuddyThoughtSteps(
-              visibleThinkingSteps,
-              createBuddyThoughtItem("thought", preToolModelText, {
-                id: `model-before-${cleanedStep.id}`,
-                summary: compactBuddyText(preToolModelText).slice(0, 120),
-              }),
-            );
-            streamedBody = "";
-            streamedRawBody = "";
-            preToolRawBody = "";
-          }
-          visibleThinkingSteps = mergeBuddyThoughtSteps(visibleThinkingSteps, cleanedStep);
-          latestThinkingSteps = visibleThinkingSteps;
-          onMessagesChange((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    body: streamedBody,
-                    isThinking: true,
-                    thinkingSteps: visibleThinkingSteps,
-                  }
-                : message,
-            ),
-          );
-        },
-        onAnswer: (answer) => {
-          const visibleAnswer = splitBuddyVisibleThinking(stripTitleEnvelope(answer));
-          streamedBody = visibleAnswer.answer;
-          streamedRawBody = visibleAnswer.answer;
-          if (visibleAnswer.thoughts.length) {
-            visibleThinkingSteps = removeBuddyPlaceholderSteps(visibleThinkingSteps);
-            visibleThinkingSteps = mergeBuddyThoughtSteps(
-              visibleThinkingSteps,
-              visibleAnswer.thoughts.map((thought, index) =>
-                createBuddyThoughtItem("thought", thought, {
-                  id: `model-answer-thinking:${index}`,
-                  summary: compactBuddyText(thought).slice(0, 120),
-                }),
-              ),
-            );
-          }
-          latestThinkingSteps = visibleThinkingSteps;
-        },
-        onChain: (chain) => {
-          streamedChain = Array.isArray(chain) ? chain : [];
-          const chainAnswer = stripTitleEnvelope(getBuddyChainFinalAnswer(streamedChain));
-          if (chainAnswer && chainAnswer.length >= streamedBody.length) {
-            streamedBody = chainAnswer;
-          }
-          onMessagesChange((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    body: streamedBody,
-                    isThinking: true,
-                    thinkingSteps: visibleThinkingSteps,
-                  }
-                : message,
-            ),
-          );
-        },
-        onSources: (sources) => {
-          streamedSources = Array.isArray(sources) ? sources : [];
-          latestSources = streamedSources;
-          onMessagesChange((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? { ...message, sources: streamedSources }
-                : message,
-            ),
-          );
-        },
-      });
-
-      const finalThinkingBase = removeBuddyPlaceholderSteps(visibleThinkingSteps).filter(
-        (step) => step.type !== "done",
-      );
-      const finalThinkingSteps = finalThinkingBase.length
-        ? mergeBuddyThoughtSteps(
-            finalThinkingBase,
-            createBuddyThoughtItem("done", "Done", { id: "done" }),
-          )
-        : [];
-      const finalBody = splitBuddyVisibleThinking(
-        stripTitleEnvelope(
-          streamedBody ||
-            getBuddyChainFinalAnswer(streamedChain) ||
-            preToolRawBody ||
-            titleBuffer,
-        ),
-      ).answer;
-      if (shouldRequestTitle && !titleResolved) {
-        applyGeneratedTitle(fallbackThreadTitle);
-      }
-      const finalAssistantMessage = {
-        ...assistantMessage,
-        body:
-          formatBuddyResponseText(finalBody) ||
-          "I could not generate a response from the current context.",
-        sources: streamedSources,
-        thinkingSteps: finalThinkingSteps,
-        isThinking: false,
-      };
-      const finalMessages = [...nextMessages, finalAssistantMessage];
-
-      onMessagesChange(finalMessages);
-      await onPersistMessages?.(finalMessages);
-    } catch (err) {
-      if (err?.name === "AbortError" && pendingAssistantId && interruptedAssistantMessage) {
-        const interruptedThinkingSteps = removeBuddyPlaceholderSteps(latestThinkingSteps).filter(
-          (step) => step.type !== "done",
-        );
-        const finalMessages = [
-          ...attemptedMessages,
-          {
-            ...interruptedAssistantMessage,
-            body: "Rocky's response was interrupted.",
-            sources: latestSources,
-            thinkingSteps: interruptedThinkingSteps,
-            isThinking: false,
-            interrupted: true,
-          },
-        ];
-
-        onMessagesChange(finalMessages);
-        await onPersistMessages?.(finalMessages);
-        return;
-      }
-
-      if (pendingAssistantId) {
-        onMessagesChange((current) =>
-          current.filter(
-            (message) => message.id !== pendingAssistantId || message.body?.trim(),
-          ),
-        );
-      }
-      onError(err.message);
-    } finally {
-      abortControllerRef.current = null;
-      setLiveAssistantId("");
-      setThinking(false);
-    }
-  }
-
-  return (
-    <section
-      className={`buddy-panel ${draggingFiles ? "dragging-files" : ""}`}
-      aria-label="Rocky chat"
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-    >
-      <header className="chat-channel-bar buddy-channel-bar">
-        <div>
-          <span>{threadTitle}</span>
-          {syncStatus ? <small>{syncStatus}</small> : null}
-        </div>
-        <button
-          className="buddy-sync-button"
-          disabled={thinking || syncingResources}
-          onClick={handleSyncResources}
-          title="Sync room resources with Rocky"
-          type="button"
-        >
-          <RefreshCw size={15} />
-          {syncingResources ? "Syncing" : "Sync Resources"}
-        </button>
-      </header>
-
-      <div className="buddy-message-list" ref={listRef}>
-        {messages.map((message) => {
-          const normalizedThinkingSteps = uniqueBuddySteps(message.thinkingSteps || []);
-          const hasThinkingSteps = Boolean(normalizedThinkingSteps.length);
-          const hasOnlyWorkingPlaceholder =
-            normalizedThinkingSteps.length === 1 &&
-            normalizedThinkingSteps[0]?.id === BUDDY_WORKING_PLACEHOLDER_ID;
-          const thoughtCollapsed =
-            collapsedThoughts[message.id] ?? (message.isThinking ? false : true);
-          const thoughtSummary = getBuddyThoughtSummary({
-            ...message,
-            thinkingSteps: normalizedThinkingSteps,
-          });
-
-          return (
-            <article
-              className={message.role === "user" ? "buddy-message user" : "buddy-message"}
-              key={message.id}
-            >
-              <span>
-                {message.role === "user"
-                  ? message.authorId === user?.id
-                    ? "You"
-                    : message.authorName || "Member"
-                  : "Rocky"}
-              </span>
-              {hasThinkingSteps ? (
-                <div
-                  className={`buddy-thinking-steps ${
-                    thoughtCollapsed ? "collapsed" : ""
-                  }`}
-                  aria-label="Rocky progress"
-                >
-                  <button
-                    aria-expanded={!thoughtCollapsed}
-                    className="buddy-thinking-summary"
-                    onClick={() =>
-                      setCollapsedThoughts((current) => ({
-                        ...current,
-                        [message.id]: !thoughtCollapsed,
-                      }))
-                    }
-                    type="button"
-                  >
-                    <ChevronRight size={15} />
-                    {hasOnlyWorkingPlaceholder ? "Thinking..." : thoughtSummary}
-                  </button>
-                  {!thoughtCollapsed && !hasOnlyWorkingPlaceholder
-                    ? normalizedThinkingSteps.map((step, index) => {
-                        const ThoughtIcon = getBuddyThoughtIcon(step);
-
-                        return (
-                          <div
-                            className={`buddy-thinking-step ${step.type} ${
-                              step.status ? `status-${step.status}` : ""
-                            }`}
-                            key={`${step.id}-${index}`}
-                          >
-                            <span className="buddy-thinking-icon">
-                              <ThoughtIcon size={16} />
-                            </span>
-                            <BuddyThinkingText text={step.text} />
-                          </div>
-                        );
-                      })
-                    : null}
-                </div>
-              ) : null}
-              {message.body
-                ? message.role === "assistant"
-                  ? renderBuddyMarkdown(message.body)
-                  : <p>{message.body}</p>
-                : null}
-              {message.attachments?.length ? (
-                <div className="attachment-chip-row">
-                  {message.attachments.map((file) => (
-                    <span key={file.id}>
-                      <Paperclip size={13} />
-                      {file.title || file.name}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              {message.sources?.length ? (
-                <div className="buddy-source-row">
-                  {message.sources.map((source) => {
-                    const resource = sourceResourceMap.get(normalizeSourceKey(source));
-                    const chipContent = (
-                      <>
-                        <FileText size={13} />
-                        {source}
-                      </>
-                    );
-
-                    return resource?.url ? (
-                      <a
-                        download={resource.type === "file" ? resource.originalName || resource.title || source : undefined}
-                        href={resource.url}
-                        key={source}
-                        rel="noreferrer"
-                        target={resource.type === "file" ? undefined : "_blank"}
-                        title={resource.type === "file" ? "Download source file" : "Open source link"}
-                      >
-                        {chipContent}
-                      </a>
-                    ) : (
-                      <span key={source}>{chipContent}</span>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </article>
-          );
-        })}
-        {thinking && !liveAssistantId ? (
-          <article className="buddy-message">
-            <span>Rocky</span>
-            <p>Preparing a response...</p>
-          </article>
-        ) : null}
-      </div>
-
-      {draggingFiles ? (
-        <div className="buddy-drop-overlay">
-          <Upload size={22} />
-          <span>Drop files to add them</span>
-        </div>
-      ) : null}
-
-      {attachments.length ? (
-        <div className="attachment-preview-row">
-          {attachments.map((file, index) => (
-            <button
-              key={`${file.name}-${file.size}-${index}`}
-              onClick={() => removeAttachment(index)}
-              title="Remove attachment"
-              type="button"
-            >
-              <Paperclip size={13} />
-              {file.name}
-              <X size={13} />
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      <form className="buddy-input-row room-composer" onSubmit={handleSubmit}>
-        <input
-          multiple
-          onChange={(event) => addAttachments(event.target.files)}
-          ref={fileInputRef}
-          type="file"
-        />
-        <button
-          className="buddy-attach-button"
-          disabled={thinking}
-          onClick={() => fileInputRef.current?.click()}
-          title="Attach files"
-          type="button"
-        >
-          <Plus size={20} />
-        </button>
-        <textarea
-          ref={draftInputRef}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="Ask anything"
-          rows={1}
-          value={draft}
-        />
-        <button
-          className={`buddy-send-button ${thinking ? "is-stopping" : ""}`}
-          disabled={!thinking && !draft.trim() && !attachments.length}
-          onClick={thinking ? handleStopResponse : undefined}
-          title={thinking ? "Stop response" : "Send"}
-          type={thinking ? "button" : "submit"}
-        >
-          {thinking ? <Square fill="currentColor" size={13} /> : <ArrowUp size={19} />}
-        </button>
-      </form>
-    </section>
-  );
-}
-
+/** Dropbox-style resource library for room files and links. */
 function ResourcePanel({
   onChanged,
   onCreateFolder,
@@ -2967,6 +1700,7 @@ function ResourcePanel({
       ? resources
       : resources.filter((resource) => (resource.folder || "General") === selectedFolder);
 
+  /** Saves an external URL resource into the selected folder. */
   async function addUrl(event) {
     event.preventDefault();
     setSubmitting(true);
@@ -2986,6 +1720,7 @@ function ResourcePanel({
     }
   }
 
+  /** Uploads dropped or selected files into the selected resource folder. */
   async function uploadFiles(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length) return;
@@ -3006,6 +1741,7 @@ function ResourcePanel({
     }
   }
 
+  /** Removes one resource from the room library. */
   async function removeResource(resourceId) {
     try {
       await api.deleteResource(resourceId);
@@ -3155,6 +1891,7 @@ function ResourcePanel({
   );
 }
 
+/** Weekly calendar view for scheduled room sessions. */
 function SessionPanel({ onChanged, onError, room, sessions }) {
   const [form, setForm] = useState({ title: "", startsAt: "", agenda: "" });
   const [showMeetingForm, setShowMeetingForm] = useState(false);
@@ -3164,6 +1901,7 @@ function SessionPanel({ onChanged, onError, room, sessions }) {
   const weekDays = useMemo(() => buildWeekDays(weekStart), [weekStart]);
   const calendarHours = Array.from({ length: 14 }, (_, index) => index + 10);
 
+  /** Creates a calendar session from the modal form. */
   async function addSession(event) {
     event.preventDefault();
     setSubmitting(true);
@@ -3180,6 +1918,7 @@ function SessionPanel({ onChanged, onError, room, sessions }) {
     }
   }
 
+  /** Deletes a scheduled session and refreshes the calendar. */
   async function removeSession(sessionId) {
     try {
       await api.deleteSession(sessionId);
@@ -3265,6 +2004,7 @@ function SessionPanel({ onChanged, onError, room, sessions }) {
   );
 }
 
+/** Room owner settings modal for metadata, theme, and destructive actions. */
 function SettingsPanel({ onBack, onChanged, onError, room }) {
   const [form, setForm] = useState({
     name: room.name,
@@ -3276,7 +2016,9 @@ function SettingsPanel({ onBack, onChanged, onError, room }) {
     background: room.background || "aurora",
   });
   const [saving, setSaving] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
+  /** Updates one settings field while keeping the rest of the form intact. */
   function updateField(event) {
     setForm((current) => ({
       ...current,
@@ -3284,6 +2026,7 @@ function SettingsPanel({ onBack, onChanged, onError, room }) {
     }));
   }
 
+  /** Persists room metadata edits and notifies the parent room view. */
   async function saveRoom(event) {
     event.preventDefault();
     setSaving(true);
@@ -3298,9 +2041,8 @@ function SettingsPanel({ onBack, onChanged, onError, room }) {
     }
   }
 
+  /** Deletes the entire room after the confirmation dialog has approved it. */
   async function deleteRoom() {
-    if (!window.confirm("Delete this room and all its local data?")) return;
-
     try {
       await api.deleteRoom(room.id);
       onBack();
@@ -3381,15 +2123,26 @@ function SettingsPanel({ onBack, onChanged, onError, room }) {
       <aside className="surface danger-zone">
         <h3>Delete Room</h3>
         <p>Messages, resources, uploaded files, and sessions will be removed locally.</p>
-        <button className="danger-button" onClick={deleteRoom} type="button">
+        <button className="danger-button" onClick={() => setDeleteConfirmOpen(true)} type="button">
           <Trash2 size={17} />
           Delete Room
         </button>
       </aside>
+
+      {deleteConfirmOpen ? (
+        <ConfirmDialog
+          confirmLabel="Delete"
+          message={`Delete "${room.name}" and all of its local data?`}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={deleteRoom}
+          title="Delete Room"
+        />
+      ) : null}
     </section>
   );
 }
 
+/** Compact picker shared by settings theme and background choices. */
 function SettingsPicker({ activeId, items, label, onSelect, type }) {
   return (
     <div className="picker-group compact-picker">
@@ -3409,10 +2162,10 @@ function SettingsPicker({ activeId, items, label, onSelect, type }) {
               style={
                 type === "theme"
                   ? {
-                      "--swatch-a": item.colors[0],
-                      "--swatch-b": item.colors[1],
-                      "--swatch-c": item.colors[2],
-                    }
+                    "--swatch-a": item.colors[0],
+                    "--swatch-b": item.colors[1],
+                    "--swatch-c": item.colors[2],
+                  }
                   : { "--background-swatch": item.css }
               }
             />
@@ -3425,106 +2178,6 @@ function SettingsPicker({ activeId, items, label, onSelect, type }) {
       </div>
     </div>
   );
-}
-
-function buildVisibleMembers(room, user) {
-  const memberMap = new Map();
-  const owner = room.owner || {};
-
-  if (owner.id) {
-    memberMap.set(owner.id, owner);
-  }
-
-  (room.members || []).forEach((member) => {
-    if (member?.id) memberMap.set(member.id, member);
-  });
-
-  if (user?.id && !memberMap.has(user.id)) {
-    memberMap.set(user.id, user);
-  }
-
-  return Array.from(memberMap.values()).map((member) => {
-    const name = member.name || member.email || "Member";
-    const isOwner = member.id === owner.id;
-
-    return {
-      id: member.id,
-      name,
-      initial: getInitial(name),
-      role: isOwner ? "Owner" : member.id === user.id ? "You" : "Member",
-      owner: isOwner,
-    };
-  });
-}
-
-function getInitial(value) {
-  return String(value || "U").trim()[0]?.toUpperCase() || "U";
-}
-
-function resourceToAttachment(resource) {
-  return {
-    id: resource.id,
-    title: resource.title || resource.originalName || "Attachment",
-    url: resource.url,
-    type: resource.type || "file",
-    size: resource.size || 0,
-  };
-}
-
-function getWeekStart(baseDate, offset = 0) {
-  const date = new Date(baseDate);
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() - date.getDay() + offset * 7);
-  return date;
-}
-
-function buildWeekDays(weekStart) {
-  return Array.from({ length: 7 }, (_, index) => {
-    const day = new Date(weekStart);
-    day.setDate(weekStart.getDate() + index);
-    return day;
-  });
-}
-
-function isSameDate(left, right) {
-  return left.toDateString() === right.toDateString();
-}
-
-function sessionFallsInSlot(session, day, hour) {
-  const startsAt = new Date(session.startsAt);
-  return isSameDate(startsAt, day) && startsAt.getHours() === hour;
-}
-
-function formatMonthYear(date) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "long",
-    year: "numeric",
-  }).format(date);
-}
-
-function formatWeekday(date) {
-  return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
-}
-
-function formatTimeOnly(value) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatDateTime(value) {
-  if (!value) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
-function formatBytes(bytes = 0) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default RoomView;
