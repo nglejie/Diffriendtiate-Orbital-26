@@ -88,6 +88,7 @@ services:
       SEARCH_MIN_RELEVANCE: ${SEARCH_MIN_RELEVANCE:-0.35}
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
+      GPU_ENABLED: false
     volumes:
       - chroma_db:${CHROMA_DIR}
     depends_on:

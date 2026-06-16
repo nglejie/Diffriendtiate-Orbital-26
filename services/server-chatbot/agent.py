@@ -11,6 +11,7 @@ from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
 from models import HistoryMessage
 
+GPU_ENABLED = os.getenv("GPU_ENABLED") == "true"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 

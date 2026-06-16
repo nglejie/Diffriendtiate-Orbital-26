@@ -33,6 +33,8 @@ If all is well (pray), LLM will send correct response back to user
 - Embedding: nomic-embed-text
 - Generation: Qwen2.5:7b
 
+Depending on if a GPU is detected, the generation model may change to gemini, but would require an API key
+
 ## Files
 ### main.py
 - Handles the FASTAPI server, routing and return of all APIs
