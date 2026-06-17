@@ -19,3 +19,4 @@ apps/server/uploads
 docs/
 tools/
 chroma_db
+*.drawio.bkp
