@@ -89,6 +89,9 @@ services:
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
       GPU_ENABLED: false
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
     volumes:
       - chroma_db:${CHROMA_DIR}
     depends_on:
