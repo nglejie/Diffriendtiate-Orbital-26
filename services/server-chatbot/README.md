@@ -30,10 +30,13 @@ If all is well (pray), LLM will send correct response back to user
 - ChromaDB (Database)
 
 ## Models
-- Embedding: nomic-embed-text
-- Generation: Qwen2.5:7b
+- Embedding: nomic-embed-text (ollama)
 
-Depending on if a GPU is detected, the generation model may change to gemini, but would require an API key to be provided
+If GPU is detected / Used
+- Generation: Qwen2.5:7b (ollama)
+
+If no GPU is detected / Used
+- Generation: gemini-3.1-flash-lite (Gemini API)
 
 ## Files
 ### main.py
@@ -69,15 +72,12 @@ Depending on if a GPU is detected, the generation model may change to gemini, bu
     - Maintains 1 source of truth for all files requiring reference to pydantic models
 
 ## Limitations / Future work
-- Currently only accepts manually uploading of 1 file
 - Limited to only text based documents (PDF, TXT, DOCX)
 - Does not extract information from images or any other media type
-- Could consider using smaller models for generation but risk tool based accuracy dropping
-- Could Consider using API keys to call public models, mitigate problem of model size and resource requirement
-    - Currently using Ollama Server to help faciliate ease in converting to API based structure instead of self hosted
+- Currently only accepts manually uploading of 1 file (not used in main app)
 - Have not tested extensively
     - Multiple file in database (same / different room documents)
-    - Both uploaded file and search
+    - Both uploaded file and search (not used in main app)
     - Response accuracy
     - Consistentency of tool usage
     - Simultaneous requests
