@@ -6,10 +6,16 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
 from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
 from models import HistoryMessage
+
+GPU_ENABLED = os.getenv("GPU_ENABLED") == "true"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = None if GEMINI_API_KEY == "your-key-here" else GEMINI_API_KEY # check if gemini key was changed or still default
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
@@ -22,7 +28,8 @@ You have access to tools to help answer questions:
 - read_file: reads the content of a file uploded with this request
 
 Rules for answering:
-- If a room_id is provided, ALWAYS call search_corpus first before answering
+- If the user references their notes during the query, answer strictly based on what you can retrieve or have retrieved from corpus.
+- If a room_id is provided, ALWAYS call search_corpus first before answering if the question relates to the users notes
 - If a file is uploaded, use read_file when the question may relate to the file
 - Use both tools if needed, they may contain complementary information
 - You can call search_corpus multiple times with different queries if needed
@@ -35,10 +42,20 @@ Rules for answering:
 class Agent:
     def __init__(self, vectorstore: VectorStore):
         self.vectorstore = vectorstore
-        self.llm = ChatOllama(
-            model = LLM_MODEL,
-            base_url=OLLAMA_BASE_URL,
-        )
+        # Decide to use ollama / gemini
+        if GPU_ENABLED or not GEMINI_API_KEY:
+            print("DEBUG: GPU Enabled / No GEMINI_API_KEY Detected, Using Ollama Model")
+            self.llm = ChatOllama(
+                model = LLM_MODEL,
+                base_url=OLLAMA_BASE_URL,
+            )
+        else:
+            print("DEBUG: NO GPU detected, using Gemini model")
+            self.llm = ChatGoogleGenerativeAI(
+                model=GEMINI_MODEL,
+                google_api_key=GEMINI_API_KEY,
+            )
+        
         
     def _build_agent(
         self, 
@@ -90,6 +107,29 @@ class Agent:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
         return system_content
+    
+    def _extract_text_content(self, content) -> Optional[str]:
+        """Nomralize message content into string
+        Gemini return content generated as list of content blocks instead of string
+
+        Args:
+            content (_type_): the content to convert, in str or list format
+
+        Returns:
+            Optional[str]: the converted content to str
+        """
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                elif isinstance(block, str):
+                    parts.append(block)
+            text = "".join(parts)
+            return text
+
+        text = str(content) if content else None
+        return text
 
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
@@ -128,7 +168,8 @@ class Agent:
             tool_name = getattr(msg, "name", None)
             
             # message content
-            content = msg.content if msg.content else None
+            # content = msg.content if msg.content else None
+            content = self._extract_text_content(msg.content)
             
             output.append({
                 "type": msg_type,
@@ -221,7 +262,8 @@ class Agent:
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
-                    yield f"[TOKEN]{chunk.content}"
+                    # print(f"DEBUG stream chunk.content type: {type(chunk.content)} | value: {chunk.content!r}")
+                    yield f"[TOKEN]{self._extract_text_content(chunk.content)}"
             
             # Handle Tool starting
             elif event_type == "on_tool_start":
@@ -259,6 +301,7 @@ class Agent:
             elif event_type == "on_chat_model_end":
                 if event.get("metadata", {}).get("langgraph_node") == "model":
                     ai_message = event["data"]["output"]
+                    # print(f"DEBUG on_chat_model_end content type: {type(ai_message.content)} | value: {ai_message.content!r}")
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
             
@@ -290,7 +333,8 @@ class Agent:
         messages = self._message_chain_to_messages(message_chain)
         
         result = await agent.ainvoke({"messages": messages})
-        answer = result["messages"][-1].content
+        # answer = result["messages"][-1].content
+        answer = self._extract_text_content(result["messages"][-1].content)
         sources = self._extract_sources(result["messages"])
         chain = self._convert_messages(result["messages"])
                             
