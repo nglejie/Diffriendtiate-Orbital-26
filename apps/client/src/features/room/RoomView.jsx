@@ -8,17 +8,22 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit3,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileText,
   FolderOpen,
   FolderPlus,
+  Globe2,
   Hash,
+  Headphones,
   House,
   Info,
   Link as LinkIcon,
   Lock,
   LogOut,
   MessageCircle,
+  MicOff,
   MoreVertical,
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,25 +31,54 @@ import {
   Plus,
   Search,
   Send,
+  Star,
   Settings,
+  Tag,
   Trash2,
   Upload,
+  Video,
+  Wand2,
   Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { io } from "socket.io-client";
 import { api } from "../../api.js";
 import { BuddyPanel } from "./BuddyPanel.jsx";
 import { UPLOADS_FOLDER } from "./roomConstants.js";
 import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.js";
+import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.jsx";
+import { ChatPanel as DiscordChatPanel } from "./chat/ChatPanel.jsx";
+import { ChatSidebar } from "./chat/ChatSidebar.jsx";
+import {
+  ResourceDriveSidebar,
+  ResourceFileManager,
+  useResourceDriveController,
+} from "./resources/ResourceFileManager.jsx";
+import {
+  DEFAULT_CATEGORY_ID,
+  addChannelToCategory,
+  createCategoryId,
+  moveChannelToCategory,
+  normalizeChannelLayout,
+  removeChannelFromLayout,
+  renameChannelInLayout,
+} from "./chat/chatLayout.js";
+import {
+  RESOURCE_TYPES,
+  buildResourceStats,
+  createDefaultResourceThreads,
+  enrichResources,
+  filterResources,
+  getResourceDisplayName,
+} from "./resourceWorkspace.js";
 import AlertDialog from "../../shared/ui/AlertDialog.jsx";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog.jsx";
 import TextInputDialog from "../../shared/ui/TextInputDialog.jsx";
 import {
   buildVisibleMembers,
   buildWeekDays,
-  formatBytes,
   formatDateTime,
   formatMonthYear,
   formatTimeOnly,
@@ -55,10 +89,22 @@ import {
   sessionFallsInSlot,
 } from "../../shared/utils/room.js";
 import {
+  AcademicTermSelect,
+  BackgroundSection,
+  ModuleCodeCombobox,
+} from "../dashboard/DashboardComponents.jsx";
+import { MAX_ROOM_TAGS } from "../dashboard/dashboardConstants.js";
+import {
+  createAcademicTermOptions,
+  normaliseTags,
+} from "../dashboard/dashboardUtils.js";
+import {
   backgroundPresets,
+  createCustomBackgroundValue,
+  createCustomImageBackgroundValue,
   getBackground,
   getTheme,
-  themePresets,
+  moduleCodeOptions,
 } from "../../constants.js";
 
 const tabs = [
@@ -66,15 +112,49 @@ const tabs = [
   { id: "chat", label: "Chat", icon: MessageCircle },
   { id: "buddy", label: "Intelligrate", icon: Bot },
   { id: "resources", label: "Resources", icon: FolderOpen },
-  { id: "calendar", label: "Calendar", icon: CalendarDays },
+  { id: "calendar", label: "Calendar", icon: CalendarDays, disabled: true },
 ];
+
+/** Reads optional room-local UI state without involving the shared backend. */
+function readRoomStorage(roomId, key, fallback) {
+  if (!roomId) return fallback;
+
+  try {
+    const value = window.localStorage.getItem(`diffriendtiate:room:${roomId}:${key}`);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Persists room-local UI state that does not need a backend schema yet. */
+function writeRoomStorage(roomId, key, value) {
+  if (!roomId) return;
+  window.localStorage.setItem(`diffriendtiate:room:${roomId}:${key}`, JSON.stringify(value));
+}
+
+/** Narrows unknown persisted values to a plain object before child components read them. */
+function asObjectRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+/** Narrows unknown API/local values to an array so render paths cannot crash on map/filter. */
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Returns the room channel list with the default channel always available. */
+function getRoomChannels(room) {
+  const channels = asArray(room?.channels).filter((channel) => typeof channel === "string" && channel.trim());
+  return channels.length ? channels : ["general"];
+}
 
 function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [room, setRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [resources, setResources] = useState([]);
   const [customResourceFolders, setCustomResourceFolders] = useState([]);
-  const [selectedResourceFolder, setSelectedResourceFolder] = useState("All files");
+  const [resourceFoldersLoadedRoomId, setResourceFoldersLoadedRoomId] = useState("");
   const [sessions, setSessions] = useState([]);
   const [activeTab, setActiveTab] = useState("focus");
   const [loading, setLoading] = useState(true);
@@ -88,7 +168,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [inviteCopied, setInviteCopied] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
   const [activeChatChannel, setActiveChatChannel] = useState("general");
-  const [channelModalOpen, setChannelModalOpen] = useState(false);
+  const [chatDialog, setChatDialog] = useState(null);
+  const [channelLayout, setChannelLayout] = useState([]);
+  const [chatDrafts, setChatDrafts] = useState({});
+  const [starredMessageIds, setStarredMessageIds] = useState([]);
   const [channelActionLoading, setChannelActionLoading] = useState(false);
   const [buddySyncing, setBuddySyncing] = useState(false);
   const [buddyThreads, setBuddyThreads] = useState([]);
@@ -97,19 +180,32 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
   const [roomToast, setRoomToast] = useState(null);
+  const [importantMessages, setImportantMessages] = useState([]);
+  const [resourceThreads, setResourceThreads] = useState({});
   const toastTimeoutRef = useRef(null);
 
   const theme = getTheme(room?.theme);
   const background = getBackground(room?.background);
   const resourceFolders = useMemo(() => {
     const names = new Set([UPLOADS_FOLDER, "General", ...customResourceFolders]);
-    resources.forEach((resource) => names.add(resource.folder || "General"));
+    asArray(resources).forEach((resource) => names.add(resource?.folder || "General"));
     return ["All files", ...Array.from(names).sort((a, b) => a.localeCompare(b))];
   }, [customResourceFolders, resources]);
+  const resourceDrive = useResourceDriveController({
+    onChanged: () => loadRoomBundle(room?.id),
+    onDeleteFolder: deleteResourceFolder,
+    onCreateFolder: createResourceFolder,
+    onError: showError,
+    onUploadFiles: uploadSharedFiles,
+    resourceFolders,
+    resources,
+    room,
+  });
+  const buddyThreadList = asArray(buddyThreads);
   const activeBuddyThread =
     draftBuddyThread ||
-    buddyThreads.find((thread) => thread.id === activeBuddyThreadId) ||
-    buddyThreads[0];
+    buddyThreadList.find((thread) => thread.id === activeBuddyThreadId) ||
+    buddyThreadList[0];
 
   /** Builds an unsaved Intelligrate chat that becomes persistent after first send. */
   function createDraftBuddyThread() {
@@ -130,14 +226,137 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return () => window.clearTimeout(toastTimeoutRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!room?.id) {
+      setCustomResourceFolders([]);
+      setResourceFoldersLoadedRoomId("");
+      return;
+    }
+
+    const savedFolders = readRoomStorage(room.id, "resourceFolders", []);
+    setCustomResourceFolders(
+      Array.isArray(savedFolders)
+        ? savedFolders.map((folder) => String(folder || "").trim()).filter(Boolean)
+        : [],
+    );
+    setResourceFoldersLoadedRoomId(room.id);
+  }, [room?.id]);
+
+  useEffect(() => {
+    if (!room?.id || resourceFoldersLoadedRoomId !== room.id) return;
+    writeRoomStorage(room.id, "resourceFolders", customResourceFolders);
+  }, [customResourceFolders, resourceFoldersLoadedRoomId, room?.id]);
+
+  useEffect(() => {
+    if (!room?.id) return;
+    const savedImportantMessages = readRoomStorage(room.id, "importantMessages", []);
+    const savedResourceThreads = readRoomStorage(room.id, "resourceThreads", {});
+    const savedChatDrafts = readRoomStorage(room.id, "chatDrafts", {});
+    const savedStarredMessageIds = readRoomStorage(room.id, "starredMessageIds", []);
+
+    // Local room UI state may outlive refactors. Validate shapes before using
+    // them so one stale localStorage value cannot crash the entire room view.
+    setImportantMessages(Array.isArray(savedImportantMessages) ? savedImportantMessages : []);
+    setResourceThreads(asObjectRecord(savedResourceThreads));
+    setChatDrafts(asObjectRecord(savedChatDrafts));
+    setStarredMessageIds(Array.isArray(savedStarredMessageIds) ? savedStarredMessageIds : []);
+    setChannelLayout(
+      normalizeChannelLayout(
+        readRoomStorage(room.id, "channelLayout", null),
+        getRoomChannels(room),
+      ),
+    );
+  }, [room?.id]);
+
+  useEffect(() => {
+    if (!room?.id) return;
+    setChannelLayout((current) =>
+      normalizeChannelLayout(current, getRoomChannels(room)),
+    );
+  }, [room?.id, room?.channels]);
+
+  useEffect(() => {
+    writeRoomStorage(room?.id, "chatDrafts", chatDrafts);
+  }, [chatDrafts, room?.id]);
+
+  useEffect(() => {
+    writeRoomStorage(room?.id, "starredMessageIds", starredMessageIds);
+  }, [starredMessageIds, room?.id]);
+
+  useEffect(() => {
+    writeRoomStorage(room?.id, "channelLayout", channelLayout);
+  }, [channelLayout, room?.id]);
+
+  useEffect(() => {
+    writeRoomStorage(room?.id, "importantMessages", importantMessages);
+  }, [importantMessages, room?.id]);
+
+  useEffect(() => {
+    writeRoomStorage(room?.id, "resourceThreads", resourceThreads);
+  }, [resourceThreads, room?.id]);
+
+  /** Stars or unstarrs a chat message so the Resources tab can surface reusable context. */
+  function toggleImportantMessage(message) {
+    if (!message?.id) return;
+
+    setImportantMessages((current) => {
+      if (current.some((item) => item.id === message.id)) {
+        return current.filter((item) => item.id !== message.id);
+      }
+
+      const pinnedMessage = {
+        id: message.id,
+        body: message.body || "",
+        channel: message.channel || "general",
+        senderName: message.sender?.name || message.sender?.email || "Unknown",
+        createdAt: message.createdAt,
+        attachments: message.attachments || [],
+      };
+
+      return [pinnedMessage, ...current].slice(0, 40);
+    });
+  }
+
+  /** Toggles the small Discord-style star shown in the chat message hover toolbar. */
+  function toggleStarredMessage(message) {
+    if (!message?.id) return;
+
+    setStarredMessageIds((current) =>
+      current.includes(message.id)
+        ? current.filter((id) => id !== message.id)
+        : [message.id, ...current].slice(0, 200),
+    );
+  }
+
+  /** Stores unsent text per channel so the Drafts section can point users back to it. */
+  function updateChatDraft(channel, value) {
+    setChatDrafts((current) => {
+      const next = { ...current };
+      if (value.trim()) next[channel] = value;
+      else delete next[channel];
+      return next;
+    });
+  }
+
+  /** Updates discussion threads for one artifact while keeping other resource state intact. */
+  function updateResourceThreads(resourceId, updater) {
+    if (!resourceId) return;
+
+    setResourceThreads((current) => ({
+      ...current,
+      [resourceId]:
+        typeof updater === "function" ? updater(current[resourceId] || []) : updater,
+    }));
+  }
+
   // Keep the Intelligrate tab usable even before a saved chat exists.
   useEffect(() => {
     if (loading || !room?.isMember || activeTab !== "buddy") return;
-    if (!draftBuddyThread && !buddyThreads.length) {
+    if (!draftBuddyThread && !buddyThreadList.length) {
       setDraftBuddyThread(createDraftBuddyThread());
       setActiveBuddyThreadId("");
     }
-  }, [activeTab, buddyThreads.length, draftBuddyThread, loading, room?.isMember]);
+  }, [activeTab, buddyThreadList.length, draftBuddyThread, loading, room?.isMember]);
 
   /** Shows compact room feedback without interrupting the current workflow. */
   function showRoomToast(message) {
@@ -185,6 +404,18 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       );
     });
 
+    socket.on("message:updated", (message) => {
+      if (message.roomId !== room.id) return;
+      setMessages((current) =>
+        current.map((existing) => (existing.id === message.id ? message : existing)),
+      );
+    });
+
+    socket.on("message:deleted", (payload) => {
+      if (payload.roomId !== room.id) return;
+      setMessages((current) => current.filter((message) => message.id !== payload.id));
+    });
+
     socket.on("room:deleted", (payload) => {
       if (payload.roomId === room.id) onBack();
     });
@@ -223,14 +454,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       if (loadedRoom.isMember) {
         const [messagePayload, resourcePayload, sessionPayload, buddyPayload] = await Promise.all([
           api.getMessages(loadedRoom.id),
-          api.getResources(loadedRoom.id),
+          api.getResources(loadedRoom.id, { includeDeleted: true }),
           api.getSessions(loadedRoom.id),
           api.getBuddyThreads(loadedRoom.id),
         ]);
-        setMessages(messagePayload.messages);
-        setResources(resourcePayload.resources);
-        setSessions(sessionPayload.sessions);
-        const loadedThreads = (buddyPayload.threads || []).map((thread) =>
+        setMessages(asArray(messagePayload.messages));
+        setResources(asArray(resourcePayload.resources));
+        setSessions(asArray(sessionPayload.sessions));
+        const loadedThreads = asArray(buddyPayload.threads).map((thread) =>
           normalizeBuddyThread(thread, user),
         );
 
@@ -317,9 +548,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
    */
   async function refreshResources() {
     if (!room?.id) return [];
-    const payload = await api.getResources(room.id);
-    setResources(payload.resources);
-    return payload.resources;
+    const payload = await api.getResources(room.id, { includeDeleted: true });
+    const nextResources = asArray(payload.resources);
+    setResources(nextResources);
+    return nextResources;
   }
 
   /**
@@ -455,6 +687,60 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     });
   }
 
+  /**
+   * Edits one of the signed-in user's messages through the active room socket.
+   * Keeping this beside sendViaSocket makes the chat panel's socket contract easy
+   * to audit: create, edit, and delete all flow through the same room channel.
+   */
+  function editViaSocket(messageId, body) {
+    return new Promise((resolve, reject) => {
+      const socket = window.diffriendtiateSocket;
+      if (!socket?.connected) {
+        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        return;
+      }
+
+      socket.emit(
+        "message:update",
+        {
+          roomId: room.id,
+          messageId,
+          body,
+        },
+        (ack) => {
+          if (ack?.ok) resolve(ack.message);
+          else reject(new Error(ack?.message || "Unable to edit the message."));
+        },
+      );
+    });
+  }
+
+  /**
+   * Deletes one of the signed-in user's messages and lets the server broadcast
+   * the removal to other members currently viewing the room.
+   */
+  function deleteViaSocket(messageId) {
+    return new Promise((resolve, reject) => {
+      const socket = window.diffriendtiateSocket;
+      if (!socket?.connected) {
+        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        return;
+      }
+
+      socket.emit(
+        "message:delete",
+        {
+          roomId: room.id,
+          messageId,
+        },
+        (ack) => {
+          if (ack?.ok) resolve(ack.id);
+          else reject(new Error(ack?.message || "Unable to delete the message."));
+        },
+      );
+    });
+  }
+
   async function copyInviteLink() {
     const inviteUrl = `${window.location.origin}${window.location.pathname}#/invite/${room.inviteCode}`;
     setInviteCopied(true);
@@ -467,15 +753,101 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
+  /** Opens the channel creation dialog for the selected sidebar category. */
+  function openCreateChannelDialog(categoryId = DEFAULT_CATEGORY_ID) {
+    if (!room?.isOwner) return;
+    setChatDialog({ mode: "channel", categoryId: categoryId || DEFAULT_CATEGORY_ID });
+  }
+
+  /** Opens the category creation dialog from the chat sidebar context menu. */
+  function openCreateCategoryDialog() {
+    if (!room?.isOwner) return;
+    setChatDialog({ mode: "category" });
+  }
+
+  /** Creates a local category used for organising server-backed text channels. */
+  function createChatCategory(name) {
+    if (!room?.isOwner) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    setChannelLayout((current) => [
+      ...normalizeChannelLayout(current, getRoomChannels(room)),
+      { id: createCategoryId(trimmed), name: trimmed, channels: [] },
+    ]);
+    setChatDialog(null);
+  }
+
+  /** Removes a local category while keeping its channels available in the room. */
+  function deleteChatCategory(categoryId) {
+    if (!room?.isOwner || !categoryId) return;
+
+    setChannelLayout((current) => {
+      const normalized = normalizeChannelLayout(current, getRoomChannels(room));
+      const target = normalized.find((category) => category.id === categoryId);
+      if (!target) return normalized;
+
+      const remaining = normalized.filter((category) => category.id !== categoryId);
+      const targetChannels = Array.from(new Set(target.channels || []));
+      if (!remaining.length) {
+        return [
+          {
+            id: DEFAULT_CATEGORY_ID,
+            name: "Text Channels",
+            channels: targetChannels,
+          },
+        ];
+      }
+
+      const fallbackIndex = Math.max(
+        0,
+        remaining.findIndex((category) => category.id === DEFAULT_CATEGORY_ID),
+      );
+
+      return remaining.map((category, index) =>
+        index === fallbackIndex
+          ? {
+            ...category,
+            channels: Array.from(new Set([...category.channels, ...targetChannels])),
+          }
+          : category,
+      );
+    });
+  }
+
+  /** Moves an existing channel between local categories without touching messages. */
+  function moveChatChannel(channel, categoryId, beforeChannel = "") {
+    if (!room?.isOwner) return;
+    setChannelLayout((current) =>
+      moveChannelToCategory(
+        normalizeChannelLayout(current, getRoomChannels(room)),
+        channel,
+        categoryId,
+        beforeChannel,
+      ),
+    );
+  }
+
   /** Creates a new text channel and immediately switches the room chat to it. */
-  async function createChatChannel(name) {
-    if (!room?.id) return;
+  async function createChatChannel(input) {
+    if (!room?.id || !room.isOwner) return;
+
+    const name = typeof input === "string" ? input : input?.name;
+    const categoryId =
+      typeof input === "string" ? DEFAULT_CATEGORY_ID : input?.categoryId || chatDialog?.categoryId;
 
     try {
       const payload = await api.createChannel(room.id, { name });
       setRoom(payload.room);
       setActiveChatChannel(payload.channel);
-      setChannelModalOpen(false);
+      setChannelLayout((current) =>
+        addChannelToCategory(
+          normalizeChannelLayout(current, getRoomChannels(payload.room)),
+          payload.channel,
+          categoryId || DEFAULT_CATEGORY_ID,
+        ),
+      );
+      setChatDialog(null);
     } catch (err) {
       showError(err.message);
     }
@@ -483,13 +855,20 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
   /** Renames a channel locally after the API confirms the change. */
   async function renameChatChannel(channel, name) {
-    if (!room?.id) return;
+    if (!room?.id || !room.isOwner) return;
 
     setChannelActionLoading(true);
     try {
       const payload = await api.renameChannel(room.id, channel, { name });
       setRoom(payload.room);
       setActiveChatChannel((current) => (current === channel ? payload.channel : current));
+      setChannelLayout((current) =>
+        renameChannelInLayout(
+          normalizeChannelLayout(current, getRoomChannels(payload.room)),
+          channel,
+          payload.channel,
+        ),
+      );
       setMessages((current) =>
         current.map((message) =>
           (message.channel || "general") === channel
@@ -506,7 +885,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
   /** Removes a channel and refreshes messages so deleted-channel content disappears. */
   async function deleteChatChannel(channel) {
-    if (!room?.id) return;
+    if (!room?.id || !room.isOwner) return;
 
     setChannelActionLoading(true);
     try {
@@ -514,7 +893,13 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       const messagePayload = await api.getMessages(room.id);
       setRoom(payload.room);
       setActiveChatChannel((current) => (current === channel ? payload.channel : current));
-      setMessages(messagePayload.messages);
+      setChannelLayout((current) =>
+        removeChannelFromLayout(
+          normalizeChannelLayout(current, getRoomChannels(payload.room)),
+          channel,
+        ),
+      );
+      setMessages(asArray(messagePayload.messages));
     } catch (err) {
       showError(err.message);
     } finally {
@@ -524,6 +909,11 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
   /** Keeps the detail sidebar open whenever a room tool is selected. */
   function selectRoomTab(tabId) {
+    if (tabs.some((tab) => tab.id === tabId && tab.disabled)) {
+      setNotice("Calendar is currently disabled.");
+      return;
+    }
+
     setActiveTab(tabId);
     setContextOpen(true);
   }
@@ -674,7 +1064,13 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     setCustomResourceFolders((current) =>
       current.includes(folderName) ? current : [...current, folderName],
     );
-    setSelectedResourceFolder(folderName);
+  }
+
+  /** Removes empty local folders after the resource manager deletes their contents. */
+  function deleteResourceFolder(folderName) {
+    setCustomResourceFolders((current) =>
+      current.filter((name) => name !== folderName && !name.startsWith(`${folderName}/`)),
+    );
   }
 
   /** Applies message updates to a saved or draft Intelligrate thread. */
@@ -768,6 +1164,15 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
   if (!room) return null;
 
+  // Render guards keep old localStorage or partial API responses from taking
+  // down the active room tab while the current room data refreshes.
+  const safeChannels = getRoomChannels(room);
+  const safeChannelLayout = asArray(channelLayout);
+  const safeChatDrafts = asObjectRecord(chatDrafts);
+  const safeMessages = asArray(messages);
+  const safeSessions = asArray(sessions);
+  const safeStarredMessageIds = asArray(starredMessageIds);
+
   return (
     <div
       className={`room-workspace ${contextOpen ? "context-open" : "context-collapsed"}`}
@@ -786,7 +1191,11 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             title={contextOpen ? room.name : "Open sidebar"}
             type="button"
           >
-            <span>D</span>
+            {room.roomLogo ? (
+              <img src={room.roomLogo} alt="" />
+            ) : (
+              <span>{String(room.name || "R").trim().charAt(0).toUpperCase() || "R"}</span>
+            )}
             {!contextOpen ? <PanelLeftOpen size={15} /> : null}
           </button>
           {tabs.map((tab) => {
@@ -794,10 +1203,12 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             return (
               <button
                 aria-label={tab.label}
-                className={activeTab === tab.id ? "active" : ""}
+                aria-disabled={tab.disabled || undefined}
+                className={`${activeTab === tab.id ? "active" : ""} ${tab.disabled ? "disabled" : ""}`.trim()}
+                disabled={tab.disabled}
                 key={tab.id}
                 onClick={() => selectRoomTab(tab.id)}
-                title={tab.label}
+                title={tab.disabled ? `${tab.label} is currently disabled` : tab.label}
                 type="button"
               >
                 <Icon size={22} />
@@ -807,14 +1218,16 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         </div>
 
         <div className="room-rail-bottom">
-          <button
-            aria-label="Room settings"
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
-            type="button"
-          >
-            <Settings size={22} />
-          </button>
+          {room.isOwner ? (
+            <button
+              aria-label="Room settings"
+              onClick={() => setSettingsOpen(true)}
+              title="Settings"
+              type="button"
+            >
+              <Settings size={22} />
+            </button>
+          ) : null}
           <button aria-label="Exit room" onClick={onBack} title="Exit room" type="button">
             <LogOut size={22} />
           </button>
@@ -822,35 +1235,40 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       </nav>
 
       <aside className="room-context-panel" aria-label={`${activeTab} details`}>
-        <RoomContextPanel
-          activeTab={activeTab}
-          activeChannel={activeChatChannel}
-          activeBuddyThreadId={activeBuddyThread?.id}
-          buddyThreads={buddyThreads}
-          channels={room.channels || ["general"]}
-          copyInviteLink={copyInviteLink}
-          inviteCopied={inviteCopied}
-          onCloseSidebar={() => setContextOpen(false)}
-          onCreateChannel={() => setChannelModalOpen(true)}
-          onDeleteChannel={deleteChatChannel}
-          onRequestDeleteBuddyThread={setBuddyDeleteTarget}
-          onRequestRenameBuddyThread={setBuddyRenameTarget}
-          onStartGroupBuddyThread={startGroupBuddyThread}
-          onNewBuddyThread={startBuddyThread}
-          onRenameChannel={renameChatChannel}
-          onSelectChannel={setActiveChatChannel}
-          onSelectBuddyThread={(threadId) => {
-            setDraftBuddyThread(null);
-            setActiveBuddyThreadId(threadId);
-          }}
-          room={room}
-          resourceFolders={resourceFolders}
-          selectedResourceFolder={selectedResourceFolder}
-          sessions={sessions}
-          channelActionLoading={channelActionLoading}
-          onSelectResourceFolder={setSelectedResourceFolder}
-          user={user}
-        />
+        <div className="room-context-content">
+          <RoomContextPanel
+            activeTab={activeTab}
+            activeChannel={activeChatChannel}
+            activeBuddyThreadId={activeBuddyThread?.id}
+            buddyThreads={buddyThreads}
+            channels={safeChannels}
+            channelLayout={safeChannelLayout}
+            chatDrafts={safeChatDrafts}
+            copyInviteLink={copyInviteLink}
+            inviteCopied={inviteCopied}
+            onCloseSidebar={() => setContextOpen(false)}
+            onCreateCategory={openCreateCategoryDialog}
+            onCreateChannel={openCreateChannelDialog}
+            onDeleteCategory={deleteChatCategory}
+            onDeleteChannel={deleteChatChannel}
+            onMoveChannel={moveChatChannel}
+            onRequestDeleteBuddyThread={setBuddyDeleteTarget}
+            onRequestRenameBuddyThread={setBuddyRenameTarget}
+            onStartGroupBuddyThread={startGroupBuddyThread}
+            onNewBuddyThread={startBuddyThread}
+            onRenameChannel={renameChatChannel}
+            onSelectChannel={setActiveChatChannel}
+            onSelectBuddyThread={(threadId) => {
+              setDraftBuddyThread(null);
+              setActiveBuddyThreadId(threadId);
+            }}
+            room={room}
+            resourceDrive={resourceDrive}
+            sessions={safeSessions}
+            channelActionLoading={channelActionLoading}
+            user={user}
+          />
+        </div>
       </aside>
 
       <main className="room-main-stage">
@@ -872,13 +1290,24 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         {room.isMember && activeTab === "focus" ? <HomePanel room={room} /> : null}
 
         {room.isMember && activeTab === "chat" ? (
-          <section className="room-content-panel">
-            <ChatPanel
-              channel={activeChatChannel}
-              messages={messages}
+          <section className="room-content-panel chat-content-panel">
+            <DiscordChatPanel
+              activeChannel={activeChatChannel}
+              channelLayout={safeChannelLayout}
+              draft={safeChatDrafts[activeChatChannel] || ""}
+              drafts={safeChatDrafts}
+              messages={safeMessages}
+              onDeleteMessage={deleteViaSocket}
+              onDraftChange={updateChatDraft}
+              onEditMessage={editViaSocket}
               onError={showError}
+              onSelectChannel={(channel) => {
+                setActiveChatChannel(channel || "general");
+              }}
               onSend={sendViaSocket}
+              onToggleStarredMessage={toggleStarredMessage}
               onUploadFiles={uploadSharedFiles}
+              starredMessageIds={safeStarredMessageIds}
               user={user}
             />
           </section>
@@ -913,16 +1342,8 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         ) : null}
 
         {room.isMember && activeTab === "resources" ? (
-          <section className="room-content-panel">
-            <ResourcePanel
-              onChanged={() => loadRoomBundle(room.id)}
-              onError={showError}
-              onCreateFolder={createResourceFolder}
-              onUploadFiles={uploadSharedFiles}
-              resources={resources}
-              room={room}
-              selectedFolder={selectedResourceFolder}
-            />
+          <section className="room-content-panel resource-content-panel">
+            <ResourceFileManager drive={resourceDrive} />
           </section>
         ) : null}
 
@@ -932,32 +1353,22 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
               onChanged={() => loadRoomBundle(room.id)}
               onError={showError}
               room={room}
-              sessions={sessions}
+              sessions={safeSessions}
             />
           </section>
         ) : null}
 
-        {room.isMember && settingsOpen ? (
-          <div className="settings-modal-backdrop" role="dialog" aria-modal="true">
-            <div className="settings-modal">
-              <button
-                className="modal-close-button"
-                onClick={() => setSettingsOpen(false)}
-                type="button"
-              >
-                <X size={18} />
-              </button>
-              <SettingsPanel
-                onBack={onBack}
-                onChanged={(updatedRoom) => {
-                  setRoom(updatedRoom);
-                  setNotice("Room updated.");
-                }}
-                onError={showError}
-                room={room}
-              />
-            </div>
-          </div>
+        {room.isMember && room.isOwner && settingsOpen ? (
+          <RoomSettingsScreen
+            onBack={onBack}
+            onChanged={(updatedRoom) => {
+              setRoom(updatedRoom);
+              setNotice("Room updated.");
+            }}
+            onClose={() => setSettingsOpen(false)}
+            onError={showError}
+            room={room}
+          />
         ) : null}
 
         {alertMessage ? (
@@ -978,10 +1389,17 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           </div>
         ) : null}
 
-        {channelModalOpen ? (
-          <ChannelDialog
-            onCancel={() => setChannelModalOpen(false)}
-            onCreate={createChatChannel}
+        {room.isOwner && chatDialog ? (
+          <ChatChannelDialog
+            categoryName={
+              safeChannelLayout.find((category) => category.id === chatDialog.categoryId)?.name
+            }
+            mode={chatDialog.mode}
+            onCancel={() => setChatDialog(null)}
+            onCreateCategory={createChatCategory}
+            onCreateChannel={(payload) =>
+              createChatChannel({ ...payload, categoryId: chatDialog.categoryId })
+            }
           />
         ) : null}
 
@@ -1025,33 +1443,46 @@ function RoomContextPanel({
   buddyThreads,
   channelActionLoading,
   channels,
+  channelLayout,
+  chatDrafts,
   copyInviteLink,
   inviteCopied,
   onCloseSidebar,
+  onCreateCategory,
   onCreateChannel,
+  onDeleteCategory,
   onDeleteChannel,
+  onMoveChannel,
   onNewBuddyThread,
   onRenameChannel,
   onRequestRenameBuddyThread,
   onRequestDeleteBuddyThread,
   onSelectChannel,
   onSelectBuddyThread,
-  onSelectResourceFolder,
   onStartGroupBuddyThread,
   room,
-  resourceFolders,
-  selectedResourceFolder,
+  resourceDrive,
   sessions,
   user,
 }) {
   const members = buildVisibleMembers(room, user);
   const [buddySearch, setBuddySearch] = useState("");
   const [buddyMenuTargetId, setBuddyMenuTargetId] = useState("");
+  const [buddyMenuPosition, setBuddyMenuPosition] = useState({ left: 0, top: 0 });
   const [channelRenameTarget, setChannelRenameTarget] = useState(null);
   const [channelDeleteTarget, setChannelDeleteTarget] = useState(null);
-  const filteredBuddyThreads = buddyThreads.filter((thread) =>
-    thread.title.toLowerCase().includes(buddySearch.trim().toLowerCase()),
+  const [categoryDeleteTarget, setCategoryDeleteTarget] = useState(null);
+  const safeBuddyThreads = asArray(buddyThreads);
+  const safeChannelLayout = asArray(channelLayout);
+  const safeChatDrafts = asObjectRecord(chatDrafts);
+  const safeSessions = asArray(sessions);
+  const canManageRoom = Boolean(room?.isOwner);
+  const filteredBuddyThreads = safeBuddyThreads.filter((thread) =>
+    String(thread?.title || "New Chat")
+      .toLowerCase()
+      .includes(buddySearch.trim().toLowerCase()),
   );
+  const buddyMenuTarget = safeBuddyThreads.find((thread) => thread.id === buddyMenuTargetId);
 
   // Chat option menus should behave like native popovers: click elsewhere to close.
   useEffect(() => {
@@ -1065,72 +1496,47 @@ function RoomContextPanel({
     return () => window.removeEventListener("click", closeBuddyMenu);
   }, [buddyMenuTargetId]);
 
+  function openBuddyMenu(event, threadId) {
+    event.stopPropagation();
+
+    const buttonBounds = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 196;
+    const menuHeight = 150;
+
+    // Render the menu in viewport coordinates so it cannot be clipped by the
+    // sidebar's scroll container. The small clamp keeps it visible near edges.
+    setBuddyMenuPosition({
+      left: Math.max(
+        8,
+        Math.min(buttonBounds.right - menuWidth, window.innerWidth - menuWidth - 8),
+      ),
+      top: Math.max(
+        8,
+        Math.min(buttonBounds.bottom + 8, window.innerHeight - menuHeight - 8),
+      ),
+    });
+    setBuddyMenuTargetId((current) => (current === threadId ? "" : threadId));
+  }
+
   if (activeTab === "chat") {
     return (
       <>
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Chat" />
         <PanelDivider />
-        <label className="context-search">
-          <Search size={16} />
-          <input placeholder="Search or navigate..." type="search" />
-        </label>
-        <section className="context-section roomy">
-          <div className="context-section-title">
-            <h3>Channels</h3>
-            <button
-              aria-label="New channel"
-              onClick={onCreateChannel}
-              title="New channel"
-              type="button"
-            >
-              <Plus size={17} />
-            </button>
-          </div>
-          <div className="room-channel-list">
-            {channels.map((channel) => (
-              <article
-                className={
-                  channel === activeChannel ? "channel-list-item active" : "channel-list-item"
-                }
-                key={channel}
-              >
-                <button
-                  className="channel-main"
-                  onClick={(event) => {
-                    onSelectChannel(channel);
-                    event.currentTarget.blur();
-                  }}
-                  type="button"
-                >
-                  <Hash size={17} />
-                  <span>{channel}</span>
-                </button>
-                {channel !== "general" ? (
-                  <span className="channel-actions">
-                    <button
-                      aria-label={`Rename ${channel}`}
-                      disabled={channelActionLoading}
-                      onClick={() => setChannelRenameTarget(channel)}
-                      title="Rename channel"
-                      type="button"
-                    >
-                      <Edit3 size={14} />
-                    </button>
-                    <button
-                      aria-label={`Delete ${channel}`}
-                      disabled={channelActionLoading}
-                      onClick={() => setChannelDeleteTarget(channel)}
-                      title="Delete channel"
-                      type="button"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </span>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        </section>
+        <ChatSidebar
+          activeChannel={activeChannel}
+          channelLayout={safeChannelLayout}
+          drafts={safeChatDrafts}
+          isOwner={canManageRoom}
+          onCreateCategory={onCreateCategory}
+          onCreateChannel={onCreateChannel}
+          onDeleteCategory={(categoryId, categoryName) =>
+            setCategoryDeleteTarget({ id: categoryId, name: categoryName })
+          }
+          onMoveChannel={onMoveChannel}
+          onRequestDeleteChannel={setChannelDeleteTarget}
+          onSelectChannel={onSelectChannel}
+        />
         {channelRenameTarget ? (
           <TextInputDialog
             confirmLabel="Rename"
@@ -1155,6 +1561,18 @@ function RoomContextPanel({
               setChannelDeleteTarget(null);
             }}
             title="Delete Channel"
+          />
+        ) : null}
+        {categoryDeleteTarget ? (
+          <ConfirmDialog
+            confirmLabel="Delete"
+            message={`Delete "${categoryDeleteTarget.name}"? Channels inside it will stay in the room.`}
+            onCancel={() => setCategoryDeleteTarget(null)}
+            onConfirm={() => {
+              onDeleteCategory(categoryDeleteTarget.id);
+              setCategoryDeleteTarget(null);
+            }}
+            title="Delete Category"
           />
         ) : null}
       </>
@@ -1209,65 +1627,13 @@ function RoomContextPanel({
                   <button
                     aria-expanded={buddyMenuTargetId === thread.id}
                     aria-label={`Open ${thread.title} menu`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setBuddyMenuTargetId((current) =>
-                        current === thread.id ? "" : thread.id,
-                      );
-                    }}
+                    onClick={(event) => openBuddyMenu(event, thread.id)}
                     title="Chat options"
                     type="button"
                   >
                     <MoreVertical size={15} />
                   </button>
                 </span>
-                {buddyMenuTargetId === thread.id ? (
-                  <div
-                    className="recent-chat-menu"
-                    onClick={(event) => event.stopPropagation()}
-                    role="menu"
-                  >
-                    <button
-                      disabled={!thread.isOwner}
-                      onClick={() => {
-                        onRequestRenameBuddyThread(thread);
-                        setBuddyMenuTargetId("");
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      <Edit3 size={15} />
-                      Rename
-                    </button>
-                    {thread.visibility === "private" ? (
-                      <button
-                        disabled={!thread.isOwner}
-                        onClick={() => {
-                          onStartGroupBuddyThread(thread.id);
-                          setBuddyMenuTargetId("");
-                        }}
-                        role="menuitem"
-                        type="button"
-                      >
-                        <Users size={15} />
-                        Start Group Chat
-                      </button>
-                    ) : null}
-                    <button
-                      className="danger"
-                      disabled={!thread.isOwner}
-                      onClick={() => {
-                        onRequestDeleteBuddyThread(thread);
-                        setBuddyMenuTargetId("");
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      <Trash2 size={15} />
-                      Delete
-                    </button>
-                  </div>
-                ) : null}
               </article>
             ))}
             {!filteredBuddyThreads.length && buddySearch.trim() ? (
@@ -1275,6 +1641,60 @@ function RoomContextPanel({
             ) : null}
           </div>
         </section>
+        {buddyMenuTarget
+          ? createPortal(
+              <div
+                className="recent-chat-menu floating"
+                onClick={(event) => event.stopPropagation()}
+                role="menu"
+                style={{
+                  left: `${buddyMenuPosition.left}px`,
+                  top: `${buddyMenuPosition.top}px`,
+                }}
+              >
+                <button
+                  disabled={!buddyMenuTarget.isOwner}
+                  onClick={() => {
+                    onRequestRenameBuddyThread(buddyMenuTarget);
+                    setBuddyMenuTargetId("");
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <Edit3 size={15} />
+                  Rename
+                </button>
+                {buddyMenuTarget.visibility === "private" ? (
+                  <button
+                    disabled={!buddyMenuTarget.isOwner}
+                    onClick={() => {
+                      onStartGroupBuddyThread(buddyMenuTarget.id);
+                      setBuddyMenuTargetId("");
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <Users size={15} />
+                    Start Group Chat
+                  </button>
+                ) : null}
+                <button
+                  className="danger"
+                  disabled={!buddyMenuTarget.isOwner}
+                  onClick={() => {
+                    onRequestDeleteBuddyThread(buddyMenuTarget);
+                    setBuddyMenuTargetId("");
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <Trash2 size={15} />
+                  Delete
+                </button>
+              </div>,
+              document.body,
+            )
+          : null}
       </>
     );
   }
@@ -1284,22 +1704,7 @@ function RoomContextPanel({
       <>
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Resources" />
         <PanelDivider />
-        <section className="context-section roomy">
-          <h3>Folders</h3>
-          <div className="room-folder-list">
-            {resourceFolders.map((folder) => (
-              <button
-                className={folder === selectedResourceFolder ? "active" : ""}
-                key={folder}
-                onClick={() => onSelectResourceFolder(folder)}
-                type="button"
-              >
-                <FolderOpen size={16} />
-                {folder}
-              </button>
-            ))}
-          </div>
-        </section>
+        <ResourceDriveSidebar drive={resourceDrive} />
       </>
     );
   }
@@ -1312,8 +1717,8 @@ function RoomContextPanel({
         <section className="context-section roomy">
           <h3>Scheduled</h3>
           <div className="mini-session-list">
-            {sessions.length ? (
-              sessions.map((session) => (
+            {safeSessions.length ? (
+              safeSessions.map((session) => (
                 <article key={session.id}>
                   <strong>{session.title}</strong>
                   <span>{formatDateTime(session.startsAt)}</span>
@@ -1371,13 +1776,52 @@ function RoomContextPanel({
 
 /** Landing view for a room, intentionally limited to core room identity. */
 function HomePanel({ room }) {
+  const metadata = [room.academicTerm, room.moduleCode].filter(Boolean);
+
   return (
     <section className="room-home-panel" aria-label="Room overview">
       <article className="room-home-overview">
-        <span className="room-home-module">{room.moduleCode}</span>
+        {metadata.length ? (
+          <p className="room-home-meta" aria-label="Room academic details">
+            {metadata.join(" · ")}
+          </p>
+        ) : null}
         <h2>{room.name}</h2>
         <p>{room.description || "No description has been added for this room yet."}</p>
       </article>
+    </section>
+  );
+}
+
+/** Persistent voice/video dock that keeps future call controls visible in every room. */
+function RoomCallDock({ user, variant = "embedded" }) {
+  const displayName = user?.name || user?.email || "You";
+  const avatarUrl = user?.avatarUrl || user?.avatar || user?.photoUrl || "";
+
+  return (
+    <section className={`room-call-dock ${variant}`} aria-label="Room voice and video controls">
+      <div className="room-call-user">
+        <span className="room-call-avatar" aria-hidden="true">
+          {avatarUrl ? <img src={avatarUrl} alt="" /> : getInitial(displayName)}
+          <i />
+        </span>
+        {variant === "embedded" ? (
+          <span className="room-call-name" title={displayName}>
+            {displayName}
+          </span>
+        ) : null}
+      </div>
+      <div className="room-call-actions" aria-label="Call controls">
+        <button aria-label="Mute microphone" title="Mute microphone" type="button">
+          <MicOff size={18} />
+        </button>
+        <button aria-label="Deafen" title="Deafen" type="button">
+          <Headphones size={18} />
+        </button>
+        <button aria-label="Toggle video" title="Toggle video" type="button">
+          <Video size={18} />
+        </button>
+      </div>
     </section>
   );
 }
@@ -1523,20 +1967,60 @@ function CrownBadge() {
   return <span className="crown-badge">Owner</span>;
 }
 
-/** Discord-style room chat panel with channel messages and shared attachments. */
-function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) {
+/** Artifact-linked discussion board for room conversations and reusable study context. */
+function ChatPanel({
+  channel,
+  importantMessages = [],
+  messages,
+  onError,
+  onSend,
+  onToggleImportantMessage,
+  onUploadFiles,
+  resources = [],
+  room,
+  user,
+}) {
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [acceptedIds, setAcceptedIds] = useState([]);
   const fileInputRef = useRef(null);
   const listRef = useRef(null);
-  const channelMessages = messages.filter(
-    (message) => (message.channel || "general") === channel,
+  const enrichedResources = useMemo(() => enrichResources(resources, room), [resources, room]);
+  const importantIds = useMemo(
+    () => new Set(importantMessages.map((message) => message.id)),
+    [importantMessages],
   );
+  const channelMessages = useMemo(
+    () => messages.filter((message) => (message.channel || "general") === channel),
+    [channel, messages],
+  );
+  const visibleMessages = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    return channelMessages.filter((message) => {
+      const matchesFilter =
+        filter === "all" ||
+        (filter === "starred" && importantIds.has(message.id)) ||
+        (filter === "accepted" && acceptedIds.includes(message.id));
+      const searchable = [
+        message.body,
+        message.sender?.name,
+        ...(message.attachments || []).map((attachment) => attachment.title),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return matchesFilter && (!normalizedQuery || searchable.includes(normalizedQuery));
+    });
+  }, [acceptedIds, channelMessages, filter, importantIds, query]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [channelMessages.length]);
+  }, [visibleMessages.length]);
 
   /** Adds files to the pending chat message without uploading until send. */
   function addAttachments(fileList) {
@@ -1576,34 +2060,89 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
     }
   }
 
+  /** Marks one reply as accepted so important explanations stand out later. */
+  function toggleAccepted(messageId) {
+    setAcceptedIds((current) =>
+      current.includes(messageId)
+        ? current.filter((id) => id !== messageId)
+        : [...current, messageId],
+    );
+  }
+
   return (
-    <section className="chat-room-panel">
-      <header className="chat-channel-bar">
-        <span>
-          <Hash size={18} />
-          {channel}
-        </span>
+    <section className="discussion-workspace">
+      <header className="discussion-header">
+        <div>
+          <span className="eyebrow-label">Discussion board</span>
+          <h2>#{channel}</h2>
+          <p>
+            Connect questions to files, star useful explanations, and keep study context reusable.
+          </p>
+        </div>
+        <div className="discussion-search">
+          <Search size={17} />
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search discussions"
+            type="search"
+            value={query}
+          />
+        </div>
       </header>
 
-      <div className="message-list discord-messages" ref={listRef}>
-        {channelMessages.length ? (
-          channelMessages.map((message) => (
-            <article className="message chat-message-row" key={message.id}>
-              <span className="message-avatar">
+      <div className="discussion-filter-row" aria-label="Discussion filters">
+        {[
+          ["all", "All"],
+          ["starred", "Starred"],
+          ["accepted", "Accepted"],
+        ].map(([id, label]) => (
+          <button
+            className={filter === id ? "active" : ""}
+            key={id}
+            onClick={() => setFilter(id)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {enrichedResources.length ? (
+        <div className="discussion-artifact-strip" aria-label="Room artifacts">
+          {enrichedResources.slice(0, 5).map((resource) => (
+            <button
+              key={resource.id}
+              onClick={() => setQuery(resource.displayName)}
+              title={`Find discussions linked to ${resource.displayName}`}
+              type="button"
+            >
+              <FileText size={15} />
+              <span>{resource.displayName}</span>
+              <small>{resource.metadata.type}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="discussion-list" ref={listRef}>
+        {visibleMessages.length ? (
+          visibleMessages.map((message) => (
+            <article
+              className={`discussion-card ${importantIds.has(message.id) ? "starred" : ""}`}
+              key={message.id}
+            >
+              <div className="discussion-avatar">
                 {getInitial(message.sender?.name || message.sender?.email || "U")}
-              </span>
-              <div className="message-body">
-                <div className="message-meta">
-                  <strong>
-                    {message.sender?.id === user.id
-                      ? "You"
-                      : message.sender?.name || "Unknown"}
-                  </strong>
-                  <span>{formatDateTime(message.createdAt)}</span>
+              </div>
+              <div className="discussion-card-body">
+                <div className="discussion-meta">
+                  <span>{message.sender?.id === user?.id ? "You" : message.sender?.name || "Unknown"}</span>
+                  <time>{formatDateTime(message.createdAt)}</time>
+                  {acceptedIds.includes(message.id) ? <mark>Accepted answer</mark> : null}
                 </div>
                 {message.body ? <p>{message.body}</p> : null}
                 {message.attachments?.length ? (
-                  <div className="message-attachment-list">
+                  <div className="discussion-linked-artifacts">
                     {message.attachments.map((attachment) => (
                       <a
                         href={attachment.url}
@@ -1611,20 +2150,33 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
                         rel="noreferrer"
                         target="_blank"
                       >
-                        <Paperclip size={14} />
+                        <FileText size={14} />
                         {attachment.title}
                       </a>
                     ))}
                   </div>
                 ) : null}
+                <div className="discussion-actions">
+                  <button onClick={() => onToggleImportantMessage?.(message)} type="button">
+                    <Star
+                      fill={importantIds.has(message.id) ? "currentColor" : "none"}
+                      size={15}
+                    />
+                    {importantIds.has(message.id) ? "Starred" : "Star"}
+                  </button>
+                  <button onClick={() => toggleAccepted(message.id)} type="button">
+                    <CheckCircle2 size={15} />
+                    {acceptedIds.includes(message.id) ? "Unaccept" : "Accept"}
+                  </button>
+                </div>
               </div>
             </article>
           ))
         ) : (
-          <div className="chat-empty">
+          <div className="discussion-empty">
             <MessageCircle size={28} />
-            <strong>Say hello in #{channel}</strong>
-            <p>Messages sent here are visible to everyone in the room.</p>
+            <strong>No discussions yet.</strong>
+            <p>Ask a question, attach a resource, or star useful answers once they appear.</p>
           </div>
         )}
       </div>
@@ -1646,7 +2198,7 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
         </div>
       ) : null}
 
-      <form className="message-form room-composer" onSubmit={handleSubmit}>
+      <form className="message-form room-composer discussion-composer" onSubmit={handleSubmit}>
         <input
           multiple
           onChange={(event) => addAttachments(event.target.files)}
@@ -1663,7 +2215,7 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
         </button>
         <input
           onChange={(event) => setBody(event.target.value)}
-          placeholder={`Message #${channel}`}
+          placeholder={`Ask or add a discussion in #${channel}`}
           value={body}
         />
         <button
@@ -1679,26 +2231,67 @@ function ChatPanel({ channel, messages, onError, onSend, onUploadFiles, user }) 
   );
 }
 
-/** Dropbox-style resource library for room files and links. */
+/** Resource-centered study workspace with browse filters and artifact discussions. */
 function ResourcePanel({
   onChanged,
   onCreateFolder,
   onError,
+  importantMessages = [],
   onUploadFiles,
+  onUpdateThreads,
+  resourceThreads = {},
   resources,
   room,
   selectedFolder,
+  user,
 }) {
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [urlForm, setUrlForm] = useState({ title: "", url: "" });
   const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [activeResourceId, setActiveResourceId] = useState("");
+  const [activeThreadId, setActiveThreadId] = useState("");
+  const [newThreadTitle, setNewThreadTitle] = useState("");
+  const [commentBody, setCommentBody] = useState("");
   const fileInputRef = useRef(null);
-  const visibleResources =
-    selectedFolder === "All files"
-      ? resources
-      : resources.filter((resource) => (resource.folder || "General") === selectedFolder);
+  const enrichedResources = useMemo(() => enrichResources(resources, room), [resources, room]);
+  const visibleResources = useMemo(
+    () =>
+      filterResources(enrichedResources, {
+        folder: selectedFolder,
+        query,
+        type: typeFilter,
+      }),
+    [enrichedResources, query, selectedFolder, typeFilter],
+  );
+  const stats = useMemo(() => buildResourceStats(enrichedResources), [enrichedResources]);
+  const activeResource =
+    enrichedResources.find((resource) => resource.id === activeResourceId) ||
+    visibleResources[0] ||
+    enrichedResources[0];
+  const activeThreads = activeResource
+    ? resourceThreads[activeResource.id]?.length
+      ? resourceThreads[activeResource.id]
+      : createDefaultResourceThreads(activeResource)
+    : [];
+  const activeThread =
+    activeThreads.find((thread) => thread.id === activeThreadId) || activeThreads[0];
+
+  useEffect(() => {
+    if (!activeResource && activeResourceId) setActiveResourceId("");
+    if (activeResource && activeResource.id !== activeResourceId) {
+      setActiveResourceId(activeResource.id);
+    }
+  }, [activeResource, activeResourceId]);
+
+  useEffect(() => {
+    if (activeThread && activeThread.id !== activeThreadId) {
+      setActiveThreadId(activeThread.id);
+    }
+  }, [activeThread, activeThreadId]);
 
   /** Saves an external URL resource into the selected folder. */
   async function addUrl(event) {
@@ -1751,9 +2344,70 @@ function ResourcePanel({
     }
   }
 
+  /** Creates a discussion topic inside the selected resource artifact. */
+  function createResourceThread(event) {
+    event.preventDefault();
+    if (!activeResource || !newThreadTitle.trim()) return;
+
+    const nextThread = {
+      id: `${activeResource.id}-thread-${Date.now()}`,
+      title: newThreadTitle.trim(),
+      acceptedAnswerId: "",
+      comments: [],
+    };
+
+    onUpdateThreads(activeResource.id, (current) => [
+      ...(current.length ? current : createDefaultResourceThreads(activeResource)),
+      nextThread,
+    ]);
+    setNewThreadTitle("");
+    setActiveThreadId(nextThread.id);
+  }
+
+  /** Adds a comment under the active artifact discussion. */
+  function addThreadComment(event) {
+    event.preventDefault();
+    if (!activeResource || !activeThread || !commentBody.trim()) return;
+
+    const nextComment = {
+      id: `${activeThread.id}-comment-${Date.now()}`,
+      body: commentBody.trim(),
+      authorName: user?.name || user?.email || "You",
+      createdAt: new Date().toISOString(),
+    };
+
+    onUpdateThreads(activeResource.id, (current) => {
+      const threads = current.length ? current : createDefaultResourceThreads(activeResource);
+      return threads.map((thread) =>
+        thread.id === activeThread.id
+          ? { ...thread, comments: [...thread.comments, nextComment] }
+          : thread,
+      );
+    });
+    setCommentBody("");
+  }
+
+  /** Marks the clearest explanation in a thread so future visitors can find it quickly. */
+  function toggleAcceptedComment(commentId) {
+    if (!activeResource || !activeThread) return;
+
+    onUpdateThreads(activeResource.id, (current) => {
+      const threads = current.length ? current : createDefaultResourceThreads(activeResource);
+      return threads.map((thread) =>
+        thread.id === activeThread.id
+          ? {
+              ...thread,
+              acceptedAnswerId:
+                thread.acceptedAnswerId === commentId ? "" : commentId,
+            }
+          : thread,
+      );
+    });
+  }
+
   return (
     <section
-      className={`resource-docs-shell ${dragging ? "dragging" : ""}`}
+      className={`resource-knowledge-shell ${dragging ? "dragging" : ""}`}
       onDragLeave={() => setDragging(false)}
       onDragOver={(event) => {
         event.preventDefault();
@@ -1771,11 +2425,27 @@ function ResourcePanel({
         type="file"
       />
 
-      <div className="docs-toolbar">
+      <div className="resource-knowledge-toolbar">
         <div className="docs-search">
           <Search size={17} />
-          <input placeholder="Search resources" type="search" />
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search by topic, filename, contributor"
+            type="search"
+            value={query}
+          />
         </div>
+        <select
+          aria-label="Filter by resource type"
+          onChange={(event) => setTypeFilter(event.target.value)}
+          value={typeFilter}
+        >
+          {RESOURCE_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {type}
+            </option>
+          ))}
+        </select>
         <button className="secondary-button compact" onClick={() => setFolderDialogOpen(true)} type="button">
           <FolderPlus size={17} />
           New Folder
@@ -1799,80 +2469,222 @@ function ResourcePanel({
         </button>
       </div>
 
-      <div className="docs-body">
-        <div className="docs-main">
-          <header className="docs-breadcrumb">
-            <span>Resources</span>
-            <ChevronRight size={16} />
-            <strong>{selectedFolder}</strong>
-          </header>
+      <div className="resource-stats-row" aria-label="Resource library summary">
+        <span>{stats.total} resources</span>
+        <span>{stats.types} categories</span>
+        <span>{stats.duplicates} duplicate groups</span>
+      </div>
 
-          {showLinkForm ? (
-            <form className="docs-link-form" onSubmit={addUrl}>
-              <input
-                onChange={(event) =>
-                  setUrlForm((current) => ({ ...current, title: event.target.value }))
-                }
-                placeholder="Link title"
-                value={urlForm.title}
-              />
-              <input
-                onChange={(event) =>
-                  setUrlForm((current) => ({ ...current, url: event.target.value }))
-                }
-                placeholder="https://..."
-                value={urlForm.url}
-              />
-              <button className="primary-button compact" disabled={submitting} type="submit">
-                Save
-              </button>
-            </form>
-          ) : null}
+      {showLinkForm ? (
+        <form className="docs-link-form" onSubmit={addUrl}>
+          <input
+            onChange={(event) =>
+              setUrlForm((current) => ({ ...current, title: event.target.value }))
+            }
+            placeholder="Link title"
+            value={urlForm.title}
+          />
+          <input
+            onChange={(event) =>
+              setUrlForm((current) => ({ ...current, url: event.target.value }))
+            }
+            placeholder="https://..."
+            value={urlForm.url}
+          />
+          <button className="primary-button compact" disabled={submitting} type="submit">
+            Save
+          </button>
+        </form>
+      ) : null}
 
+      <div className="resource-knowledge-layout">
+        <div className="resource-browser-column">
           <div className="docs-drop-hint">
             <Upload size={17} />
-            Drop files here to upload them into{" "}
+            Drop files here to upload into{" "}
             {selectedFolder === "All files" ? UPLOADS_FOLDER : selectedFolder}.
           </div>
 
-          <div className="docs-table" role="table" aria-label={`${selectedFolder} resources`}>
-            <div className="docs-table-row header" role="row">
-              <span>Name</span>
-              <span>Modified</span>
-              <span>Modified By</span>
-              <span>Size</span>
-              <span aria-label="Actions" />
-            </div>
+          <div className="resource-card-grid" aria-label={`${selectedFolder} resources`}>
             {visibleResources.length ? (
               visibleResources.map((resource) => (
-                <div className="docs-table-row" key={resource.id} role="row">
-                  <a href={resource.url} rel="noreferrer" target="_blank">
-                    {resource.type === "url" ? <LinkIcon size={17} /> : <FileText size={17} />}
-                    {resource.title}
-                    <ExternalLink size={13} />
-                  </a>
-                  <span>{formatDateTime(resource.createdAt)}</span>
-                  <span>{resource.uploader?.name || "Unknown"}</span>
-                  <span>{resource.type === "file" ? formatBytes(resource.size) : "Link"}</span>
+                <article
+                  className={activeResource?.id === resource.id ? "active resource-card" : "resource-card"}
+                  key={resource.id}
+                >
                   <button
-                    className="icon-button subtle"
-                    onClick={() => removeResource(resource.id)}
-                    title="Delete resource"
+                    className="resource-card-main"
+                    onClick={() => setActiveResourceId(resource.id)}
                     type="button"
                   >
-                    <Trash2 size={16} />
+                    {resource.type === "url" ? <LinkIcon size={18} /> : <FileText size={18} />}
+                    <span>{resource.displayName}</span>
+                    <small>{resource.metadata.type}</small>
                   </button>
-                </div>
+                  <div className="resource-card-tags">
+                    {resource.metadata.tags.slice(0, 3).map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
+                  </div>
+                  <dl className="resource-card-meta">
+                    <div>
+                      <dt>Topic</dt>
+                      <dd>{resource.metadata.topic}</dd>
+                    </div>
+                    <div>
+                      <dt>Version</dt>
+                      <dd>
+                        {resource.metadata.version}
+                        {resource.metadata.duplicateCount > 1
+                        ? ` - ${resource.metadata.duplicateCount} similar`
+                          : ""}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Contributor</dt>
+                      <dd>{resource.metadata.contributor}</dd>
+                    </div>
+                  </dl>
+                  <div className="resource-card-actions">
+                    <a href={resource.url} rel="noreferrer" target="_blank">
+                      Open
+                    </a>
+                    <button
+                      className="icon-button subtle"
+                      onClick={() => removeResource(resource.id)}
+                      title="Delete resource"
+                      type="button"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </article>
               ))
             ) : (
-              <div className="docs-empty">
+              <div className="docs-empty resource-empty">
                 <FolderOpen size={26} />
-                <strong>This folder is empty.</strong>
-                <p>Upload files or add links to start building the room library.</p>
+                <strong>No matching resources.</strong>
+                <p>Upload files, add links, or adjust the folder/type filters.</p>
               </div>
             )}
           </div>
         </div>
+
+        <aside className="resource-detail-pane">
+          {activeResource ? (
+            <>
+              <header>
+                <span className="eyebrow-label">Artifact workspace</span>
+                <h2>{getResourceDisplayName(activeResource)}</h2>
+                <p>
+                  {activeResource.metadata.type} - {activeResource.metadata.module} -{" "}
+                  {activeResource.metadata.semester}
+                </p>
+              </header>
+
+              <div className="resource-topic-list">
+                {activeResource.metadata.tags.map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </div>
+
+              <form className="resource-thread-form" onSubmit={createResourceThread}>
+                <input
+                  onChange={(event) => setNewThreadTitle(event.target.value)}
+                  placeholder="Start a Q&A thread for this resource"
+                  value={newThreadTitle}
+                />
+                <button className="primary-button compact" type="submit">
+                  Add Thread
+                </button>
+              </form>
+
+              <div className="artifact-thread-layout">
+                <nav className="artifact-thread-list" aria-label="Resource discussion threads">
+                  {activeThreads.map((thread) => (
+                    <button
+                      className={activeThread?.id === thread.id ? "active" : ""}
+                      key={thread.id}
+                      onClick={() => setActiveThreadId(thread.id)}
+                      type="button"
+                    >
+                      <span>{thread.title}</span>
+                      <small>{thread.comments.length} comments</small>
+                    </button>
+                  ))}
+                </nav>
+
+                <section className="artifact-thread-detail">
+                  {activeThread ? (
+                    <>
+                      <header>
+                        <h3>{activeThread.title}</h3>
+                        {activeThread.acceptedAnswerId ? <mark>Accepted answer selected</mark> : null}
+                      </header>
+                      <div className="artifact-comment-list">
+                        {activeThread.comments.length ? (
+                          activeThread.comments.map((comment) => (
+                            <article
+                              className={
+                                activeThread.acceptedAnswerId === comment.id
+                                  ? "accepted artifact-comment"
+                                  : "artifact-comment"
+                              }
+                              key={comment.id}
+                            >
+                              <div>
+                                <strong>{comment.authorName}</strong>
+                                <time>{formatDateTime(comment.createdAt)}</time>
+                              </div>
+                              <p>{comment.body}</p>
+                              <button onClick={() => toggleAcceptedComment(comment.id)} type="button">
+                                <CheckCircle2 size={15} />
+                                {activeThread.acceptedAnswerId === comment.id
+                                  ? "Accepted"
+                                  : "Mark accepted"}
+                              </button>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="muted-copy">No comments yet. Start by asking about this artifact.</p>
+                        )}
+                      </div>
+                      <form className="artifact-comment-form" onSubmit={addThreadComment}>
+                        <textarea
+                          onChange={(event) => setCommentBody(event.target.value)}
+                          placeholder="Add an explanation, question, or note"
+                          rows={3}
+                          value={commentBody}
+                        />
+                        <button className="primary-button compact" type="submit">
+                          Comment
+                        </button>
+                      </form>
+                    </>
+                  ) : null}
+                </section>
+              </div>
+
+              {importantMessages.length ? (
+                <section className="important-message-bank">
+                  <h3>Starred discussion context</h3>
+                  {importantMessages.slice(0, 5).map((message) => (
+                    <article key={message.id}>
+                      <span>#{message.channel}</span>
+                      <p>{message.body || "Attachment-only message"}</p>
+                    </article>
+                  ))}
+                </section>
+              ) : null}
+            </>
+          ) : (
+            <div className="docs-empty resource-empty">
+              <FolderOpen size={26} />
+              <strong>No resources yet.</strong>
+              <p>Upload the first file to create an artifact workspace.</p>
+            </div>
+          )}
+        </aside>
       </div>
       {folderDialogOpen ? (
         <TextInputDialog
@@ -2004,21 +2816,58 @@ function SessionPanel({ onChanged, onError, room, sessions }) {
   );
 }
 
-/** Room owner settings modal for metadata, theme, and destructive actions. */
-function SettingsPanel({ onBack, onChanged, onError, room }) {
-  const [form, setForm] = useState({
-    name: room.name,
-    moduleCode: room.moduleCode,
-    description: room.description,
-    visibility: room.visibility,
-    tags: room.tags.join(", "),
-    theme: room.theme,
+function createRoomSettingsForm(room) {
+  return {
+    name: room.name || "",
+    moduleCode: room.moduleCode || "",
+    academicTerm: room.academicTerm || "",
+    description: room.description || "",
+    visibility: room.visibility === "private" ? "private" : "public",
+    password: "",
+    tags: normaliseTags(room.tags).join(", "),
+    theme: room.theme || "twilight",
     background: room.background || "aurora",
-  });
-  const [saving, setSaving] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    roomLogo: room.roomLogo || "",
+  };
+}
 
-  /** Updates one settings field while keeping the rest of the form intact. */
+/** Full-screen owner settings surface modelled after the create-room flow. */
+function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
+  const academicTermOptions = useMemo(() => createAcademicTermOptions(), []);
+  const [activePage, setActivePage] = useState("profile");
+  const [form, setForm] = useState(() => createRoomSettingsForm(room));
+  const [customBackground, setCustomBackground] = useState({
+    colors: ["#100519", "#7b3bb2", "#ff78a6"],
+  });
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showPrivatePassword, setShowPrivatePassword] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
+  const logoInputRef = useRef(null);
+  const selectedAcademicTerm = form.academicTerm || academicTermOptions[0] || "";
+  const roomTags = normaliseTags(form.tags).slice(0, MAX_ROOM_TAGS);
+  const roomInitial = String(form.name || "R").trim().charAt(0).toUpperCase() || "R";
+  const background = getBackground(form.background);
+  const gradientBackgrounds = backgroundPresets.filter((item) => item.type === "Gradient");
+  const ambientBackgrounds = backgroundPresets.filter((item) => item.type !== "Gradient");
+  const requiresNewPrivatePassword = form.visibility === "private" && room.visibility !== "private";
+  const profileReady =
+    Boolean(form.name.trim()) &&
+    Boolean(form.moduleCode.trim()) &&
+    Boolean(selectedAcademicTerm.trim()) &&
+    (!requiresNewPrivatePassword || Boolean(form.password.trim()));
+
+  useEffect(() => {
+    function handleEscape(event) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [onClose]);
+
+  /** Mirrors the create-room form's simple field update behavior. */
   function updateField(event) {
     setForm((current) => ({
       ...current,
@@ -2026,14 +2875,129 @@ function SettingsPanel({ onBack, onChanged, onError, room }) {
     }));
   }
 
-  /** Persists room metadata edits and notifies the parent room view. */
+  /** Updates non-native controls such as comboboxes, chips, and swatches. */
+  function updateFormValue(name, value) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function updateTags(nextTags) {
+    setForm((current) => ({ ...current, tags: nextTags.join(", ") }));
+  }
+
+  function addTag() {
+    const nextTag = tagDraft.trim();
+    if (!nextTag || roomTags.length >= MAX_ROOM_TAGS) return;
+    if (roomTags.some((tag) => tag.toLowerCase() === nextTag.toLowerCase())) return;
+    updateTags([...roomTags, nextTag]);
+    setTagDraft("");
+  }
+
+  function handleTagKeyDown(event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addTag();
+    }
+  }
+
+  function handleLogoUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      onError("Please upload an image file for the room logo.");
+      return;
+    }
+
+    if (file.size > 500 * 1024) {
+      onError("Please keep room logo images under 500KB for now.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => updateFormValue("roomLogo", String(reader.result));
+    reader.onerror = () => onError("Unable to read that room logo.");
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  }
+
+  function handleLogoPreviewClick(event) {
+    event.preventDefault();
+
+    if (form.roomLogo) {
+      updateFormValue("roomLogo", "");
+      return;
+    }
+
+    logoInputRef.current?.click();
+  }
+
+  function handleBackgroundUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      onError("Please upload an image file.");
+      return;
+    }
+
+    if (file.size > 900 * 1024) {
+      onError("Please keep custom background images under 900KB for now.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      updateFormValue(
+        "background",
+        createCustomImageBackgroundValue({
+          name: "Uploaded Background",
+          dataUrl: String(reader.result),
+        }),
+      );
+    };
+    reader.onerror = () => onError("Unable to read that image.");
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  }
+
+  function updateCustomColor(index, value) {
+    setCustomBackground((current) => ({
+      ...current,
+      colors: current.colors.map((color, colorIndex) =>
+        colorIndex === index ? value : color,
+      ),
+    }));
+  }
+
+  function useCustomBackground() {
+    updateFormValue(
+      "background",
+      createCustomBackgroundValue({
+        name: "Custom Background",
+        colors: customBackground.colors,
+      }),
+    );
+  }
+
   async function saveRoom(event) {
     event.preventDefault();
+    if (!profileReady) {
+      onError("Room name, module code, academic term, and private password are required.");
+      return;
+    }
+
     setSaving(true);
 
     try {
-      const payload = await api.updateRoom(room.id, form);
+      const payload = await api.updateRoom(room.id, {
+        ...form,
+        academicTerm: selectedAcademicTerm,
+        moduleCode: form.moduleCode.trim().toUpperCase(),
+        tags: roomTags,
+        password: form.visibility === "private" ? form.password : "",
+      });
       onChanged(payload.room);
+      setForm(createRoomSettingsForm(payload.room));
     } catch (err) {
       onError(err.message);
     } finally {
@@ -2041,142 +3005,332 @@ function SettingsPanel({ onBack, onChanged, onError, room }) {
     }
   }
 
-  /** Deletes the entire room after the confirmation dialog has approved it. */
   async function deleteRoom() {
+    setDeleting(true);
+
     try {
       await api.deleteRoom(room.id);
       onBack();
     } catch (err) {
       onError(err.message);
+      setDeleting(false);
     }
   }
 
-  if (!room.isOwner) {
-    return (
-      <section className="surface">
-        <p className="empty-state">Only the room owner can change settings.</p>
-      </section>
-    );
-  }
-
   return (
-    <section className="workspace-grid settings-grid">
-      <form className="surface stacked-form" onSubmit={saveRoom}>
-        <div className="section-header compact">
-          <div>
-            <h2>Settings</h2>
-          </div>
-          <Edit3 size={20} />
-        </div>
-
-        <label className="field">
-          <span>Room Name</span>
-          <input name="name" onChange={updateField} value={form.name} />
-        </label>
-        <label className="field">
-          <span>Module Code</span>
-          <input name="moduleCode" onChange={updateField} value={form.moduleCode} />
-        </label>
-        <label className="field">
-          <span>Description</span>
-          <textarea
-            name="description"
-            onChange={updateField}
-            rows={4}
-            value={form.description}
-          />
-        </label>
-        <label className="field">
-          <span>Tags</span>
-          <input name="tags" onChange={updateField} value={form.tags} />
-        </label>
-        <label className="field">
-          <span>Visibility</span>
-          <select name="visibility" onChange={updateField} value={form.visibility}>
-            <option value="public">Public</option>
-            <option value="private">Private</option>
-          </select>
-        </label>
-        <SettingsPicker
-          activeId={form.theme}
-          items={themePresets}
-          label="Theme"
-          onSelect={(themeId) => setForm((current) => ({ ...current, theme: themeId }))}
-          type="theme"
-        />
-
-        <SettingsPicker
-          activeId={form.background}
-          items={backgroundPresets}
-          label="Background"
-          onSelect={(backgroundId) =>
-            setForm((current) => ({ ...current, background: backgroundId }))
-          }
-          type="background"
-        />
-        <button className="primary-button" disabled={saving} type="submit">
-          <Edit3 size={18} />
-          {saving ? "Saving" : "Save Changes"}
-        </button>
-      </form>
-
-      <aside className="surface danger-zone">
-        <h3>Delete Room</h3>
-        <p>Messages, resources, uploaded files, and sessions will be removed locally.</p>
-        <button className="danger-button" onClick={() => setDeleteConfirmOpen(true)} type="button">
-          <Trash2 size={17} />
-          Delete Room
-        </button>
-      </aside>
-
-      {deleteConfirmOpen ? (
-        <ConfirmDialog
-          confirmLabel="Delete"
-          message={`Delete "${room.name}" and all of its local data?`}
-          onCancel={() => setDeleteConfirmOpen(false)}
-          onConfirm={deleteRoom}
-          title="Delete Room"
-        />
-      ) : null}
-    </section>
-  );
-}
-
-/** Compact picker shared by settings theme and background choices. */
-function SettingsPicker({ activeId, items, label, onSelect, type }) {
-  return (
-    <div className="picker-group compact-picker">
-      <div className="picker-heading">
-        <span>{label}</span>
-      </div>
-      <div className="picker-grid">
-        {items.map((item) => (
+    <section className="room-settings-screen" role="dialog" aria-modal="true" aria-labelledby="room-settings-title">
+      <aside className="room-settings-sidebar" aria-label="Room settings sections">
+        <div className="room-settings-server-name">{room.name}</div>
+        <nav>
           <button
-            className={activeId === item.id ? "picker-card active" : "picker-card"}
-            key={item.id}
-            onClick={() => onSelect(item.id)}
+            className={activePage === "profile" ? "active" : ""}
+            onClick={() => setActivePage("profile")}
             type="button"
           >
-            <span
-              className={type === "theme" ? "theme-swatch" : "background-swatch"}
-              style={
-                type === "theme"
-                  ? {
-                    "--swatch-a": item.colors[0],
-                    "--swatch-b": item.colors[1],
-                    "--swatch-c": item.colors[2],
-                  }
-                  : { "--background-swatch": item.css }
-              }
-            />
-            <span>
-              <strong>{item.name}</strong>
-            </span>
-            {activeId === item.id ? <CheckCircle2 size={16} /> : null}
+            <Edit3 size={16} />
+            Room Profile
           </button>
-        ))}
-      </div>
-    </div>
+          <button
+            className={activePage === "delete" ? "active danger" : "danger"}
+            onClick={() => setActivePage("delete")}
+            type="button"
+          >
+            <Trash2 size={16} />
+            Delete Room
+          </button>
+        </nav>
+      </aside>
+
+      <main className="room-settings-main">
+        <button className="room-settings-close" onClick={onClose} type="button">
+          <X size={24} />
+          <span>ESC</span>
+        </button>
+
+        {activePage === "profile" ? (
+          <form className="room-settings-profile" onSubmit={saveRoom}>
+            <header className="room-settings-header">
+              <h1 id="room-settings-title">Room Profile</h1>
+              <p>Update how this study room appears to members and invite links.</p>
+            </header>
+
+            <div className="room-settings-profile-grid">
+              <div className="room-settings-fields">
+                <section className="room-settings-section">
+                  <div className="room-logo-uploader">
+                    <button
+                      className="room-logo-button"
+                      onClick={handleLogoPreviewClick}
+                      title={form.roomLogo ? "Click to remove room logo" : "Upload room logo"}
+                      type="button"
+                    >
+                      <span className="room-logo-preview">
+                        {form.roomLogo ? <img src={form.roomLogo} alt="" /> : roomInitial}
+                      </span>
+                    </button>
+                    <input
+                      accept="image/png,image/jpeg,image/webp"
+                      className="room-logo-file-input"
+                      onChange={handleLogoUpload}
+                      ref={logoInputRef}
+                      type="file"
+                    />
+                    <div>
+                      <h3>Room Logo</h3>
+                      <p>Upload a square image, or use the first letter of the room name.</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="room-settings-section">
+                  <div className="form-grid">
+                    <label className="field">
+                      <span>Room Name</span>
+                      <input
+                        autoComplete="off"
+                        name="name"
+                        onChange={updateField}
+                        value={form.name}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Module Code</span>
+                      <ModuleCodeCombobox
+                        onChange={(moduleCode) => updateFormValue("moduleCode", moduleCode)}
+                        options={moduleCodeOptions}
+                        value={form.moduleCode}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="field">
+                    <span>NUS Academic Year</span>
+                    <AcademicTermSelect
+                      onChange={(term) => updateFormValue("academicTerm", term)}
+                      options={academicTermOptions}
+                      value={selectedAcademicTerm}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Description</span>
+                    <textarea
+                      name="description"
+                      autoComplete="off"
+                      onChange={updateField}
+                      placeholder="Revision plan, focus areas, and group notes."
+                      rows={4}
+                      value={form.description}
+                    />
+                  </label>
+
+                  <div className="field">
+                    <span>Tags</span>
+                    <div className="tag-editor">
+                      <div className="tag-editor-list">
+                        {roomTags.map((tag) => (
+                          <button
+                            className="tag-chip-button"
+                            key={tag}
+                            onClick={() => updateTags(roomTags.filter((currentTag) => currentTag !== tag))}
+                            title={`Remove ${tag}`}
+                            type="button"
+                          >
+                            <Tag size={13} />
+                            {tag}
+                            <X size={13} />
+                          </button>
+                        ))}
+                      </div>
+                      <div className="tag-editor-input">
+                        <input
+                          autoComplete="off"
+                          disabled={roomTags.length >= MAX_ROOM_TAGS}
+                          onChange={(event) => setTagDraft(event.target.value)}
+                          onKeyDown={handleTagKeyDown}
+                          placeholder={roomTags.length >= MAX_ROOM_TAGS ? "Maximum 3 tags" : ""}
+                          value={tagDraft}
+                        />
+                        <button
+                          className="secondary-button compact"
+                          disabled={roomTags.length >= MAX_ROOM_TAGS}
+                          onClick={addTag}
+                          type="button"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="visibility-settings">
+                    <div className="segmented-control" role="group" aria-label="Room visibility">
+                      <button
+                        className={form.visibility === "public" ? "active" : ""}
+                        onClick={() => updateFormValue("visibility", "public")}
+                        type="button"
+                      >
+                        <Globe2 size={16} />
+                        Public
+                      </button>
+                      <button
+                        className={form.visibility === "private" ? "active" : ""}
+                        onClick={() => updateFormValue("visibility", "private")}
+                        type="button"
+                      >
+                        <Lock size={16} />
+                        Private
+                      </button>
+                    </div>
+
+                    {form.visibility === "private" ? (
+                      <label className="private-password-field">
+                        <input
+                          aria-label="Private room password"
+                          autoComplete="new-password"
+                          name="private-room-passcode"
+                          onChange={(event) => updateFormValue("password", event.target.value)}
+                          placeholder={
+                            room.visibility === "private"
+                              ? "Leave blank to keep current password"
+                              : "Password"
+                          }
+                          type={showPrivatePassword ? "text" : "password"}
+                          value={form.password}
+                        />
+                        <button
+                          onClick={() => setShowPrivatePassword((current) => !current)}
+                          title={showPrivatePassword ? "Hide password" : "Show password"}
+                          type="button"
+                        >
+                          {showPrivatePassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </label>
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="room-settings-section">
+                  <div className="settings-section-heading">
+                    <h2>Room Background</h2>
+                    <p>Use the same scene controls from room creation.</p>
+                  </div>
+
+                  <div className="custom-background-panel settings-background-builder" aria-label="Custom background">
+                    <div>
+                      <h4>Custom Background</h4>
+                      <p>Upload an image or create a custom gradient for this room.</p>
+                    </div>
+                    <label className="upload-dropzone">
+                      <Upload size={18} />
+                      <span>Upload image</span>
+                      <input
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={handleBackgroundUpload}
+                        type="file"
+                      />
+                    </label>
+                    <div className="color-row">
+                      {customBackground.colors.map((color, index) => (
+                        <label key={`${color}-${index}`}>
+                          <span>Color {index + 1}</span>
+                          <input
+                            onChange={(event) => updateCustomColor(index, event.target.value)}
+                            type="color"
+                            value={color}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <button className="secondary-button compact" onClick={useCustomBackground} type="button">
+                      <Wand2 size={17} />
+                      Use Custom Gradient
+                    </button>
+                  </div>
+
+                  <BackgroundSection
+                    activeId={form.background}
+                    items={gradientBackgrounds}
+                    onSelect={(backgroundId) => updateFormValue("background", backgroundId)}
+                    title="Gradients & Colors"
+                  />
+                  <BackgroundSection
+                    activeId={form.background}
+                    items={ambientBackgrounds}
+                    onSelect={(backgroundId) => updateFormValue("background", backgroundId)}
+                    title="Ambient Worlds"
+                  />
+                </section>
+              </div>
+
+              <aside
+                className="room-settings-preview"
+                style={{
+                  "--room-bg": background.css,
+                }}
+              >
+                <div className="settings-preview-cover">
+                  <span className="settings-preview-logo">
+                    {form.roomLogo ? <img src={form.roomLogo} alt="" /> : roomInitial}
+                  </span>
+                </div>
+                <div className="settings-preview-body">
+                  <strong>{form.name || "Your Room"}</strong>
+                  <p>
+                    {[form.moduleCode || "MODULE", selectedAcademicTerm].filter(Boolean).join(" · ")}
+                  </p>
+                  <span>{form.visibility === "private" ? "Private room" : "Public room"}</span>
+                </div>
+              </aside>
+            </div>
+
+            <footer className="room-settings-actions">
+              <button className="secondary-button compact" onClick={onClose} type="button">
+                Cancel
+              </button>
+              <button className="primary-button compact" disabled={saving || !profileReady} type="submit">
+                <Edit3 size={17} />
+                {saving ? "Saving" : "Save Changes"}
+              </button>
+            </footer>
+          </form>
+        ) : null}
+
+        {activePage === "delete" ? (
+          <section className="room-settings-delete">
+            <header className="room-settings-header">
+              <h1>Delete Room</h1>
+              <p>This permanently removes the room and its local room data.</p>
+            </header>
+            <div className="delete-room-panel">
+              <div>
+                <h2>Delete {room.name}</h2>
+                <p>Messages, resources, uploaded files, and sessions tied to this room will be removed.</p>
+              </div>
+              <button
+                className="danger-button"
+                disabled={deleting}
+                onClick={() => setDeleteConfirmOpen(true)}
+                type="button"
+              >
+                <Trash2 size={17} />
+                {deleting ? "Deleting" : "Delete Room"}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {deleteConfirmOpen ? (
+          <ConfirmDialog
+            confirmLabel="Delete"
+            message={`Delete "${room.name}" and all of its local data?`}
+            onCancel={() => setDeleteConfirmOpen(false)}
+            onConfirm={deleteRoom}
+            title="Delete Room"
+          />
+        ) : null}
+      </main>
+    </section>
   );
 }
 

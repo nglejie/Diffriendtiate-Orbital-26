@@ -30,3 +30,36 @@ export function matchesBackgroundFilters(item, filters) {
     return item[key] === value;
   });
 }
+
+/**
+ * Produces the current NUS-style semester plus the next few regular semesters.
+ * The picker intentionally avoids a free-form academic-year text field so room
+ * cards stay consistent and easy to scan.
+ */
+export function createAcademicTermOptions(date = new Date(), count = 4) {
+  const month = date.getMonth();
+  let startYear = date.getFullYear();
+  let semester = "S1";
+
+  if (month <= 4) {
+    startYear -= 1;
+    semester = "S2";
+  }
+
+  const terms = [];
+  let currentYear = startYear;
+  let currentSemester = semester;
+
+  for (let index = 0; index < count; index += 1) {
+    terms.push(`${currentYear}/${currentYear + 1} ${currentSemester}`);
+
+    if (currentSemester === "S1") {
+      currentSemester = "S2";
+    } else {
+      currentYear += 1;
+      currentSemester = "S1";
+    }
+  }
+
+  return terms;
+}

@@ -53,11 +53,14 @@ function AuthView({ onAuthenticated }) {
   return (
     <main className="auth-layout flocus-auth">
       <div className="auth-logo">
-        <span>Diffriendtiate</span>
-        <small>shape your study space</small>
+        <img src="/brand/diffriendtiate-webapp-logo.png" alt="Diffriendtiate" />
       </div>
 
+      {/* Decorative stars are kept outside the form so they never affect auth layout or tab order. */}
       <div className="auth-shooting-stars" aria-hidden="true">
+        <span />
+        <span />
+        <span />
         <span />
         <span />
         <span />
@@ -81,7 +84,7 @@ function AuthView({ onAuthenticated }) {
         <form className="auth-form flocus-form" onSubmit={handleSubmit}>
           <div className="form-heading">
             <h1 id="auth-title" className={isRegistering ? "register-title" : ""}>
-              {isRegistering ? "Want to shape your very own study room?" : "Welcome Back!"}
+              {isRegistering ? "New here?" : "Your friends are waiting!"}
             </h1>
             <p>
               {isRegistering
@@ -170,7 +173,7 @@ function AuthView({ onAuthenticated }) {
                   }}
                   type="button"
                 >
-                  Sign up here.
+                  Sign up here
                 </button>
               </>
             )}

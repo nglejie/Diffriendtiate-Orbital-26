@@ -5,11 +5,12 @@ import TopBar from "./TopBar.jsx";
 import { CreateRoomModal, ExploreRoomModal, RoomTile } from "./DashboardComponents.jsx";
 import { MAX_ROOM_TAGS } from "./dashboardConstants.js";
 import AlertDialog from "../../shared/ui/AlertDialog.jsx";
-import { normaliseTags } from "./dashboardUtils.js";
+import { createAcademicTermOptions, normaliseTags } from "./dashboardUtils.js";
 import { emptyRoomForm } from "../../constants.js";
 
 /** Main room browser for joined rooms and public rooms the user can explore. */
-function Dashboard({ onLogout, onOpenRoom, user }) {
+function Dashboard({ onLogout, onOpenRoom }) {
+  const academicTermOptions = useMemo(() => createAcademicTermOptions(), []);
   const [rooms, setRooms] = useState([]);
   const [form, setForm] = useState(emptyRoomForm);
   const [search, setSearch] = useState("");
@@ -55,7 +56,7 @@ function Dashboard({ onLogout, onOpenRoom, user }) {
   }
 
   function openCreateModal() {
-    setForm(emptyRoomForm);
+    setForm({ ...emptyRoomForm, academicTerm: academicTermOptions[0] || "" });
     setCreateOpen(true);
   }
 
@@ -80,6 +81,11 @@ function Dashboard({ onLogout, onOpenRoom, user }) {
 
     if (!form.moduleCode.trim()) {
       setAlertMessage("Module code is required.");
+      return false;
+    }
+
+    if (!form.academicTerm.trim()) {
+      setAlertMessage("Academic year is required.");
       return false;
     }
 
@@ -136,9 +142,32 @@ function Dashboard({ onLogout, onOpenRoom, user }) {
     }
   }
 
+  /** Joins a room from an invite URL/code entered inside the create-room flow. */
+  async function joinInvite(inviteValue) {
+    const inviteCode = String(inviteValue || "")
+      .trim()
+      .split("/")
+      .filter(Boolean)
+      .at(-1);
+
+    if (!inviteCode) {
+      setAlertMessage("Invite link is required.");
+      return;
+    }
+
+    try {
+      const payload = await api.joinInvite(inviteCode, {});
+      setCreateOpen(false);
+      await loadRooms(search);
+      onOpenRoom(payload.room.id);
+    } catch (err) {
+      setAlertMessage(err.message);
+    }
+  }
+
   return (
     <>
-      <TopBar onCreateRoom={openCreateModal} onLogout={onLogout} user={user} />
+      <TopBar onCreateRoom={openCreateModal} onLogout={onLogout} />
       <div className="home-page">
       <section className="home-controls" aria-label="Room browser">
         <div className="scope-tabs" role="tablist" aria-label="Room lists">
@@ -175,35 +204,26 @@ function Dashboard({ onLogout, onOpenRoom, user }) {
       </section>
 
       <section className="room-gallery" aria-label="Room gallery">
-        {visibleRooms.length ? (
-          visibleRooms.map((room) => (
-            <RoomTile
-              key={room.id}
-              mode={activeScope}
-              onPreviewRoom={setSelectedRoom}
-              onOpenRoom={onOpenRoom}
-              room={room}
-            />
-          ))
-        ) : (
-          <div className="empty-room-tile">
-            <p>
-              {loading
-                ? "Loading rooms..."
-                : activeScope === "my"
-                  ? "Create or join a room to see it here."
-                  : "Nothing to see here for now"}
-            </p>
-          </div>
-        )}
+        {visibleRooms.map((room) => (
+          <RoomTile
+            key={room.id}
+            mode={activeScope}
+            onPreviewRoom={setSelectedRoom}
+            onOpenRoom={onOpenRoom}
+            room={room}
+          />
+        ))}
+        {loading ? <p className="room-gallery-status">Loading rooms...</p> : null}
       </section>
 
       {createOpen ? (
         <CreateRoomModal
           creating={creating}
           form={form}
+          academicTermOptions={academicTermOptions}
           onClose={() => setCreateOpen(false)}
           onCreate={createRoom}
+          onJoinInvite={joinInvite}
           onUpdateField={updateForm}
           setAlertMessage={setAlertMessage}
           setForm={setForm}

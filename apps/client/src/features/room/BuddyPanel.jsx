@@ -5,16 +5,18 @@ import {
   ChevronRight,
   Clock,
   Copy,
+  Database,
   Edit3,
   File as FileIcon,
+  FileCheck2,
   FileText,
   Image as ImageIcon,
   Info,
-  ListChecks,
   Paperclip,
   Plus,
   RefreshCw,
   Search,
+  SearchCheck,
   Square,
   Terminal,
   Upload,
@@ -24,6 +26,7 @@ import "katex/dist/katex.min.css";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { resourceToAttachment } from "../../shared/utils/room.js";
 import { UPLOADS_FOLDER } from "./roomConstants.js";
@@ -49,9 +52,14 @@ function getBuddyThoughtIcon(step) {
   if (step.type === "done") return CheckCircle2;
   if (step.type === "tool") {
     if (step.tool === "search_corpus") {
-      return step.status === "done" ? ListChecks : Search;
+      return step.status === "done" ? SearchCheck : Search;
     }
-    if (step.tool === "read_file") return FileText;
+    if (step.tool === "read_file") {
+      return step.status === "done" ? FileCheck2 : FileText;
+    }
+    if (["embed_room_documents", "sync_resources"].includes(step.tool)) {
+      return step.status === "done" ? Database : RefreshCw;
+    }
     return Terminal;
   }
   return Clock;
@@ -65,7 +73,7 @@ function renderBuddyMarkdown(text) {
   return (
     <ReactMarkdown
       className="buddy-markdown"
-      remarkPlugins={[remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
     >
       {markdown}

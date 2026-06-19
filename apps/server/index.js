@@ -105,6 +105,8 @@ function roomDto(db, room, userId) {
     id: room.id,
     name: room.name,
     moduleCode: room.moduleCode,
+    academicTerm: room.academicTerm || "",
+    roomLogo: room.roomLogo || "",
     description: room.description,
     visibility: room.visibility,
     tags: room.tags || [],
@@ -137,6 +139,7 @@ function resourceDto(db, resource) {
   return {
     ...resource,
     folder: resource.folder || "General",
+    metadata: resource.metadata || {},
     uploader: publicUser(db.users.find((user) => user.id === resource.uploaderId)),
   };
 }
@@ -205,6 +208,10 @@ function normalizeBuddyThreadMessages(value, actor) {
     .map((message) => {
       const role = message?.role === "assistant" ? "assistant" : "user";
       const body = String(message?.body || message?.content || "").trim().slice(0, 12000);
+      const preface =
+        role === "assistant"
+          ? String(message?.preface || "").trim().slice(0, 3000)
+          : "";
       const attachments = normalizeMessageAttachments(message?.attachments);
       const sources = Array.isArray(message?.sources)
         ? message.sources.map(String).map((source) => source.trim()).filter(Boolean).slice(0, 8)
@@ -220,6 +227,7 @@ function normalizeBuddyThreadMessages(value, actor) {
       return {
         id: String(message?.id || createId("bmsg")),
         role,
+        preface,
         body,
         attachments,
         sources,
@@ -233,6 +241,7 @@ function normalizeBuddyThreadMessages(value, actor) {
     .filter(
       (message) =>
         message.body ||
+        message.preface ||
         message.attachments.length ||
         message.sources.length ||
         message.thinkingSteps.length,
@@ -278,6 +287,114 @@ function normalizeTags(value) {
 function normalizeFolder(value) {
   const folder = String(value || "General").trim();
   return folder.slice(0, 48) || "General";
+}
+
+const resourceTypeRules = [
+  { type: "Lecture Notes", patterns: [/lecture/i, /\blec\b/i, /slides?/i, /notes?/i, /session/i] },
+  { type: "Tutorial", patterns: [/tutorial/i, /\btut\b/i, /worksheet/i, /problem\s*set/i] },
+  { type: "Past Year Paper", patterns: [/past/i, /\bpyp\b/i, /exam/i, /final/i, /midterm/i, /paper/i] },
+  { type: "Cheatsheet", patterns: [/cheat/i, /summary/i, /formula/i, /quick\s*ref/i] },
+  { type: "Assignment", patterns: [/assignment/i, /\bassg\b/i, /homework/i, /project/i] },
+  { type: "Lab", patterns: [/\blab\b/i, /practical/i, /experiment/i] },
+  { type: "Quiz", patterns: [/quiz/i, /test/i] },
+];
+
+const topicStopWords = new Set([
+  "lecture",
+  "lect",
+  "notes",
+  "note",
+  "tutorial",
+  "slides",
+  "slide",
+  "session",
+  "week",
+  "final",
+  "midterm",
+  "exam",
+  "paper",
+  "assignment",
+  "lab",
+  "quiz",
+  "copy",
+  "full",
+  "official",
+  "unofficial",
+]);
+
+/** Returns a stable SHA-256 hash so exact duplicate uploads can be rejected room-wide. */
+async function hashUploadedFile(filePath) {
+  const hash = crypto.createHash("sha256");
+  const stream = fs.createReadStream(filePath);
+
+  for await (const chunk of stream) {
+    hash.update(chunk);
+  }
+
+  return hash.digest("hex");
+}
+
+function compactResourceName(value = "") {
+  return String(value)
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferResourceTypeFromName(name = "") {
+  const match = resourceTypeRules.find((rule) =>
+    rule.patterns.some((pattern) => pattern.test(name)),
+  );
+
+  return match?.type || "Reference";
+}
+
+function inferTopicFromName(name = "", room) {
+  const moduleCode = String(room?.moduleCode || "").toLowerCase();
+  const tokens = compactResourceName(name)
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token && token !== moduleCode && !topicStopWords.has(token));
+
+  return tokens.slice(0, 5).join(" ") || inferResourceTypeFromName(name);
+}
+
+function inferVersionFromName(name = "") {
+  const match = String(name).match(/\b(?:v|version)\s*([0-9]+(?:\.[0-9]+)?)\b/i);
+  return match ? `v${match[1]}` : "v1";
+}
+
+/**
+ * Adds NUS-study-specific browsing metadata at upload time.
+ * The rules are intentionally transparent so members can later override them manually.
+ */
+function buildResourceMetadata({ room, title, sourceType, mimeType = "", size = 0, url = "" }) {
+  const extension = path.extname(new URL(url || title, "http://local").pathname).replace(".", "");
+  const resourceType = inferResourceTypeFromName(title);
+  const topic = inferTopicFromName(title, room);
+  const tags = [
+    resourceType,
+    topic,
+    room?.moduleCode,
+    room?.academicTerm,
+    extension ? extension.toUpperCase() : "",
+  ].filter(Boolean);
+
+  return {
+    resourceType,
+    type: resourceType,
+    topic,
+    module: room?.moduleCode || "",
+    semester: room?.academicTerm || "",
+    version: inferVersionFromName(title),
+    source: sourceType,
+    extension,
+    mimeType,
+    size,
+    tags: [...new Set(tags)].slice(0, 8),
+    extractedAt: new Date().toISOString(),
+  };
 }
 
 function normalizeChannel(value) {
@@ -369,17 +486,75 @@ function chatbotDocumentPayload(resource) {
   };
 }
 
+function resourceDisplayName(resource) {
+  return resource?.originalName || resource?.title || resource?.storageName || resource?.url || "";
+}
+
+function uniqueResourceNames(resources, limit = 30) {
+  return [
+    ...new Set(
+      resources
+        .map(resourceDisplayName)
+        .map((name) => String(name || "").trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, limit);
+}
+
+/**
+ * Adds lightweight file-name context to the final user turn before forwarding it
+ * to Intelligrate. The chatbot service only accepts one manually uploaded file,
+ * so multi-file comparisons are represented through the already-synced room
+ * corpus instead of silently dropping every attachment after the first one.
+ */
+function withBuddyResourceContext(messageChain, { attachedResources = [], roomResources = [] }) {
+  if (!messageChain.length) return messageChain;
+
+  const attachedNames = uniqueResourceNames(attachedResources, 12);
+  const roomNames = uniqueResourceNames(roomResources.filter(isChatbotDocument), 30);
+  const contextLines = [];
+
+  if (attachedNames.length) {
+    contextLines.push(`Files attached to this message: ${attachedNames.join(", ")}.`);
+  }
+
+  if (attachedNames.length > 1) {
+    contextLines.push(
+      "When the user asks about the attached files together, compare all listed attachments by searching the room corpus for their synced contents.",
+    );
+  }
+
+  if (roomNames.length) {
+    contextLines.push(`Available room resource filenames: ${roomNames.join(", ")}.`);
+  }
+
+  if (!contextLines.length) return messageChain;
+
+  const nextChain = [...messageChain];
+  const latestIndex = nextChain.length - 1;
+  const latestMessage = nextChain[latestIndex];
+  nextChain[latestIndex] = {
+    ...latestMessage,
+    content: `${latestMessage.content}\n\n[Room resource context]\n${contextLines
+      .map((line) => `- ${line}`)
+      .join("\n")}`.slice(0, 6000),
+  };
+
+  return nextChain;
+}
+
 function roomCorpusFingerprint(resources) {
   return JSON.stringify(
     resources
       .map((resource) => ({
-        id: resource.id,
+        // File content hashes keep Intelligrate embedding tied to actual corpus changes.
+        // Renaming or reordering a resource should not force an expensive re-embed.
+        contentHash: resource.contentHash || "",
         url: resourceUrlForChatbot(resource),
         name: resource.originalName || resource.title || resource.storageName || "",
         size: resource.size || 0,
-        createdAt: resource.createdAt || "",
       }))
-      .sort((a, b) => a.id.localeCompare(b.id)),
+      .sort((a, b) => `${a.contentHash}:${a.url}`.localeCompare(`${b.contentHash}:${b.url}`)),
   );
 }
 
@@ -390,11 +565,13 @@ function roomCorpusFingerprint(resources) {
 async function syncRoomResourcesWithChatbot(db, room, options = {}) {
   const force = Boolean(options.force);
   const supportedResources = db.resources.filter(
-    (resource) => resource.roomId === room.id && isChatbotDocument(resource),
+    (resource) => resource.roomId === room.id && !resource.deletedAt && isChatbotDocument(resource),
   );
   const fingerprint = roomCorpusFingerprint(supportedResources);
+  const cachedFingerprint = room.resourceSyncFingerprint || roomCorpusSyncCache.get(room.id);
 
-  if (!force && roomCorpusSyncCache.get(room.id) === fingerprint) {
+  if (!force && cachedFingerprint === fingerprint) {
+    roomCorpusSyncCache.set(room.id, fingerprint);
     return {
       result: true,
       success: supportedResources.map(
@@ -412,6 +589,9 @@ async function syncRoomResourcesWithChatbot(db, room, options = {}) {
   if (!urls.length) {
     await clearChatbotCorpus(room.id);
     roomCorpusSyncCache.set(room.id, fingerprint);
+    room.resourceSyncFingerprint = fingerprint;
+    room.resourceSyncUpdatedAt = new Date().toISOString();
+    await writeDb(db);
     return {
       result: true,
       success: [],
@@ -429,6 +609,9 @@ async function syncRoomResourcesWithChatbot(db, room, options = {}) {
 
   if (payload.result) {
     roomCorpusSyncCache.set(room.id, fingerprint);
+    room.resourceSyncFingerprint = fingerprint;
+    room.resourceSyncUpdatedAt = new Date().toISOString();
+    await writeDb(db);
   }
 
   return {
@@ -465,18 +648,30 @@ function resolveBuddyMessagePayload(db, room, body) {
       ),
     )
     .filter(Boolean);
-  const directResource = attachedResources.find(isChatbotFileResource);
+  const directResources = attachedResources.filter(isChatbotFileResource);
+  const roomResources = db.resources.filter((resource) => resource.roomId === room.id);
 
-  if (attachedResources.length && !directResource) {
+  if (attachedResources.length && !directResources.length) {
     throw createHttpError(
       400,
       "Intelligrate can currently read one PDF, TXT, or DOCX attachment at a time.",
     );
   }
 
+  // The chatbot service currently accepts one direct uploaded file. When a
+  // message has multiple attachments, the files are already synced into the
+  // room corpus, so the safest app-side path is to provide exact filenames and
+  // let Intelligrate search the corpus instead of silently reading only one.
+  const directResource = directResources.length === 1 ? directResources[0] : null;
+  const enrichedMessageChain = withBuddyResourceContext(messageChain, {
+    attachedResources,
+    roomResources,
+  });
+
   return {
-    messageChain,
+    messageChain: enrichedMessageChain,
     directResource,
+    attachedResources,
   };
 }
 
@@ -489,6 +684,43 @@ function safeUploadPath(storageName) {
   }
 
   return targetPath;
+}
+
+/**
+ * Backfills hashes/metadata for older file resources before dedupe checks run.
+ * This keeps existing rooms compatible without requiring a one-off migration script.
+ */
+async function ensureRoomResourceFileMetadata(db, room) {
+  let changed = false;
+
+  for (const resource of db.resources) {
+    if (resource.roomId !== room.id || resource.type !== "file" || !resource.storageName) continue;
+
+    if (!resource.contentHash) {
+      try {
+        resource.contentHash = await hashUploadedFile(safeUploadPath(resource.storageName));
+        changed = true;
+      } catch (error) {
+        console.warn(`[resources] Could not hash ${resource.storageName}: ${error.message}`);
+      }
+    }
+
+    if (!resource.metadata || !Object.keys(resource.metadata).length) {
+      resource.metadata = buildResourceMetadata({
+        room,
+        title: resource.originalName || resource.title || resource.storageName,
+        sourceType: "file",
+        mimeType: resource.mimeType,
+        size: resource.size,
+        url: resource.url,
+      });
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await writeDb(db);
+  }
 }
 
 function chatbotUrl(pathname) {
@@ -782,6 +1014,8 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
     id: createId("room"),
     name,
     moduleCode,
+    academicTerm: String(req.body.academicTerm || "").trim(),
+    roomLogo: String(req.body.roomLogo || "").trim(),
     description: String(req.body.description || "").trim(),
     visibility,
     tags: normalizeTags(req.body.tags),
@@ -831,6 +1065,8 @@ app.patch("/api/rooms/:roomId", requireAuth, async (req, res) => {
 
   room.name = name;
   room.moduleCode = moduleCode;
+  room.academicTerm = String(req.body.academicTerm ?? room.academicTerm ?? "").trim();
+  room.roomLogo = String(req.body.roomLogo ?? room.roomLogo ?? "").trim();
   room.description = String(req.body.description ?? room.description).trim();
   room.visibility = req.body.visibility === "private" ? "private" : "public";
   room.tags = normalizeTags(req.body.tags ?? room.tags);
@@ -1058,8 +1294,14 @@ app.get("/api/rooms/:roomId/resources", requireAuth, async (req, res) => {
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
+  const includeDeleted = req.query.includeDeleted === "true";
+  const deletedOnly = req.query.deleted === "true";
   const resources = db.resources
-    .filter((resource) => resource.roomId === room.id)
+    .filter((resource) => {
+      if (resource.roomId !== room.id) return false;
+      if (deletedOnly) return Boolean(resource.deletedAt);
+      return includeDeleted || !resource.deletedAt;
+    })
     .map((resource) => resourceDto(db, resource))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 
@@ -1087,6 +1329,12 @@ app.post("/api/rooms/:roomId/resources/url", requireAuth, async (req, res) => {
     title,
     folder,
     url,
+    metadata: buildResourceMetadata({
+      room,
+      title,
+      sourceType: "url",
+      url,
+    }),
     createdAt: new Date().toISOString(),
   };
 
@@ -1108,17 +1356,59 @@ app.post(
       return res.status(400).json({ message: "Choose a file to upload." });
     }
 
+    await ensureRoomResourceFileMetadata(db, room);
+
+    const uploadedPath = safeUploadPath(req.file.filename);
+    const contentHash = await hashUploadedFile(uploadedPath);
+    const existingResource = db.resources.find(
+      (resource) =>
+        resource.roomId === room.id &&
+        resource.type === "file" &&
+        resource.contentHash &&
+        resource.contentHash === contentHash,
+    );
+
+    if (existingResource) {
+      // The new bytes are redundant, so remove only the temporary duplicate upload.
+      fs.rmSync(uploadedPath, { force: true });
+      const wasDeleted = Boolean(existingResource.deletedAt);
+      if (wasDeleted) {
+        // Re-uploading an identical deleted file restores the canonical record
+        // instead of creating a hidden duplicate with the same content hash.
+        existingResource.deletedAt = "";
+        existingResource.folder = normalizeFolder(req.body.folder);
+        existingResource.updatedAt = new Date().toISOString();
+        await writeDb(db);
+      }
+      return res.status(200).json({
+        resource: resourceDto(db, existingResource),
+        deduplicated: true,
+        restored: wasDeleted,
+        message: "This file already exists in the room.",
+      });
+    }
+
+    const title = String(req.body.title || req.file.originalname).trim();
     const resource = {
       id: createId("res"),
       roomId: room.id,
       uploaderId: req.user.id,
       type: "file",
-      title: String(req.body.title || req.file.originalname).trim(),
+      title,
       folder: normalizeFolder(req.body.folder),
       originalName: req.file.originalname,
       storageName: req.file.filename,
       mimeType: req.file.mimetype,
       size: req.file.size,
+      contentHash,
+      metadata: buildResourceMetadata({
+        room,
+        title: req.file.originalname || title,
+        sourceType: "file",
+        mimeType: req.file.mimetype,
+        size: req.file.size,
+        url: `/uploads/${req.file.filename}`,
+      }),
       url: `/uploads/${req.file.filename}`,
       createdAt: new Date().toISOString(),
     };
@@ -1142,6 +1432,48 @@ app.delete("/api/resources/:resourceId", requireAuth, async (req, res) => {
   const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
   if (!room || (room.ownerId !== req.user.id && resource.uploaderId !== req.user.id)) {
     return res.status(403).json({ message: "You cannot delete this resource." });
+  }
+
+  resource.deletedAt = resource.deletedAt || new Date().toISOString();
+  resource.updatedAt = new Date().toISOString();
+  await writeDb(db);
+  res.status(204).end();
+});
+
+app.patch("/api/resources/:resourceId/restore", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const resource = db.resources.find(
+    (candidate) => candidate.id === req.params.resourceId,
+  );
+
+  if (!resource) {
+    return res.status(404).json({ message: "Resource not found." });
+  }
+
+  const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
+  if (!room || (room.ownerId !== req.user.id && resource.uploaderId !== req.user.id)) {
+    return res.status(403).json({ message: "You cannot restore this resource." });
+  }
+
+  resource.deletedAt = "";
+  resource.updatedAt = new Date().toISOString();
+  await writeDb(db);
+  res.json({ resource: resourceDto(db, resource) });
+});
+
+app.delete("/api/resources/:resourceId/permanent", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const resource = db.resources.find(
+    (candidate) => candidate.id === req.params.resourceId,
+  );
+
+  if (!resource) {
+    return res.status(404).json({ message: "Resource not found." });
+  }
+
+  const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
+  if (!room || (room.ownerId !== req.user.id && resource.uploaderId !== req.user.id)) {
+    return res.status(403).json({ message: "You cannot permanently delete this resource." });
   }
 
   if (resource.type === "file" && resource.storageName) {
@@ -1300,7 +1632,9 @@ app.post("/api/rooms/:roomId/buddy/embed", requireAuth, async (req, res) => {
   if (!room) return;
 
   try {
-    res.json(await syncRoomResourcesWithChatbot(db, room, { force: true }));
+    // Manual sync should still respect the corpus fingerprint so Intelligrate
+    // is embedded only when the room's supported files actually changed.
+    res.json(await syncRoomResourcesWithChatbot(db, room));
   } catch (error) {
     console.warn(`[buddy] Resource sync failed for ${room.id}: ${error.message}`);
     res.status(502).json({
@@ -1315,10 +1649,20 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
   if (!room) return;
 
   try {
-    const { messageChain, directResource } = resolveBuddyMessagePayload(db, room, req.body);
+    const { messageChain, directResource, attachedResources } = resolveBuddyMessagePayload(
+      db,
+      room,
+      req.body,
+    );
     await syncRoomResourcesWithChatbot(db, room);
     console.info(
-      `[buddy] Asking room ${room.id} with ${directResource ? directResource.title : "corpus only"}`,
+      `[buddy] Asking room ${room.id} with ${
+        directResource
+          ? directResource.title
+          : attachedResources.length
+            ? `${attachedResources.length} synced attachment(s)`
+            : "corpus only"
+      }`,
     );
     const payload = await askChatbot({
       messageChain,
@@ -1350,7 +1694,11 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
   if (!room) return;
 
   try {
-    const { messageChain, directResource } = resolveBuddyMessagePayload(db, room, req.body);
+    const { messageChain, directResource, attachedResources } = resolveBuddyMessagePayload(
+      db,
+      room,
+      req.body,
+    );
 
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -1371,7 +1719,13 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
     await syncRoomResourcesWithChatbot(db, room);
 
     console.info(
-      `[buddy] Streaming room ${room.id} with ${directResource ? directResource.title : "corpus only"}`,
+      `[buddy] Streaming room ${room.id} with ${
+        directResource
+          ? directResource.title
+          : attachedResources.length
+            ? `${attachedResources.length} synced attachment(s)`
+            : "corpus only"
+      }`,
     );
     const response = await streamChatbot({
       messageChain,
@@ -1529,6 +1883,69 @@ io.on("connection", (socket) => {
       ack?.({ ok: true, message: dto });
     } catch {
       ack?.({ ok: false, message: "Unable to send the message right now." });
+    }
+  });
+
+  socket.on("message:update", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const message = db.messages.find((candidate) => candidate.id === payload?.messageId);
+
+      if (!room || !message || message.roomId !== room.id || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Message not found." });
+        return;
+      }
+
+      if (message.senderId !== socket.user.id) {
+        ack?.({ ok: false, message: "You can only edit your own messages." });
+        return;
+      }
+
+      const body = String(payload?.body || "").trim();
+      if (!body) {
+        ack?.({ ok: false, message: "Message cannot be empty." });
+        return;
+      }
+
+      message.body = body.slice(0, 2000);
+      message.updatedAt = new Date().toISOString();
+      await writeDb(db);
+
+      const dto = messageDto(db, message);
+      io.to(`room:${room.id}`).emit("message:updated", dto);
+      ack?.({ ok: true, message: dto });
+    } catch {
+      ack?.({ ok: false, message: "Unable to edit the message right now." });
+    }
+  });
+
+  socket.on("message:delete", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const message = db.messages.find((candidate) => candidate.id === payload?.messageId);
+
+      if (!room || !message || message.roomId !== room.id || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Message not found." });
+        return;
+      }
+
+      if (message.senderId !== socket.user.id) {
+        ack?.({ ok: false, message: "You can only delete your own messages." });
+        return;
+      }
+
+      db.messages = db.messages.filter((candidate) => candidate.id !== message.id);
+      await writeDb(db);
+
+      io.to(`room:${room.id}`).emit("message:deleted", {
+        id: message.id,
+        roomId: room.id,
+      });
+      ack?.({ ok: true, id: message.id });
+    } catch {
+      ack?.({ ok: false, message: "Unable to delete the message right now." });
     }
   });
 });

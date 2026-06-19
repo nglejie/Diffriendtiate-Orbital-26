@@ -112,10 +112,13 @@ export function formatWeekday(date) {
  * Formats a session timestamp as a local time for the calendar and side panel.
  */
 export function formatTimeOnly(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 /**
