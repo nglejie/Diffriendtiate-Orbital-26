@@ -404,7 +404,7 @@ export const moduleCodeOptions = [
   "CS2100",
   "CS2101",
   "CS2103T",
-  "CS2106",
+  "CP2106",
   "CS2109S",
   "CS3230",
   "CS3243",
@@ -422,12 +422,14 @@ export const moduleCodeOptions = [
 export const emptyRoomForm = {
   name: "",
   moduleCode: "",
+  academicTerm: "",
   description: "",
   visibility: "public",
   password: "",
   tags: "",
   theme: "twilight",
   background: "aurora",
+  roomLogo: "",
 };
 
 export function getTheme(themeId) {

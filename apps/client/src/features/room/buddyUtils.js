@@ -465,13 +465,19 @@ export function formatBuddyToolEvent(rawEvent, options = {}) {
           label = query ? `Searching room resources for "${query}"` : "Searching room resources";
           summary = "Searching room resources";
         } else if (/no relevant documents/i.test(result)) {
-          label = "No relevant room resources were found";
+          label = query
+            ? `No relevant room resources were found for "${query}"`
+            : "No relevant room resources were found";
           summary = "No matching room resources";
         } else if (sourceNames.length) {
-          label = `Found ${sourceNames.length} relevant room source${sourceNames.length === 1 ? "" : "s"}: ${sourceNames.join(", ")}`;
+          label = query
+            ? `Found ${sourceNames.length} relevant room source${sourceNames.length === 1 ? "" : "s"} for "${query}": ${sourceNames.join(", ")}`
+            : `Found ${sourceNames.length} relevant room source${sourceNames.length === 1 ? "" : "s"}: ${sourceNames.join(", ")}`;
           summary = `Found ${sourceNames.length} room source${sourceNames.length === 1 ? "" : "s"}`;
         } else {
-          label = "Finished searching room resources";
+          label = query
+            ? `Finished searching room resources for "${query}"`
+            : "Finished searching room resources";
           summary = "Searched room resources";
         }
       }
@@ -488,7 +494,7 @@ export function formatBuddyToolEvent(rawEvent, options = {}) {
           label = fileName
             ? `Reading the uploaded document: ${fileName}`
             : "Reading the uploaded document";
-          if (reason) label += ` for ${reason}`;
+          if (reason) label += ` to ${reason}`;
           summary = "Reading uploaded document";
         } else {
           label = fileName
@@ -512,8 +518,13 @@ export function formatBuddyToolEvent(rawEvent, options = {}) {
           : getToolDisplayName(toolName);
       }
 
+      // Include the display label in the timeline identity. Some chatbot streams
+      // reuse the same tool id across multiple calls, so id+status alone can
+      // accidentally replace earlier searches with later ones.
+      const displayIdentity = compactBuddyText(label || summary).slice(0, 180);
+
       return createBuddyThoughtItem("tool", label, {
-        id: `${toolId}:${status}`,
+        id: `${toolId}:${status}:${displayIdentity}`,
         tool: toolName,
         status,
         summary,

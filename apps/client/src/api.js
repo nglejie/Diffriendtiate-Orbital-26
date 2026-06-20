@@ -150,7 +150,13 @@ export const api = {
       method: "DELETE",
     }),
   getMessages: (roomId) => request(`/api/rooms/${roomId}/messages`),
-  getResources: (roomId) => request(`/api/rooms/${roomId}/resources`),
+  getResources: (roomId, options = {}) => {
+    const params = new URLSearchParams();
+    if (options.includeDeleted) params.set("includeDeleted", "true");
+    if (options.deletedOnly) params.set("deleted", "true");
+    const query = params.toString();
+    return request(`/api/rooms/${roomId}/resources${query ? `?${query}` : ""}`);
+  },
   addUrlResource: (roomId, body) =>
     request(`/api/rooms/${roomId}/resources/url`, { method: "POST", body }),
   uploadFileResource: (roomId, formData) =>
@@ -160,6 +166,10 @@ export const api = {
     }),
   deleteResource: (resourceId) =>
     request(`/api/resources/${resourceId}`, { method: "DELETE" }),
+  restoreResource: (resourceId) =>
+    request(`/api/resources/${resourceId}/restore`, { method: "PATCH" }),
+  deleteResourcePermanently: (resourceId) =>
+    request(`/api/resources/${resourceId}/permanent`, { method: "DELETE" }),
   getBuddyHealth: (roomId) => request(`/api/rooms/${roomId}/buddy/health`),
   getBuddyThreads: (roomId) => request(`/api/rooms/${roomId}/buddy/threads`),
   createBuddyThread: (roomId, body) =>

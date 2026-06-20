@@ -102,7 +102,6 @@ function App() {
     return (
       <main className="app-shell">
         <Dashboard
-          user={user}
           onLogout={handleLogout}
           onOpenRoom={(roomId) => navigate(`/rooms/${roomId}`)}
         />

@@ -42,6 +42,10 @@ function normalizeDb(db) {
     users: db.users || [],
     rooms: (db.rooms || []).map((room) => ({
       ...room,
+      academicTerm: room.academicTerm || "",
+      roomLogo: room.roomLogo || "",
+      resourceSyncFingerprint: room.resourceSyncFingerprint || "",
+      resourceSyncUpdatedAt: room.resourceSyncUpdatedAt || "",
       channels: Array.isArray(room.channels) && room.channels.length
         ? room.channels
         : ["general"],
@@ -54,6 +58,12 @@ function normalizeDb(db) {
     resources: (db.resources || []).map((resource) => ({
       ...resource,
       folder: resource.folder || "General",
+      contentHash: resource.contentHash || "",
+      deletedAt: resource.deletedAt || "",
+      metadata:
+        resource.metadata && typeof resource.metadata === "object" && !Array.isArray(resource.metadata)
+          ? resource.metadata
+          : {},
     })),
     sessions: db.sessions || [],
     buddyThreads: (db.buddyThreads || []).map((thread) => ({
@@ -105,6 +115,8 @@ async function initPostgres() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       module_code TEXT NOT NULL,
+      academic_term TEXT NOT NULL DEFAULT '',
+      room_logo TEXT NOT NULL DEFAULT '',
       description TEXT NOT NULL DEFAULT '',
       visibility TEXT NOT NULL CHECK (visibility IN ('public', 'private')),
       tags TEXT[] NOT NULL DEFAULT '{}',
@@ -115,7 +127,9 @@ async function initPostgres() {
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       invite_code TEXT UNIQUE NOT NULL,
       created_at TIMESTAMPTZ NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL
+      updated_at TIMESTAMPTZ NOT NULL,
+      resource_sync_fingerprint TEXT NOT NULL DEFAULT '',
+      resource_sync_updated_at TIMESTAMPTZ
     );
 
     CREATE TABLE IF NOT EXISTS room_members (
@@ -146,7 +160,10 @@ async function initPostgres() {
       storage_name TEXT,
       mime_type TEXT,
       size INTEGER,
+      content_hash TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       url TEXT NOT NULL,
+      deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL
     );
 
@@ -187,12 +204,32 @@ async function initPostgres() {
 
   await pool.query(`
     ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS academic_term TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS room_logo TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
       ADD COLUMN IF NOT EXISTS password_hash TEXT
   `);
 
   await pool.query(`
     ALTER TABLE rooms
       ADD COLUMN IF NOT EXISTS channels TEXT[] NOT NULL DEFAULT '{general}'
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS resource_sync_fingerprint TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS resource_sync_updated_at TIMESTAMPTZ
   `);
 
   await pool.query(`
@@ -208,6 +245,28 @@ async function initPostgres() {
   await pool.query(`
     ALTER TABLE resources
       ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT 'General'
+  `);
+
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ
+  `);
+
+  // Existing databases need the content_hash column before Postgres can parse this index.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_resources_room_hash
+      ON resources(room_id, content_hash)
+      WHERE content_hash <> ''
   `);
 }
 
@@ -270,6 +329,8 @@ export async function readDb() {
         r.id,
         r.name,
         r.module_code AS "moduleCode",
+        r.academic_term AS "academicTerm",
+        r.room_logo AS "roomLogo",
         r.description,
         r.visibility,
         r.tags,
@@ -281,6 +342,8 @@ export async function readDb() {
         r.invite_code AS "inviteCode",
         r.created_at AS "createdAt",
         r.updated_at AS "updatedAt",
+        r.resource_sync_fingerprint AS "resourceSyncFingerprint",
+        r.resource_sync_updated_at AS "resourceSyncUpdatedAt",
         COALESCE(
           ARRAY_AGG(rm.user_id ORDER BY rm.joined_at)
             FILTER (WHERE rm.user_id IS NOT NULL),
@@ -315,7 +378,10 @@ export async function readDb() {
         storage_name AS "storageName",
         mime_type AS "mimeType",
         size,
+        content_hash AS "contentHash",
+        metadata,
         url,
+        deleted_at AS "deletedAt",
         created_at AS "createdAt"
       FROM resources
       ORDER BY created_at ASC
@@ -358,6 +424,7 @@ export async function readDb() {
       memberIds: room.memberIds || [],
       createdAt: toIso(room.createdAt),
       updatedAt: toIso(room.updatedAt),
+      resourceSyncUpdatedAt: toIso(room.resourceSyncUpdatedAt),
     })),
     messages: messages.rows.map((message) => ({
       ...message,
@@ -366,6 +433,7 @@ export async function readDb() {
     resources: resources.rows.map((resource) => ({
       ...resource,
       createdAt: toIso(resource.createdAt),
+      deletedAt: toIso(resource.deletedAt),
     })),
     sessions: sessions.rows.map((session) => ({
       ...session,
@@ -424,15 +492,21 @@ async function writePostgresDb(db) {
       await client.query(
         `
           INSERT INTO rooms (
-            id, name, module_code, description, visibility, tags, theme,
-            background, channels, password_hash, owner_id, invite_code, created_at, updated_at
+            id, name, module_code, academic_term, room_logo, description, visibility, tags, theme,
+            background, channels, password_hash, owner_id, invite_code, created_at, updated_at,
+            resource_sync_fingerprint, resource_sync_updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18
+          )
         `,
         [
           room.id,
           room.name,
           room.moduleCode,
+          room.academicTerm || "",
+          room.roomLogo || "",
           room.description || "",
           room.visibility,
           room.tags || [],
@@ -444,6 +518,8 @@ async function writePostgresDb(db) {
           room.inviteCode,
           room.createdAt,
           room.updatedAt,
+          room.resourceSyncFingerprint || "",
+          room.resourceSyncUpdatedAt || null,
         ],
       );
 
@@ -482,9 +558,9 @@ async function writePostgresDb(db) {
         `
           INSERT INTO resources (
             id, room_id, uploader_id, type, title, folder, original_name, storage_name,
-            mime_type, size, url, created_at
+            mime_type, size, content_hash, metadata, url, deleted_at, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         `,
         [
           resource.id,
@@ -497,7 +573,10 @@ async function writePostgresDb(db) {
           resource.storageName || null,
           resource.mimeType || null,
           resource.size || null,
+          resource.contentHash || "",
+          JSON.stringify(resource.metadata || {}),
           resource.url,
+          resource.deletedAt || null,
           resource.createdAt,
         ],
       );
