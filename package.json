@@ -12,9 +12,19 @@
     "build": "npm run build --workspace @diffriendtiate/client",
     "preview": "npm run preview --workspace @diffriendtiate/client",
     "start": "npm run start --workspace @diffriendtiate/server",
-    "check": "npm run check --workspace @diffriendtiate/server && npm run build --workspace @diffriendtiate/client"
+    "check": "npm run check --workspace @diffriendtiate/server && npm run build --workspace @diffriendtiate/client",
+    "qa": "npm run check && npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test:unit": "npm run test:run --workspace @diffriendtiate/client",
+    "test:integration": "playwright test --config tests/playwright.config.js --project=integration",
+    "test:e2e": "playwright test --config tests/playwright.config.js --project=e2e-chromium",
+    "test:performance": "node tests/performance/run-k6.mjs",
+    "test:security": "npm run test:security:audit && npm run test:security:zap",
+    "test:security:audit": "npm audit --omit=dev --workspaces --audit-level=high",
+    "test:security:zap": "node tests/security/run-zap-baseline.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "concurrently": "^10.0.1"
   }
 }
