@@ -102,6 +102,7 @@ import {
   backgroundPresets,
   createCustomBackgroundValue,
   createCustomImageBackgroundValue,
+  defaultCustomBackgroundColors,
   getBackground,
   getTheme,
   moduleCodeOptions,
@@ -1175,7 +1176,9 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
   return (
     <div
-      className={`room-workspace ${contextOpen ? "context-open" : "context-collapsed"}`}
+      className={`room-workspace ${contextOpen ? "context-open" : "context-collapsed"} ${
+        activeTab === "focus" ? "home-active" : ""
+      }`}
       style={{
         "--theme-a": theme.colors[0],
         "--theme-b": theme.colors[1],
@@ -2837,7 +2840,7 @@ function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
   const [activePage, setActivePage] = useState("profile");
   const [form, setForm] = useState(() => createRoomSettingsForm(room));
   const [customBackground, setCustomBackground] = useState({
-    colors: ["#100519", "#7b3bb2", "#ff78a6"],
+    colors: defaultCustomBackgroundColors,
   });
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -3308,7 +3311,7 @@ function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
                 <p>Messages, resources, uploaded files, and sessions tied to this room will be removed.</p>
               </div>
               <button
-                className="danger-button"
+                className="danger-button compact"
                 disabled={deleting}
                 onClick={() => setDeleteConfirmOpen(true)}
                 type="button"

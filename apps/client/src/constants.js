@@ -1,63 +1,68 @@
+import { ROSELY_PALETTE, ROSE_PINE_PALETTE } from "./theme.js";
+
+const rosely = ROSELY_PALETTE;
+const rosePine = ROSE_PINE_PALETTE;
+
 export const themePresets = [
   {
     id: "twilight",
-    name: "Twilight Room",
-    description: "Deep violet room lighting with a rose accent.",
-    colors: ["#1a0628", "#7b3bb2", "#ff78a6"],
+    name: "Rose Pine",
+    description: "The main dark palette with Love and Rose accents.",
+    colors: [rosePine.base, rosePine.love, rosePine.rose],
   },
   {
     id: "rose",
-    name: "Rose Archive",
-    description: "Soft parchment panels with warm rose trims.",
-    colors: ["#351244", "#c04d91", "#ffd3bd"],
+    name: "Rose Pine Bloom",
+    description: "Rose, gold, and overlay tones from the dark palette.",
+    colors: [rosePine.overlay, rosePine.rose, rosePine.gold],
   },
   {
     id: "sunset",
-    name: "Sunset Quest",
-    description: "A punchier coral palette for task-heavy groups.",
-    colors: ["#3a1751", "#f06f8f", "#ffb86b"],
+    name: "Rosely Warmth",
+    description: "Warm Rosely pink and yellow highlights.",
+    colors: [rosely.sugarSwizzle, rosely.morningGlory, rosely.meadowlark],
   },
   {
     id: "starlight",
-    name: "Starlight Notes",
-    description: "Cool lavender highlights with gold note accents.",
-    colors: ["#22103c", "#9d7bff", "#ffe88a"],
+    name: "Rosely Orchid",
+    description: "Radiant orchid with soft lavender support.",
+    colors: [rosely.blackBeauty, rosely.radiantOrchid, rosely.lavenderFog],
   },
   {
     id: "meadow",
-    name: "Meadow Focus",
-    description: "Gentler greens and peach tones for calm sessions.",
-    colors: ["#10251f", "#60b48a", "#ffd8a8"],
+    name: "Rosely Mauve Gold",
+    description: "Rosely mauve with warm gold emphasis.",
+    colors: [rosely.sugarSwizzle, rosely.mauve, rosely.warmGold],
   },
   {
     id: "midnight",
-    name: "Midnight Desk",
-    description: "Quiet dark surfaces for late-night study rooms.",
-    colors: ["#0d111c", "#5169c8", "#9de7ff"],
+    name: "Rose Pine Love",
+    description: "Quiet Rose Pine surfaces with Love and Rose accents.",
+    colors: [rosePine.base, rosePine.love, rosePine.rose],
   },
   {
     id: "sakura",
-    name: "Sakura",
-    description: "Light pink highlights for softer study rooms.",
-    colors: ["#271827", "#ff8ab3", "#ffe0ed"],
+    name: "Rosely Quartz",
+    description: "Rose Quartz and Barely Pink for softer rooms.",
+    colors: [rosely.sugarSwizzle, rosely.roseQuartz, rosely.barelyPink],
   },
   {
     id: "ocean",
-    name: "Ocean",
-    description: "Blue-green tones for long focus sessions.",
-    colors: ["#071a2b", "#1c8fb8", "#9be7ff"],
+    name: "Rosely Mauve",
+    description: "A lighter mauve and lupine Rosely focus palette.",
+    colors: [rosely.sugarSwizzle, rosely.mauve, rosely.lupine],
   },
   {
     id: "ember",
-    name: "Ember",
-    description: "Warm firelit accents for late-night sprints.",
-    colors: ["#22100d", "#c7483a", "#ffc06b"],
+    name: "Rose Pine Gold",
+    description: "Gold and love accents over Rose Pine surfaces.",
+    colors: [rosePine.surface, rosePine.gold, rosePine.love],
   },
   {
     id: "mono",
-    name: "Monochrome",
-    description: "Minimal black, grey, and white surfaces.",
-    colors: ["#0c0d10", "#595f6b", "#f4f4f5"],
+    name: "Rosely Greys",
+    description: "The Rosely greyscale range for a calmer room.",
+    colors: [rosely.blackBeauty, rosely.graniteGray, rosely.sugarSwizzle],
   },
 ];
 
@@ -68,8 +73,8 @@ const gradientBackgroundPresets = [
     type: "Gradient",
     environment: "Dream",
     color: "Purple",
-    description: "A dreamy gradient space for general study groups.",
-    css: "radial-gradient(circle at 18% 16%, rgba(255, 120, 166, 0.44), transparent 34%), radial-gradient(circle at 85% 18%, rgba(157, 123, 255, 0.32), transparent 30%), linear-gradient(135deg, #100519 0%, #271039 48%, #6c2a75 100%)",
+    description: "A Rose Pine gradient space for general study groups.",
+    css: "radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--rose-pine-love) 34%, transparent), transparent 34%), radial-gradient(circle at 85% 18%, color-mix(in srgb, var(--rose-pine-rose) 28%, transparent), transparent 30%), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 48%, var(--rose-pine-overlay) 100%)",
   },
   {
     id: "paper",
@@ -77,26 +82,26 @@ const gradientBackgroundPresets = [
     type: "Gradient",
     environment: "Minimal",
     color: "Light",
-    description: "Clean parchment room for content-heavy modules.",
-    css: "linear-gradient(135deg, #fff5ed 0%, #ffe5f0 50%, #ead4ff 120%)",
+    description: "Clean Rosely room for content-heavy modules.",
+    css: "linear-gradient(135deg, var(--rosely-3) 0%, var(--rosely-7) 50%, var(--rosely-b) 120%)",
   },
   {
     id: "night",
     name: "Night Desk",
     type: "Gradient",
     environment: "Night",
-    color: "Blue",
-    description: "Minimal dark workspace with crisp blue highlights.",
-    css: "radial-gradient(circle at 20% 18%, rgba(81, 105, 200, 0.42), transparent 30%), linear-gradient(135deg, #090d16 0%, #141b2d 52%, #283a68 100%)",
+    color: "Pink",
+    description: "Minimal Rose Pine workspace with Love highlights.",
+    css: "radial-gradient(circle at 20% 18%, color-mix(in srgb, var(--rose-pine-love) 28%, transparent), transparent 30%), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 52%, var(--rose-pine-overlay) 100%)",
   },
   {
     id: "mint",
-    name: "Mint Frost",
+    name: "Mauve Frost",
     type: "Gradient",
     environment: "Minimal",
-    color: "Green",
-    description: "A crisp mint gradient for a lighter room.",
-    css: "radial-gradient(circle at 28% 22%, rgba(193, 255, 228, 0.65), transparent 13rem), linear-gradient(135deg, #eafff6 0%, #bdebdc 48%, #78aee2 120%)",
+    color: "Purple",
+    description: "A crisp Rosely mauve gradient for a lighter room.",
+    css: "radial-gradient(circle at 28% 22%, color-mix(in srgb, var(--rosely-mauve) 24%, transparent), transparent 13rem), linear-gradient(135deg, var(--rosely-3) 0%, var(--rosely-7) 48%, var(--rosely-a) 120%)",
   },
   {
     id: "peach",
@@ -104,17 +109,17 @@ const gradientBackgroundPresets = [
     type: "Gradient",
     environment: "Dream",
     color: "Warm",
-    description: "Soft peach and pink tones for friendly groups.",
-    css: "radial-gradient(circle at 35% 36%, rgba(255, 195, 120, 0.68), transparent 10rem), linear-gradient(135deg, #ffe8d6 0%, #ffb5ce 46%, #9f7cff 120%)",
+    description: "Soft Rosely pink and yellow tones for friendly groups.",
+    css: "radial-gradient(circle at 35% 36%, color-mix(in srgb, var(--rosely-f) 36%, transparent), transparent 10rem), linear-gradient(135deg, var(--rosely-3) 0%, var(--rosely-5) 46%, var(--rosely-a) 120%)",
   },
   {
     id: "matrix",
-    name: "Matrix",
+    name: "Love Grid",
     type: "Gradient",
     environment: "Focus",
-    color: "Green",
-    description: "Dark green terminal-inspired focus mode.",
-    css: "linear-gradient(90deg, rgba(87, 255, 154, 0.08) 1px, transparent 1px), linear-gradient(180deg, rgba(87, 255, 154, 0.08) 1px, transparent 1px), linear-gradient(135deg, #04110b 0%, #0c2518 62%, #10452b 100%)",
+    color: "Pink",
+    description: "Rose Pine Love grid lines for a focused workspace.",
+    css: "linear-gradient(90deg, color-mix(in srgb, var(--rose-pine-love) 10%, transparent) 1px, transparent 1px), linear-gradient(180deg, color-mix(in srgb, var(--rose-pine-love) 10%, transparent) 1px, transparent 1px), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 62%, var(--rose-pine-overlay) 100%)",
   },
 ];
 
@@ -325,36 +330,36 @@ const legacyBackgroundPresets = [
     name: "Moon Valley",
     type: "Scene",
     environment: "Night",
-    color: "Blue",
+    color: "Purple",
     description: "Layered night hills inspired by quiet virtual rooms.",
-    css: "radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.6), transparent 2rem), radial-gradient(circle at 20% 28%, rgba(127, 151, 255, 0.28), transparent 18rem), linear-gradient(180deg, #060b1c 0%, #17254c 48%, #0a1025 49%, #050712 100%)",
+    css: "radial-gradient(circle at 50% 10%, color-mix(in srgb, var(--rose-pine-rose) 48%, transparent), transparent 2rem), radial-gradient(circle at 20% 28%, color-mix(in srgb, var(--rose-pine-love) 22%, transparent), transparent 18rem), linear-gradient(180deg, var(--rose-pine-base) 0%, var(--rose-pine-overlay) 48%, var(--rose-pine-surface) 49%, var(--rose-pine-base) 100%)",
   },
   {
     id: "rain-city",
     name: "Rain City",
     type: "Scene",
     environment: "Rain",
-    color: "Blue",
+    color: "Pink",
     description: "A calm rainy city mood for quiet revision.",
-    css: "linear-gradient(90deg, rgba(255, 111, 74, 0.24) 0 2%, transparent 2% 18%, rgba(255, 111, 74, 0.18) 18% 21%, transparent 21%), radial-gradient(circle at 75% 12%, rgba(157, 231, 255, 0.28), transparent 32%), linear-gradient(135deg, #101724 0%, #26364b 52%, #5a6c7e 100%)",
+    css: "linear-gradient(90deg, color-mix(in srgb, var(--rose-pine-love) 24%, transparent) 0 2%, transparent 2% 18%, color-mix(in srgb, var(--rose-pine-love) 18%, transparent) 18% 21%, transparent 21%), radial-gradient(circle at 75% 12%, color-mix(in srgb, var(--rose-pine-gold) 18%, transparent), transparent 32%), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 52%, var(--rose-pine-overlay) 100%)",
   },
   {
     id: "waterfall",
     name: "Waterfall",
     type: "Scene",
     environment: "Nature",
-    color: "Blue",
+    color: "Pink",
     description: "Cool water tones with soft mountain mist.",
-    css: "radial-gradient(circle at 58% 26%, rgba(235, 255, 255, 0.6), transparent 10rem), radial-gradient(circle at 25% 22%, rgba(255, 112, 112, 0.22), transparent 9rem), linear-gradient(135deg, #102233 0%, #5d8495 50%, #d9eef1 100%)",
+    css: "radial-gradient(circle at 58% 26%, color-mix(in srgb, var(--rosely-5) 36%, var(--rosely-3)), transparent 10rem), radial-gradient(circle at 25% 22%, color-mix(in srgb, var(--rosely-4) 24%, transparent), transparent 9rem), linear-gradient(135deg, var(--rosely-3) 0%, var(--rosely-7) 50%, var(--rosely-a) 100%)",
   },
   {
     id: "forest-path",
     name: "Forest Path",
     type: "Scene",
     environment: "Nature",
-    color: "Green",
-    description: "Fresh green backdrop for relaxed collaboration.",
-    css: "radial-gradient(circle at 24% 14%, rgba(223, 255, 154, 0.36), transparent 30%), radial-gradient(circle at 78% 34%, rgba(255, 230, 156, 0.24), transparent 16rem), linear-gradient(135deg, #10251f 0%, #23533f 55%, #ffcb9a 125%)",
+    color: "Warm",
+    description: "Warm Rosely backdrop for relaxed collaboration.",
+    css: "radial-gradient(circle at 24% 14%, color-mix(in srgb, var(--rosely-warm-gold) 24%, transparent), transparent 30%), radial-gradient(circle at 78% 34%, color-mix(in srgb, var(--rosely-mauve) 18%, transparent), transparent 16rem), linear-gradient(135deg, var(--rosely-3) 0%, var(--rosely-7) 55%, var(--rosely-warm-gold) 125%)",
   },
   {
     id: "library",
@@ -363,7 +368,7 @@ const legacyBackgroundPresets = [
     environment: "Interior",
     color: "Warm",
     description: "Warm, paper-like study space with soft shelves.",
-    css: "radial-gradient(circle at 20% 15%, rgba(255, 232, 138, 0.34), transparent 30%), linear-gradient(135deg, #2b1737 0%, #70435e 48%, #ffd3bd 120%)",
+    css: "radial-gradient(circle at 20% 15%, color-mix(in srgb, var(--rosely-f) 34%, transparent), transparent 30%), linear-gradient(135deg, var(--rosely-3) 0%, var(--rosely-8) 48%, var(--rosely-5) 120%)",
   },
   {
     id: "cafe",
@@ -372,7 +377,7 @@ const legacyBackgroundPresets = [
     environment: "Interior",
     color: "Warm",
     description: "Warm cafe-like lighting for casual group sessions.",
-    css: "radial-gradient(circle at 22% 22%, rgba(255, 193, 116, 0.48), transparent 13rem), radial-gradient(circle at 80% 18%, rgba(255, 91, 120, 0.24), transparent 12rem), linear-gradient(135deg, #21110f 0%, #70422f 58%, #f0a05d 130%)",
+    css: "radial-gradient(circle at 22% 22%, color-mix(in srgb, var(--rose-pine-gold) 38%, transparent), transparent 13rem), radial-gradient(circle at 80% 18%, color-mix(in srgb, var(--rose-pine-love) 24%, transparent), transparent 12rem), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 58%, var(--rose-pine-gold) 130%)",
   },
   {
     id: "lofi",
@@ -381,7 +386,7 @@ const legacyBackgroundPresets = [
     environment: "Interior",
     color: "Purple",
     description: "Muted neon desk ambience for late work.",
-    css: "radial-gradient(circle at 72% 18%, rgba(255, 114, 166, 0.36), transparent 15rem), radial-gradient(circle at 20% 70%, rgba(74, 189, 255, 0.24), transparent 14rem), linear-gradient(135deg, #120f1d 0%, #30214a 58%, #50304e 100%)",
+    css: "radial-gradient(circle at 72% 18%, color-mix(in srgb, var(--rose-pine-love) 36%, transparent), transparent 15rem), radial-gradient(circle at 20% 70%, color-mix(in srgb, var(--rose-pine-rose) 22%, transparent), transparent 14rem), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 58%, var(--rose-pine-overlay) 100%)",
   },
   {
     id: "cosmos",
@@ -390,7 +395,7 @@ const legacyBackgroundPresets = [
     environment: "Night",
     color: "Purple",
     description: "A starry study sky for imaginative rooms.",
-    css: "radial-gradient(circle at 14% 18%, rgba(255,255,255,0.8) 0 1px, transparent 2px), radial-gradient(circle at 70% 22%, rgba(255,255,255,0.7) 0 1px, transparent 2px), radial-gradient(circle at 44% 60%, rgba(255, 118, 184, 0.22), transparent 18rem), linear-gradient(135deg, #020617 0%, #181437 54%, #421f58 100%)",
+    css: "radial-gradient(circle at 14% 18%, color-mix(in srgb, var(--rose-pine-text) 80%, transparent) 0 1px, transparent 2px), radial-gradient(circle at 70% 22%, color-mix(in srgb, var(--rose-pine-text) 70%, transparent) 0 1px, transparent 2px), radial-gradient(circle at 44% 60%, color-mix(in srgb, var(--rose-pine-love) 22%, transparent), transparent 18rem), linear-gradient(135deg, var(--rose-pine-base) 0%, var(--rose-pine-surface) 54%, var(--rose-pine-overlay) 100%)",
   },
 ];
 
@@ -417,6 +422,12 @@ export const moduleCodeOptions = [
   "ST2334",
   "BT2102",
   "GER1000",
+];
+
+export const defaultCustomBackgroundColors = [
+  rosePine.base,
+  rosePine.rose,
+  rosePine.love,
 ];
 
 export const emptyRoomForm = {
@@ -473,7 +484,7 @@ export function getBackground(backgroundId) {
         decodeURIComponent(String(backgroundId).replace(/^custom:/, "")),
       );
       const colors = Array.isArray(payload.colors) ? payload.colors : [];
-      const [a = "#0f1117", b = "#7c5cff", c = "#ef5d93"] = colors;
+      const [a = rosePine.base, b = rosePine.rose, c = rosePine.love] = colors;
       return {
         id: backgroundId,
         name: payload.name || "Custom Theme",

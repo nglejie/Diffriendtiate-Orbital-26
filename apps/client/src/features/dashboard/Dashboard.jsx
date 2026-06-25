@@ -9,7 +9,7 @@ import { createAcademicTermOptions, normaliseTags } from "./dashboardUtils.js";
 import { emptyRoomForm } from "../../constants.js";
 
 /** Main room browser for joined rooms and public rooms the user can explore. */
-function Dashboard({ onLogout, onOpenRoom }) {
+function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
   const academicTermOptions = useMemo(() => createAcademicTermOptions(), []);
   const [rooms, setRooms] = useState([]);
   const [form, setForm] = useState(emptyRoomForm);
@@ -167,7 +167,12 @@ function Dashboard({ onLogout, onOpenRoom }) {
 
   return (
     <>
-      <TopBar onCreateRoom={openCreateModal} onLogout={onLogout} />
+      <TopBar
+        onCreateRoom={openCreateModal}
+        onLogout={onLogout}
+        onThemeChange={onThemeChange}
+        themeMode={themeMode}
+      />
       <div className="home-page">
       <section className="home-controls" aria-label="Room browser">
         <div className="scope-tabs" role="tablist" aria-label="Room lists">
