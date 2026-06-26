@@ -12,9 +12,24 @@
     "build": "npm run build --workspace @diffriendtiate/client",
     "preview": "npm run preview --workspace @diffriendtiate/client",
     "start": "npm run start --workspace @diffriendtiate/server",
-    "check": "npm run check --workspace @diffriendtiate/server && npm run build --workspace @diffriendtiate/client"
+    "check": "npm run check --workspace @diffriendtiate/server && npm run build --workspace @diffriendtiate/client",
+    "test:build": "node apps/tests/scripts/build-reproducibility.mjs",
+    "test:unit": "vitest run --config apps/tests/vitest.config.mjs apps/tests/unit apps/tests/components",
+    "test:integration": "vitest run --config apps/tests/vitest.node.config.mjs apps/tests/integration",
+    "test:ai": "vitest run --config apps/tests/vitest.node.config.mjs apps/tests/ai",
+    "test:performance": "vitest run --config apps/tests/vitest.node.config.mjs apps/tests/performance",
+    "test:security": "vitest run --config apps/tests/vitest.node.config.mjs apps/tests/security",
+    "test:e2e": "playwright test --config apps/tests/playwright.config.mjs",
+    "test:app": "npm run test:build && npm run test:unit && npm run test:integration && npm run test:ai && npm run test:performance && npm run test:security && npm run test:e2e",
+    "test:evidence": "node apps/tests/scripts/run-with-evidence.mjs"
   },
   "devDependencies": {
-    "concurrently": "^10.0.1"
+    "@playwright/test": "^1.61.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "concurrently": "^10.0.1",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.9"
   }
 }
