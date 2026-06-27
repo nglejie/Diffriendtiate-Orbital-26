@@ -17,6 +17,11 @@ apps/client/dist
 apps/server/data/*.json
 apps/server/uploads
 apps/tests/.tmp/
+apps/client/coverage
+playwright-report
+test-results
+tests/security/reports
+tests/performance/results
 docs/
 tools/
 chroma_db
