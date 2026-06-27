@@ -17,6 +17,6 @@ test.describe("authentication journey", () => {
 
     await expect(page.getByRole("tab", { name: /my rooms/i })).toBeVisible();
     await expect(page.getByRole("tab", { name: /explore rooms/i })).toBeVisible();
-    await expect(page.getByLabel(/create a room/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /create room/i })).toBeVisible();
   });
 });

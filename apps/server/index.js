@@ -1096,6 +1096,10 @@ app.post("/api/rooms/:roomId/channels", requireAuth, async (req, res) => {
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
+  if (room.ownerId !== req.user.id) {
+    return res.status(403).json({ message: "Only the room owner can manage channels." });
+  }
+
   const channel = normalizeChannel(req.body.name);
   room.channels = normalizeChannels([...(room.channels || []), channel]);
   room.updatedAt = new Date().toISOString();
@@ -1109,6 +1113,10 @@ app.patch("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res) 
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
+
+  if (room.ownerId !== req.user.id) {
+    return res.status(403).json({ message: "Only the room owner can manage channels." });
+  }
 
   const currentChannel = normalizeChannel(req.params.channel);
   const nextChannel = normalizeChannel(req.body.name);
@@ -1146,6 +1154,10 @@ app.delete("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res)
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
+
+  if (room.ownerId !== req.user.id) {
+    return res.status(403).json({ message: "Only the room owner can manage channels." });
+  }
 
   const channel = normalizeChannel(req.params.channel);
   const channels = normalizeChannels(room.channels);

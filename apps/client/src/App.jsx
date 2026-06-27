@@ -3,6 +3,7 @@ import { api, getAuthToken, setAuthToken } from "./api.js";
 import AuthView from "./features/auth/AuthView.jsx";
 import Dashboard from "./features/dashboard/Dashboard.jsx";
 import RoomView from "./features/room/RoomView.jsx";
+import { applyThemeMode, readStoredThemeMode, storeThemeMode } from "./theme.js";
 
 /** Reads the current hash route without introducing a routing dependency yet. */
 function parseRoute() {
@@ -29,6 +30,12 @@ function App() {
   const [user, setUser] = useState(null);
   const [route, setRoute] = useState(parseRoute);
   const [booting, setBooting] = useState(Boolean(token));
+  const [themeMode, setThemeMode] = useState(readStoredThemeMode);
+
+  useEffect(() => {
+    applyThemeMode(themeMode);
+    storeThemeMode(themeMode);
+  }, [themeMode]);
 
   useEffect(() => {
     const onHashChange = () => setRoute(parseRoute());
@@ -104,6 +111,8 @@ function App() {
         <Dashboard
           onLogout={handleLogout}
           onOpenRoom={(roomId) => navigate(`/rooms/${roomId}`)}
+          onThemeChange={setThemeMode}
+          themeMode={themeMode}
         />
       </main>
     );

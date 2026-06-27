@@ -30,6 +30,7 @@ import {
   backgroundPresets,
   createCustomBackgroundValue,
   createCustomImageBackgroundValue,
+  defaultCustomBackgroundColors,
   getBackground,
   getTheme,
   moduleCodeOptions,
@@ -214,7 +215,7 @@ function CreateRoomModal({
 }) {
   const [step, setStep] = useState("start");
   const [customBackground, setCustomBackground] = useState({
-    colors: ["#100519", "#7b3bb2", "#ff78a6"],
+    colors: defaultCustomBackgroundColors,
   });
   const [backgroundFilters, setBackgroundFilters] = useState({
     type: "All",
