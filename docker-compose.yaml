@@ -78,8 +78,8 @@ services:
     build:
       context: ./services/server-chatbot
       dockerfile: Dockerfile
-    ports:
-      - "5000:5000" # Keep for DEV Purposes (remove when deploying)
+    # ports:
+      # - "5000:5000" # Keep for DEV Purposes (remove when deploying)
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}

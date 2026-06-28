@@ -79,23 +79,28 @@ async def embed_documents(body: EmbedRequest):
     Returns:
         EmbedResponse: contains the result of the operation, files that succeeded, files that failed, and total chunks embeded
     """
-    print(f"---Embed API for {body.room_id}")
-    if not body.room_id:
-        raise HTTPException(status_code=400, detail="room_id is required")
-    if not body.urls:
-        raise HTTPException(status_code=400, detail="At least one url is required")
-    
-    results = await store.embed_room_documents(
-        room_id = body.room_id,
-        urls = body.urls
-    )
-    
-    return EmbedResponse(
-        result = len(results["failed"]) == 0, # True if no failures
-        success = results["success"],
-        failed = results["failed"],
-        total_chunks = results["total_chunks"],
-    )
+    try:
+        print(f"---Embed API for {body.room_id}")
+        if not body.room_id:
+            raise HTTPException(status_code=400, detail="room_id is required")
+        if not body.urls:
+            raise HTTPException(status_code=400, detail="At least one url is required")
+        
+        results = await store.embed_room_documents(
+            room_id = body.room_id,
+            urls = body.urls
+        )
+        
+        return EmbedResponse(
+            result = len(results["failed"]) == 0, # True if no failures
+            success = results["success"],
+            failed = results["failed"],
+            total_chunks = results["total_chunks"],
+        )
+        
+    except Exception as e:
+        print(f"Unexpected Error {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 @app.post("/predict", response_model=PredictResponse)
 async def predict(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
@@ -112,24 +117,29 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
     Returns:
         PredictResponse: contains the answer to the question, the sources referenced, as well as the chain of messages and tool calls
     """
-    print("---Predict API---")
-    message_chain = parse_message_chain(message_chain)
+    try:
+        print("---Predict API---")
+        message_chain = parse_message_chain(message_chain)
+        
+        file_bytes = None
+        file_name = None
+        if file:
+            file_bytes = await file.read()
+            file_name = file.filename
+        
+        print("---Calling Agent Invoke---")        
+        answer, sources, chain = await agent.invoke(
+            message_chain = message_chain,
+            room_id = room_id,
+            file_bytes = file_bytes,
+            file_name = file_name,
+        )
+        
+        return PredictResponse(answer = answer, sources = sources, message_chain = chain)
     
-    file_bytes = None
-    file_name = None
-    if file:
-        file_bytes = await file.read()
-        file_name = file.filename
-    
-    print("---Calling Agent Invoke---")        
-    answer, sources, chain = await agent.invoke(
-        message_chain = message_chain,
-        room_id = room_id,
-        file_bytes = file_bytes,
-        file_name = file_name,
-    )
-    
-    return PredictResponse(answer = answer, sources = sources, message_chain = chain)
+    except Exception as e:
+        print(f"Unexpected Error {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
 
 @app.post("/predict/stream")
 async def predict_stream(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
@@ -148,47 +158,52 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
     Returns:
         StreamingResponse: streamed response of the agent, including a sources event
     """
-    print("---Predict Stream API---")
-    message_chain = parse_message_chain(message_chain)
-    
-    file_bytes = None
-    file_name = None
-    if file:
-        file_bytes = await file.read()
-        file_name = file.filename
-    
-    print("---Define Token Generator---")
-    # PREFIX MAP to determine event name tag
-    PREFIX_MAP = {
-        "[TOKEN]": "token",
-        "[TOOL_START]": "tool_start",
-        "[TOOL_END]": "tool_end",
-        "[SOURCES]": "sources",
-        "[CHAIN]": "chain",
-        "[DONE]": "done",
-    }
-    
-    def format_sse(event_name: str, data: str = "") -> str:
-        """Format Server-Sent Events safely, including multi-line answers."""
-        lines = str(data).splitlines() or [""]
-        payload = "\n".join(f"data: {line}" for line in lines)
-        return f"event: {event_name}\n{payload}\n\n"
-    
-    async def token_generator():
-        async for chunk in agent.stream(message_chain = message_chain, 
-                                        room_id = room_id, 
-                                        file_bytes = file_bytes, 
-                                        file_name = file_name):
-            # print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", chunk)
-            for prefix, event_name in PREFIX_MAP.items():
-                if chunk.startswith(prefix):
-                    data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}
-                    # yield f"event: {event_name}\ndata: {data}\n\n"
-                    yield format_sse(event_name, data)
-                    break
+    try:
+        print("---Predict Stream API---")
+        message_chain = parse_message_chain(message_chain)
         
-    print("---Streaming Response---")
-    return StreamingResponse(token_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
+        file_bytes = None
+        file_name = None
+        if file:
+            file_bytes = await file.read()
+            file_name = file.filename
+        
+        print("---Define Token Generator---")
+        # PREFIX MAP to determine event name tag
+        PREFIX_MAP = {
+            "[TOKEN]": "token",
+            "[TOOL_START]": "tool_start",
+            "[TOOL_END]": "tool_end",
+            "[SOURCES]": "sources",
+            "[CHAIN]": "chain",
+            "[DONE]": "done",
+        }
+        
+        def format_sse(event_name: str, data: str = "") -> str:
+            """Format Server-Sent Events safely, including multi-line answers."""
+            lines = str(data).splitlines() or [""]
+            payload = "\n".join(f"data: {line}" for line in lines)
+            return f"event: {event_name}\n{payload}\n\n"
+        
+        async def token_generator():
+            async for chunk in agent.stream(message_chain = message_chain, 
+                                            room_id = room_id, 
+                                            file_bytes = file_bytes, 
+                                            file_name = file_name):
+                # print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", chunk)
+                for prefix, event_name in PREFIX_MAP.items():
+                    if chunk.startswith(prefix):
+                        data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}
+                        # yield f"event: {event_name}\ndata: {data}\n\n"
+                        yield format_sse(event_name, data)
+                        break
+            
+        print("---Streaming Response---")
+        return StreamingResponse(token_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
+    
+    except Exception as e:
+        print(f"Unexpected Error {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 
 @app.delete("/corpus")
@@ -202,8 +217,13 @@ async def clear_corpus(room_id: str):
     Returns:
         dict[str, str]: operation result
     """
-    print(f"---Deleting Corupus API for {room_id}")
-    if not room_id:
-        raise HTTPException(status_code=400, detail="room_id is required.")
-    store.clear(room_id=room_id)
-    return {"result": True, "message": f"Corpus cleared for room {room_id}."}
+    try:
+        print(f"---Deleting Corupus API for {room_id}")
+        if not room_id:
+            raise HTTPException(status_code=400, detail="room_id is required.")
+        store.clear(room_id=room_id)
+        return {"result": True, "message": f"Corpus cleared for room {room_id}."}
+
+    except Exception as e:
+        print(f"Unexpected Error {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
