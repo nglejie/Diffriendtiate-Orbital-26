@@ -37,8 +37,12 @@ function readPositiveNumber(value, fallback) {
 }
 
 const chatbotBaseUrl = resolveChatbotBaseUrl();
+const renderChatbotPublicUrl =
+  "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
 const chatbotWarmupBaseUrl = String(
-  process.env.CHATBOT_WARMUP_BASE_URL || chatbotBaseUrl,
+  process.env.CHATBOT_WARMUP_BASE_URL ||
+    process.env.CHATBOT_PUBLIC_URL ||
+    (process.env.NODE_ENV === "production" ? renderChatbotPublicUrl : chatbotBaseUrl),
 )
   .trim()
   .replace(/\/+$/, "");
