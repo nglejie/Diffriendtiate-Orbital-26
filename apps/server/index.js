@@ -1747,7 +1747,7 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
   }
 
   try {
-    const response = await fetch(chatbotUrl("/health"), {
+    const response = await fetch(chatbotWarmupUrl("/health"), {
       signal: AbortSignal.timeout(chatbotHealthTimeoutMs),
     });
     const payload = await readChatbotPayload(response);
