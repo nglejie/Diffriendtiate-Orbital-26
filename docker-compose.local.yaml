@@ -1,17 +1,10 @@
 services:
   ollama:
     profiles: []    # override — remove profile so ollama starts locally
-    deploy: 
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1 # use gpu
-              capabilities: [gpu]
 
   server-chatbot:
     environment:
-      GPU_ENABLED: true
+      GPU_ENABLED: false
       USE_GEMINI_EMBEDDINGS: false # use ollama embeddings locally
     depends_on:
       ollama:
