@@ -13,14 +13,66 @@ import { initDb, readDb, storageMode, writeDb } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadDir = path.join(__dirname, "uploads");
+const clientDistDir = path.join(__dirname, "..", "client", "dist");
 const port = Number(process.env.PORT || 4000);
 const jwtSecret =
   process.env.JWT_SECRET || "diffriendtiate-local-development-secret";
-const chatbotBaseUrl = (
-  process.env.CHATBOT_BASE_URL || "http://127.0.0.1:5000"
-).replace(/\/+$/, "");
+function resolveChatbotBaseUrl() {
+  const explicitBaseUrl = String(process.env.CHATBOT_BASE_URL || "").trim();
+  if (explicitBaseUrl) return explicitBaseUrl.replace(/\/+$/, "");
+
+  const host = String(process.env.CHATBOT_HOST || "").trim();
+  if (host) {
+    const portValue = String(process.env.CHATBOT_PORT || "").trim();
+    const portSuffix = portValue ? `:${portValue}` : "";
+    return `http://${host}${portSuffix}`;
+  }
+
+  return "http://127.0.0.1:5000";
+}
+
+function readPositiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const chatbotBaseUrl = resolveChatbotBaseUrl();
+const renderChatbotPublicUrl =
+  "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
+const chatbotWarmupBaseUrl = String(
+  process.env.CHATBOT_WARMUP_BASE_URL ||
+    process.env.CHATBOT_PUBLIC_URL ||
+    (process.env.NODE_ENV === "production" ? renderChatbotPublicUrl : chatbotBaseUrl),
+)
+  .trim()
+  .replace(/\/+$/, "");
 const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx"]);
+const chatbotHealthTimeoutMs = readPositiveNumber(
+  process.env.CHATBOT_HEALTH_TIMEOUT_MS,
+  90_000,
+);
+const chatbotWarmupTimeoutMs = readPositiveNumber(
+  process.env.CHATBOT_WARMUP_TIMEOUT_MS,
+  chatbotHealthTimeoutMs,
+);
+const chatbotWarmupAttempts = Math.max(
+  1,
+  Math.floor(readPositiveNumber(process.env.CHATBOT_WARMUP_ATTEMPTS, 2)),
+);
+const chatbotWarmupRetryDelayMs = readPositiveNumber(
+  process.env.CHATBOT_WARMUP_RETRY_DELAY_MS,
+  10_000,
+);
 const roomCorpusSyncCache = new Map();
+const intelligrateGpuEnabled =
+  String(process.env.INTELLIGRATE_GPU_ENABLED || process.env.GPU_ENABLED || "")
+    .trim()
+    .toLowerCase() === "true";
+const geminiApiKey = String(process.env.GEMINI_API_KEY || "").trim();
+const geminiApiKeyConfigured = Boolean(
+  geminiApiKey &&
+    !["your-key-here", "qa-compose-validation-placeholder"].includes(geminiApiKey),
+);
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -43,6 +95,48 @@ function publicUser(user) {
     name: user.name,
     email: user.email,
   };
+}
+
+function getBuddyProviderStatus() {
+  if (intelligrateGpuEnabled) {
+    return {
+      available: true,
+      code: "local_gpu",
+      provider: "ollama",
+      providerLabel: "Built-in local GPU model",
+      message: "Intelligrate is using the app's built-in local model.",
+    };
+  }
+
+  if (geminiApiKeyConfigured) {
+    return {
+      available: true,
+      code: "gemini_configured",
+      provider: "gemini",
+      providerLabel: "Gemini API key",
+      message: "Intelligrate is using the configured Gemini API key.",
+    };
+  }
+
+  return {
+    available: false,
+    code: "provider_required",
+    provider: "none",
+    providerLabel: "No LLM provider configured",
+    message:
+      "Intelligrate needs GPU mode or a configured Gemini API key before it can be used.",
+  };
+}
+
+function assertBuddyProviderAvailable(res) {
+  const status = getBuddyProviderStatus();
+  if (status.available) return status;
+
+  res.status(503).json({
+    ...status,
+    setupRequired: true,
+  });
+  return null;
 }
 
 function signToken(user) {
@@ -727,6 +821,10 @@ function chatbotUrl(pathname) {
   return new URL(pathname, `${chatbotBaseUrl}/`);
 }
 
+function chatbotWarmupUrl(pathname) {
+  return new URL(pathname, `${chatbotWarmupBaseUrl}/`);
+}
+
 async function readChatbotPayload(response) {
   const payload = await response.json().catch(() => ({}));
 
@@ -738,6 +836,45 @@ async function readChatbotPayload(response) {
   }
 
   return payload;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function warmChatbotOnStartup() {
+  const providerStatus = getBuddyProviderStatus();
+  if (!providerStatus.available) {
+    console.info("[buddy] Skipping chatbot warm-up because no LLM provider is configured.");
+    return;
+  }
+
+  for (let attempt = 1; attempt <= chatbotWarmupAttempts; attempt += 1) {
+    try {
+      const startedAt = Date.now();
+      console.info(
+        `[buddy] Warming chatbot service (${attempt}/${chatbotWarmupAttempts})...`,
+      );
+
+      const response = await fetch(chatbotWarmupUrl("/health"), {
+        signal: AbortSignal.timeout(chatbotWarmupTimeoutMs),
+      });
+      await readChatbotPayload(response);
+
+      console.info(`[buddy] Chatbot warm-up succeeded in ${Date.now() - startedAt}ms.`);
+      return;
+    } catch (error) {
+      console.warn(
+        `[buddy] Chatbot warm-up failed (${attempt}/${chatbotWarmupAttempts}): ${error.message}`,
+      );
+
+      if (attempt < chatbotWarmupAttempts) {
+        await wait(chatbotWarmupRetryDelayMs);
+      }
+    }
+  }
 }
 
 async function callChatbotJson(pathname, body, timeoutMs = 180_000) {
@@ -1603,16 +1740,39 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
+  const providerStatus = getBuddyProviderStatus();
+  if (!providerStatus.available) {
+    return res.json({
+      ok: false,
+      ...providerStatus,
+      setupRequired: true,
+      canConfigure: room.ownerId === req.user.id,
+    });
+  }
+
   try {
-    const response = await fetch(chatbotUrl("/health"), {
-      signal: AbortSignal.timeout(10_000),
+    const response = await fetch(chatbotWarmupUrl("/health"), {
+      signal: AbortSignal.timeout(chatbotHealthTimeoutMs),
     });
     const payload = await readChatbotPayload(response);
-    res.json({ ok: true, service: payload.message || "Intelligrate" });
+    res.json({
+      ok: true,
+      ...providerStatus,
+      service: payload.message || "Intelligrate",
+      setupRequired: false,
+      canConfigure: room.ownerId === req.user.id,
+    });
   } catch (error) {
     console.warn(`[buddy] Health check failed for ${room.id}: ${error.message}`);
-    res.status(502).json({
+    res.json({
+      ok: false,
+      available: false,
+      code: "service_unavailable",
+      provider: providerStatus.provider,
+      providerLabel: providerStatus.providerLabel,
       message: "Intelligrate is not available yet. Start the chatbot service and try again.",
+      setupRequired: true,
+      canConfigure: room.ownerId === req.user.id,
     });
   }
 });
@@ -1621,6 +1781,7 @@ app.post("/api/rooms/:roomId/buddy/title", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
+  if (!assertBuddyProviderAvailable(res)) return;
 
   const message = String(req.body.message || "").trim();
   if (!message) {
@@ -1642,6 +1803,7 @@ app.post("/api/rooms/:roomId/buddy/embed", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
+  if (!assertBuddyProviderAvailable(res)) return;
 
   try {
     // Manual sync should still respect the corpus fingerprint so Intelligrate
@@ -1659,6 +1821,7 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
+  if (!assertBuddyProviderAvailable(res)) return;
 
   try {
     const { messageChain, directResource, attachedResources } = resolveBuddyMessagePayload(
@@ -1704,6 +1867,7 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
+  if (!assertBuddyProviderAvailable(res)) return;
 
   try {
     const { messageChain, directResource, attachedResources } = resolveBuddyMessagePayload(
@@ -1962,6 +2126,13 @@ io.on("connection", (socket) => {
   });
 });
 
+if (fs.existsSync(clientDistDir)) {
+  app.use(express.static(clientDistDir));
+  app.get(/^\/(?!api(?:\/|$)|uploads(?:\/|$)|socket\.io(?:\/|$)).*/, (_req, res) => {
+    res.sendFile(path.join(clientDistDir, "index.html"));
+  });
+}
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   res.status(500).json({ message: "Something went wrong." });
@@ -1973,4 +2144,5 @@ server.listen(port, () => {
   console.info(
     `Diffriendtiate API running on http://127.0.0.1:${port} using ${storageMode()} storage`,
   );
+  void warmChatbotOnStartup();
 });
