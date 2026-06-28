@@ -55,10 +55,6 @@ const chatbotWarmupTimeoutMs = readPositiveNumber(
   process.env.CHATBOT_WARMUP_TIMEOUT_MS,
   chatbotHealthTimeoutMs,
 );
-const chatbotWarmupAttempts = Math.max(
-  1,
-  Math.floor(readPositiveNumber(process.env.CHATBOT_WARMUP_ATTEMPTS, 2)),
-);
 const chatbotWarmupRetryDelayMs = readPositiveNumber(
   process.env.CHATBOT_WARMUP_RETRY_DELAY_MS,
   10_000,
@@ -851,30 +847,43 @@ async function warmChatbotOnStartup() {
     return;
   }
 
-  for (let attempt = 1; attempt <= chatbotWarmupAttempts; attempt += 1) {
+  try {
+    console.info("[buddy] Warming chatbot service...");
+    const startedAt = Date.now();
+    await readChatbotHealthWithRetry(chatbotWarmupTimeoutMs);
+    console.info(`[buddy] Chatbot warm-up succeeded in ${Date.now() - startedAt}ms.`);
+  } catch (error) {
+    console.warn(`[buddy] Chatbot warm-up did not finish: ${error.message}`);
+  }
+}
+
+async function readChatbotHealthWithRetry(timeoutMs = chatbotHealthTimeoutMs) {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    const remainingMs = Math.max(1_000, timeoutMs - (Date.now() - startedAt));
+
     try {
-      const startedAt = Date.now();
       console.info(
-        `[buddy] Warming chatbot service (${attempt}/${chatbotWarmupAttempts})...`,
+        `[buddy] Checking chatbot health (${attempt}, ${Math.ceil(remainingMs / 1000)}s left)...`,
       );
 
       const response = await fetch(chatbotWarmupUrl("/health"), {
-        signal: AbortSignal.timeout(chatbotWarmupTimeoutMs),
+        signal: AbortSignal.timeout(remainingMs),
       });
-      await readChatbotPayload(response);
-
-      console.info(`[buddy] Chatbot warm-up succeeded in ${Date.now() - startedAt}ms.`);
-      return;
+      return await readChatbotPayload(response);
     } catch (error) {
-      console.warn(
-        `[buddy] Chatbot warm-up failed (${attempt}/${chatbotWarmupAttempts}): ${error.message}`,
-      );
+      lastError = error;
 
-      if (attempt < chatbotWarmupAttempts) {
-        await wait(chatbotWarmupRetryDelayMs);
-      }
+      if (Date.now() - startedAt >= timeoutMs) break;
+      await wait(Math.min(chatbotWarmupRetryDelayMs, timeoutMs - (Date.now() - startedAt)));
     }
   }
+
+  throw lastError || new Error("Intelligrate is not available right now.");
 }
 
 async function callChatbotJson(pathname, body, timeoutMs = 180_000) {
@@ -1751,10 +1760,7 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
   }
 
   try {
-    const response = await fetch(chatbotWarmupUrl("/health"), {
-      signal: AbortSignal.timeout(chatbotHealthTimeoutMs),
-    });
-    const payload = await readChatbotPayload(response);
+    const payload = await readChatbotHealthWithRetry(chatbotHealthTimeoutMs);
     res.json({
       ok: true,
       ...providerStatus,
