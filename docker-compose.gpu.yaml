@@ -1,4 +1,8 @@
 services:
+  server:
+    environment:
+      INTELLIGRATE_GPU_ENABLED: true
+
   ollama:
     deploy: 
       resources:

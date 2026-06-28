@@ -46,12 +46,12 @@
   --theme-surface: var(--rose-pine-surface);
   --theme-surface-strong: var(--rose-pine-overlay);
   --theme-surface-muted: color-mix(in srgb, var(--rose-pine-surface) 88%, var(--rose-pine-base));
-  --theme-surface-hover: color-mix(in srgb, var(--rose-pine-overlay) 90%, var(--rose-pine-love));
+  --theme-surface-hover: color-mix(in srgb, var(--rose-pine-overlay) 94%, var(--rose-pine-rose));
   --theme-text: var(--rose-pine-text);
   --theme-muted: var(--rose-pine-subtle);
   --theme-muted-soft: var(--rose-pine-muted);
-  --theme-border: color-mix(in srgb, var(--rose-pine-text) 13%, transparent);
-  --theme-border-strong: color-mix(in srgb, var(--rose-pine-text) 22%, transparent);
+  --theme-border: color-mix(in srgb, var(--rose-pine-text) 10%, transparent);
+  --theme-border-strong: color-mix(in srgb, var(--rose-pine-text) 17%, transparent);
   --theme-accent: var(--rose-pine-love);
   --theme-accent-hover: color-mix(in srgb, var(--rose-pine-love) 82%, var(--rose-pine-rose));
   --theme-accent-active: color-mix(in srgb, var(--rose-pine-love) 72%, var(--rose-pine-base));
@@ -145,8 +145,8 @@
   --button-primary-bg: var(--accent-primary);
   --button-primary-bg-hover: var(--accent-primary-hover);
   --button-secondary-fg: var(--theme-text);
-  --button-secondary-bg: color-mix(in srgb, var(--theme-accent) 15%, transparent);
-  --button-secondary-bg-hover: color-mix(in srgb, var(--theme-accent) 25%, transparent);
+  --button-secondary-bg: color-mix(in srgb, var(--theme-accent) 11%, transparent);
+  --button-secondary-bg-hover: color-mix(in srgb, var(--theme-accent) 18%, transparent);
   --button-secondary-border: var(--theme-border);
   --button-secondary-border-hover: var(--theme-border-strong);
   --button-danger-fg: var(--theme-on-danger);
@@ -168,6 +168,13 @@
   --room-media-overlay-bottom: color-mix(in srgb, var(--theme-base) 58%, transparent);
   --room-workspace-overlay-top: color-mix(in srgb, var(--theme-base) 12%, transparent);
   --room-workspace-overlay-bottom: color-mix(in srgb, var(--theme-base) 42%, transparent);
+  --composer-bg: color-mix(in srgb, var(--theme-surface) 94%, transparent);
+  --composer-border: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --composer-shadow:
+    0 14px 34px color-mix(in srgb, var(--shadow-color) 22%, transparent),
+    0 2px 8px color-mix(in srgb, var(--shadow-color) 12%, transparent);
+  --user-message-bg: color-mix(in srgb, var(--rose-pine-love) 11%, var(--theme-surface));
+  --user-message-border: color-mix(in srgb, var(--rose-pine-rose) 15%, transparent);
   --create-flow-width: 700px;
   --accent-shadow: none;
   --accent-shadow-strong: none;
@@ -178,19 +185,19 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --theme-base: color-mix(in srgb, var(--rosely-3) 62%, white);
-  --theme-surface: color-mix(in srgb, var(--rosely-3) 10%, white);
-  --theme-surface-strong: color-mix(in srgb, var(--rosely-3) 18%, white);
-  --theme-surface-muted: color-mix(in srgb, var(--rosely-3) 32%, white);
-  --theme-surface-hover: color-mix(in srgb, var(--rosely-7) 16%, white);
-  --theme-text: var(--rosely-0);
-  --theme-muted: var(--rosely-1);
-  --theme-muted-soft: var(--rosely-8);
-  --theme-border: color-mix(in srgb, var(--rosely-2) 34%, white);
-  --theme-border-strong: color-mix(in srgb, var(--rosely-8) 34%, white);
-  --theme-accent: color-mix(in srgb, var(--rosely-mauve) 82%, var(--rosely-0));
-  --theme-accent-hover: color-mix(in srgb, var(--rosely-mauve) 72%, var(--rosely-0));
-  --theme-accent-active: color-mix(in srgb, var(--rosely-mauve) 64%, var(--rosely-0));
+  --theme-base: #ffffff;
+  --theme-surface: #ffffff;
+  --theme-surface-strong: #f7f7f8;
+  --theme-surface-muted: #f3f3f4;
+  --theme-surface-hover: #eeeeef;
+  --theme-text: #202123;
+  --theme-muted: #5f6368;
+  --theme-muted-soft: #8e8e93;
+  --theme-border: #e7e7e8;
+  --theme-border-strong: #d8d8da;
+  --theme-accent: color-mix(in srgb, var(--rosely-mauve) 74%, #202123);
+  --theme-accent-hover: color-mix(in srgb, var(--rosely-mauve) 64%, #202123);
+  --theme-accent-active: color-mix(in srgb, var(--rosely-mauve) 54%, #202123);
   --theme-secondary: var(--rosely-mauve);
   --theme-secondary-soft: var(--rosely-mauve);
   --theme-link: var(--rosely-mauve);
@@ -201,23 +208,30 @@
   --theme-on-accent: var(--rosely-3);
   --theme-on-danger: var(--rosely-3);
   --theme-on-warning: var(--rosely-0);
-  --shadow-color: var(--rosely-1);
-  --app-bg: color-mix(in srgb, white 94%, var(--rosely-3));
-  --auth-bg: var(--theme-base);
-  --dashboard-bg: color-mix(in srgb, white 94%, var(--rosely-3));
+  --shadow-color: #111111;
+  --app-bg: #ffffff;
+  --auth-bg: #ffffff;
+  --dashboard-bg: #f7f7f8;
   --button-cta-fg: var(--rosely-0);
   --button-cta-bg: color-mix(in srgb, var(--rosely-warm-gold) 78%, var(--rosely-3));
   --button-cta-glint: color-mix(in srgb, var(--rosely-c) 38%, var(--rosely-warm-gold));
   --button-cta-hover-fg: var(--rosely-0);
   --button-cta-bg-hover: color-mix(in srgb, var(--rosely-warm-gold) 64%, var(--rosely-c));
-  --topbar-bg: color-mix(in srgb, white 96%, var(--rosely-3));
-  --room-shell-bg: color-mix(in srgb, white 96%, var(--rosely-3));
-  --room-tab-bg: color-mix(in srgb, white 98%, var(--rosely-3));
-  --room-sidebar-bg: color-mix(in srgb, white 94%, var(--rosely-3));
+  --topbar-bg: color-mix(in srgb, #ffffff 96%, transparent);
+  --room-shell-bg: color-mix(in srgb, #ffffff 92%, transparent);
+  --room-tab-bg: color-mix(in srgb, #ffffff 86%, transparent);
+  --room-sidebar-bg: color-mix(in srgb, #f7f7f8 96%, transparent);
   --room-media-overlay-top: color-mix(in srgb, var(--rosely-0) 3%, transparent);
   --room-media-overlay-bottom: color-mix(in srgb, var(--rosely-0) 24%, transparent);
-  --room-workspace-overlay-top: color-mix(in srgb, white 94%, transparent);
-  --room-workspace-overlay-bottom: color-mix(in srgb, var(--rosely-3) 92%, transparent);
+  --room-workspace-overlay-top: color-mix(in srgb, white 62%, transparent);
+  --room-workspace-overlay-bottom: color-mix(in srgb, white 76%, transparent);
+  --composer-bg: color-mix(in srgb, #ffffff 98%, transparent);
+  --composer-border: rgb(0 0 0 / 0.08);
+  --composer-shadow:
+    0 12px 32px rgb(0 0 0 / 0.1),
+    0 2px 8px rgb(0 0 0 / 0.06);
+  --user-message-bg: color-mix(in srgb, var(--rosely-7) 46%, #ffffff);
+  --user-message-border: color-mix(in srgb, var(--rosely-5) 42%, transparent);
 }
 
 * {
@@ -1447,6 +1461,11 @@ h3 {
   font-weight: 800;
 }
 
+.flocus-form .glass-error {
+  justify-self: center;
+  width: min(360px, 100%);
+}
+
 .form-notice {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--theme-warning) 20%, var(--theme-surface));
@@ -1714,24 +1733,27 @@ h3 {
   place-items: center;
   overflow: hidden;
   color: var(--text-primary);
-  background: var(--discord-active);
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 32%, transparent);
-  border-radius: 18px;
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 22%, transparent);
+  border-radius: 16px;
   font-size: 1.6rem;
   font-weight: 650;
   transition: background 160ms ease, border-color 160ms ease;
 }
 
 .room-logo-button:hover .room-logo-preview {
-  background: color-mix(in srgb, var(--accent-primary) 32%, transparent);
-  border-color: color-mix(in srgb, var(--accent-primary) 58%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary) 30%, transparent);
 
 
 }
 .room-logo-preview img {
+  display: block;
   width: 100%;
   height: 100%;
+  border-radius: inherit;
   object-fit: cover;
+  object-position: center;
 }
 
 .room-logo-uploader h3,
@@ -2709,6 +2731,7 @@ h3 {
   width: 48px;
   aspect-ratio: 1;
   place-items: center;
+  padding: 0;
   color: color-mix(in srgb, var(--text-primary) 88%, transparent);
   background: transparent;
   border: 0;
@@ -2743,7 +2766,8 @@ h3 {
 }
 .room-rail-logo {
   color: var(--discord-accent-link) !important;
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 22%, transparent) !important;
   font-size: 1.1rem;
   font-weight: 900;
 }
@@ -2892,6 +2916,7 @@ h3 {
 
 .room-rail-logo {
   position: relative;
+  overflow: hidden;
 }
 
 .room-rail-logo span {
@@ -2899,9 +2924,11 @@ h3 {
 }
 
 .room-rail-logo img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
   border-radius: inherit;
 }
 
@@ -2909,6 +2936,7 @@ h3 {
   grid-template-columns: 1fr;
   gap: 2px;
   font-size: 0.95rem;
+  overflow: visible;
 }
 
 .room-rail-logo.collapsed-toggle svg {
@@ -3109,6 +3137,20 @@ h3 {
 
 
 }
+.buddy-nav-action:disabled {
+  cursor: not-allowed;
+  color: color-mix(in srgb, var(--text-primary) 42%, transparent);
+  opacity: 0.72;
+}
+
+.buddy-sidebar-status {
+  margin: 0 10px 4px;
+  color: color-mix(in srgb, var(--text-primary) 50%, transparent);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .buddy-nav-search input {
   width: 100%;
   min-width: 0;
@@ -3530,6 +3572,8 @@ h3 {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  background: var(--room-tab-bg);
+  backdrop-filter: blur(16px) saturate(1.05);
 }
 
 .chat-content-panel,
@@ -3543,6 +3587,10 @@ h3 {
   backdrop-filter: blur(16px) saturate(1.05);
 }
 
+.buddy-content-panel .buddy-panel {
+  background: transparent;
+}
+
 .chat-content-panel .discord-chat-surface,
 .resource-content-panel .resource-drive-shell {
   background: transparent;
@@ -3552,6 +3600,7 @@ h3 {
 
 :root[data-theme="light"] .room-icon-rail,
 :root[data-theme="light"] .room-content-panel,
+:root[data-theme="light"] .buddy-content-panel,
 :root[data-theme="light"] .chat-content-panel,
 :root[data-theme="light"] .resource-content-panel,
 :root[data-theme="light"] .resource-drive-sidebar {
@@ -4149,10 +4198,11 @@ h3 {
   min-height: 0;
   overflow: auto;
   overflow-x: hidden;
-  padding: 14px;
-  background: color-mix(in srgb, var(--shadow-color) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
-  border-radius: 14px;
+  padding: 14px 14px 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  scroll-padding-bottom: 22px;
 }
 
 /* Defensive layout guard: the composer is a sibling of the message list, not a
@@ -4165,6 +4215,82 @@ h3 {
 .buddy-panel.empty-thread .buddy-message-list {
   background: transparent;
   border-color: transparent;
+}
+
+.intelligrate-gate {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  place-items: center;
+  padding: clamp(20px, 4vw, 48px);
+}
+
+.intelligrate-gate-card {
+  display: grid;
+  width: min(560px, 100%);
+  gap: 18px;
+  padding: clamp(22px, 4vw, 34px);
+  color: var(--text-primary);
+  background: var(--composer-bg);
+  border: 1px solid var(--composer-border);
+  border-radius: 24px;
+  box-shadow: var(--composer-shadow);
+}
+
+.intelligrate-gate-card p,
+.intelligrate-gate-card h2,
+.intelligrate-gate-card h3 {
+  margin: 0;
+}
+
+.intelligrate-gate-icon {
+  display: grid;
+  width: 52px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--theme-accent);
+  background: color-mix(in srgb, var(--theme-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-accent) 24%, transparent);
+  border-radius: 16px;
+}
+
+.intelligrate-gate-card h2 {
+  margin-top: 4px;
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  font-weight: 720;
+  line-height: 1.08;
+}
+
+.intelligrate-gate-card p {
+  color: color-mix(in srgb, var(--text-primary) 66%, transparent);
+  line-height: 1.55;
+}
+
+.intelligrate-gate-status,
+.intelligrate-gate-owner {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-radius: 16px;
+}
+
+.intelligrate-gate-status span {
+  color: color-mix(in srgb, var(--text-primary) 48%, transparent);
+  font-size: 0.76rem;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.intelligrate-gate-status strong,
+.intelligrate-gate-owner h3 {
+  color: var(--text-primary);
+  font-weight: 720;
+}
+
+.intelligrate-gate-member {
+  padding: 0 2px;
 }
 
 .buddy-draft-welcome {
@@ -4228,10 +4354,10 @@ h3 {
   gap: 5px;
   padding: 13px 15px;
   color: color-mix(in srgb, var(--text-primary) 94%, transparent);
-  background: var(--surface-card);
-  border: 1px solid var(--border-soft);
+  background: var(--user-message-bg);
+  border: 1px solid var(--user-message-border);
   border-radius: 17px;
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow-color) 20%, transparent);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--shadow-color) 10%, transparent);
 }
 
 .buddy-message-actions {
@@ -4737,10 +4863,10 @@ h3 {
   width: min(100%, var(--buddy-conversation-width));
   margin: 0 auto;
   padding: 16px;
-  border: 0;
+  border: 1px solid var(--composer-border);
   border-radius: 22px;
-  background: color-mix(in srgb, var(--theme-surface) 96%, transparent);
-  box-shadow: 0 -18px 48px color-mix(in srgb, var(--shadow-color) 34%, transparent);
+  background: var(--composer-bg);
+  box-shadow: var(--composer-shadow);
   align-self: center;
 }
 
@@ -6713,9 +6839,9 @@ button.attachment-preview-card {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Room Chat                                                                   */
+/* Room Convolution                                                            */
 /* -------------------------------------------------------------------------- */
-/* Chat is intentionally isolated from the resource/LLM experiments. The
+/* Convolution is intentionally isolated from the resource/LLM experiments. The
    structure follows Discord/Gather patterns: a navigational channel sidebar and
    a single reliable text-channel surface. */
 .chat-sidebar {
@@ -7224,8 +7350,9 @@ button.attachment-preview-card {
 .discord-avatar {
   display: grid;
   width: 40px;
-  aspect-ratio: 1;
+  height: 40px;
   place-items: center;
+  align-self: start;
   color: var(--text-primary);
   background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
@@ -7414,10 +7541,10 @@ button.attachment-preview-card {
   margin: 16px;
   padding: 14px 16px;
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--theme-surface) 96%, transparent);
-  border: 0;
+  background: var(--composer-bg);
+  border: 1px solid var(--composer-border);
   border-radius: 22px;
-  box-shadow: 0 -18px 48px color-mix(in srgb, var(--shadow-color) 28%, transparent);
+  box-shadow: var(--composer-shadow);
 }
 
 .discord-composer input[type="file"] {
@@ -8129,7 +8256,7 @@ button.attachment-preview-card {
 
 /* Dropbox-inspired resource manager for room files. The selectors are scoped
    with resource-drive/resource-modal prefixes so this view can evolve without
-   leaking table, modal, or sidebar styles into Chat and Intelligrate. */
+   leaking table, modal, or sidebar styles into Convolution and Intelligrate. */
 .resource-drive-shell,
 .resource-drive-sidebar,
 .resource-modal-card,

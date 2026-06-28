@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: Diffriendtiate-Orbital-26-MS2
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci && npm run build --workspace @diffriendtiate/client
+    startCommand: npm run start --workspace @diffriendtiate/server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: PGSSLMODE
+        value: require
+      - key: CHATBOT_HOST
+        fromService:
+          type: web
+          name: Diffriendtiate-Orbital-26-MS2-chatbot
+          property: host
+      - key: CHATBOT_PORT
+        fromService:
+          type: web
+          name: Diffriendtiate-Orbital-26-MS2-chatbot
+          property: port
+      - key: INTELLIGRATE_GPU_ENABLED
+        value: false
+      - key: GEMINI_API_KEY
+        sync: false
+  - type: web
+    name: Diffriendtiate-Orbital-26-MS2-chatbot
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerContext: ./services/server-chatbot
+    dockerfilePath: ./services/server-chatbot/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: GPU_ENABLED
+        value: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NODE_BASE_URL
+        value: https://diffriendtiate-orbital-26-ms2.onrender.com
+      - key: CHROMA_DIR
+        value: /tmp/chroma_db
+      - key: OLLAMA_BASE_URL
+        value: http://127.0.0.1:11434

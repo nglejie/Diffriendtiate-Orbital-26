@@ -110,11 +110,22 @@ import {
 
 const tabs = [
   { id: "focus", label: "Home", icon: House },
-  { id: "chat", label: "Chat", icon: MessageCircle },
+  { id: "chat", label: "Convolution", icon: MessageCircle },
   { id: "buddy", label: "Intelligrate", icon: Bot },
   { id: "resources", label: "Resources", icon: FolderOpen },
   { id: "calendar", label: "Calendar", icon: CalendarDays, disabled: true },
 ];
+
+const DEFAULT_BUDDY_AVAILABILITY = {
+  ok: null,
+  available: false,
+  code: "checking",
+  provider: "unknown",
+  providerLabel: "Checking provider",
+  message: "Checking Intelligrate availability.",
+  setupRequired: false,
+  canConfigure: false,
+};
 
 /** Reads optional room-local UI state without involving the shared backend. */
 function readRoomStorage(roomId, key, fallback) {
@@ -178,6 +189,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [buddyThreads, setBuddyThreads] = useState([]);
   const [activeBuddyThreadId, setActiveBuddyThreadId] = useState("");
   const [draftBuddyThread, setDraftBuddyThread] = useState(null);
+  const [buddyAvailability, setBuddyAvailability] = useState(DEFAULT_BUDDY_AVAILABILITY);
   const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
   const [roomToast, setRoomToast] = useState(null);
@@ -296,6 +308,12 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     writeRoomStorage(room?.id, "resourceThreads", resourceThreads);
   }, [resourceThreads, room?.id]);
 
+  useEffect(() => {
+    if (activeTab === "buddy" && room?.isMember) {
+      refreshBuddyAvailability(room.id);
+    }
+  }, [activeTab, room?.id, room?.isMember]);
+
   /** Stars or unstarrs a chat message so the Resources tab can surface reusable context. */
   function toggleImportantMessage(message) {
     if (!message?.id) return;
@@ -353,11 +371,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   // Keep the Intelligrate tab usable even before a saved chat exists.
   useEffect(() => {
     if (loading || !room?.isMember || activeTab !== "buddy") return;
+    if (!buddyAvailability.available) return;
     if (!draftBuddyThread && !buddyThreadList.length) {
       setDraftBuddyThread(createDraftBuddyThread());
       setActiveBuddyThreadId("");
     }
-  }, [activeTab, buddyThreadList.length, draftBuddyThread, loading, room?.isMember]);
+  }, [
+    activeTab,
+    buddyAvailability.available,
+    buddyThreadList.length,
+    draftBuddyThread,
+    loading,
+    room?.isMember,
+  ]);
 
   /** Shows compact room feedback without interrupting the current workflow. */
   function showRoomToast(message) {
@@ -453,18 +479,40 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       setRoom(loadedRoom);
 
       if (loadedRoom.isMember) {
-        const [messagePayload, resourcePayload, sessionPayload, buddyPayload] = await Promise.all([
+        const [
+          messagePayload,
+          resourcePayload,
+          sessionPayload,
+          buddyPayload,
+          buddyHealthPayload,
+        ] = await Promise.all([
           api.getMessages(loadedRoom.id),
           api.getResources(loadedRoom.id, { includeDeleted: true }),
           api.getSessions(loadedRoom.id),
           api.getBuddyThreads(loadedRoom.id),
+          api.getBuddyHealth(loadedRoom.id).catch((err) => ({
+            ok: false,
+            available: false,
+            code: "health_check_failed",
+            providerLabel: "Unavailable",
+            setupRequired: true,
+            canConfigure: loadedRoom.isOwner,
+            message: err.message || "Unable to check Intelligrate availability.",
+          })),
         ]);
         setMessages(asArray(messagePayload.messages));
         setResources(asArray(resourcePayload.resources));
         setSessions(asArray(sessionPayload.sessions));
+        setBuddyAvailability({
+          ...DEFAULT_BUDDY_AVAILABILITY,
+          ...buddyHealthPayload,
+          available: Boolean(buddyHealthPayload.available ?? buddyHealthPayload.ok),
+          ok: Boolean(buddyHealthPayload.ok),
+        });
         const loadedThreads = asArray(buddyPayload.threads).map((thread) =>
           normalizeBuddyThread(thread, user),
         );
+        const buddyAvailable = Boolean(buddyHealthPayload.available ?? buddyHealthPayload.ok);
 
         if (loadedThreads.length) {
           setBuddyThreads(loadedThreads);
@@ -476,7 +524,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         } else {
           setBuddyThreads([]);
           setActiveBuddyThreadId("");
-          setDraftBuddyThread(createDraftBuddyThread());
+          setDraftBuddyThread(buddyAvailable ? createDraftBuddyThread() : null);
         }
       } else {
         setMessages([]);
@@ -485,6 +533,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         setBuddyThreads([]);
         setActiveBuddyThreadId("");
         setDraftBuddyThread(null);
+        setBuddyAvailability(DEFAULT_BUDDY_AVAILABILITY);
       }
     } catch (err) {
       setError(err.message);
@@ -542,6 +591,44 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
    */
   function showError(message) {
     setAlertMessage(message || "Something went wrong.");
+  }
+
+  /** Checks whether Intelligrate has a usable provider before exposing the chat UI. */
+  async function refreshBuddyAvailability(nextRoomId = room?.id) {
+    if (!nextRoomId) return DEFAULT_BUDDY_AVAILABILITY;
+
+    setBuddyAvailability((current) => ({
+      ...current,
+      code: current.available ? current.code : "checking",
+      message: current.available
+        ? current.message
+        : "Checking Intelligrate availability.",
+    }));
+
+    try {
+      const payload = await api.getBuddyHealth(nextRoomId);
+      const nextAvailability = {
+        ...DEFAULT_BUDDY_AVAILABILITY,
+        ...payload,
+        available: Boolean(payload.available ?? payload.ok),
+        ok: Boolean(payload.ok),
+      };
+      setBuddyAvailability(nextAvailability);
+      return nextAvailability;
+    } catch (err) {
+      const nextAvailability = {
+        ...DEFAULT_BUDDY_AVAILABILITY,
+        ok: false,
+        available: false,
+        code: "health_check_failed",
+        providerLabel: "Unavailable",
+        setupRequired: true,
+        canConfigure: Boolean(room?.isOwner),
+        message: err.message || "Unable to check Intelligrate availability.",
+      };
+      setBuddyAvailability(nextAvailability);
+      return nextAvailability;
+    }
   }
 
   /**
@@ -661,14 +748,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   }
 
   /**
-   * Sends a chat message over the active room socket and exposes Socket.IO acks as
+   * Sends a Convolution message over the active room socket and exposes Socket.IO acks as
    * a Promise so panels can use normal async error handling.
    */
   function sendViaSocket(body, options = {}) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
-        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        reject(new Error("Convolution is reconnecting. Try again in a moment."));
         return;
       }
 
@@ -697,7 +784,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
-        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        reject(new Error("Convolution is reconnecting. Try again in a moment."));
         return;
       }
 
@@ -724,7 +811,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
-        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        reject(new Error("Convolution is reconnecting. Try again in a moment."));
         return;
       }
 
@@ -922,6 +1009,17 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   /** Opens a local draft chat; persistence starts only after the first message. */
   async function startBuddyThread() {
     if (!room?.id) return;
+
+    const availability = buddyAvailability.available
+      ? buddyAvailability
+      : await refreshBuddyAvailability(room.id);
+
+    if (!availability.available) {
+      setActiveTab("buddy");
+      setContextOpen(true);
+      setNotice("Intelligrate needs an LLM provider before chats can start.");
+      return;
+    }
 
     setDraftBuddyThread(createDraftBuddyThread());
     setActiveBuddyThreadId("");
@@ -1242,6 +1340,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           <RoomContextPanel
             activeTab={activeTab}
             activeChannel={activeChatChannel}
+            buddyAvailability={buddyAvailability}
             activeBuddyThreadId={activeBuddyThread?.id}
             buddyThreads={buddyThreads}
             channels={safeChannels}
@@ -1318,7 +1417,13 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
         {room.isMember && activeTab === "buddy" ? (
           <section className="room-content-panel buddy-content-panel">
-            {activeBuddyThread ? (
+            {!buddyAvailability.available ? (
+              <IntelligrateUnavailable
+                availability={buddyAvailability}
+                isOwner={room.isOwner}
+                onRefresh={() => refreshBuddyAvailability(room.id)}
+              />
+            ) : activeBuddyThread ? (
               <BuddyPanel
                 isDraftThread={Boolean(activeBuddyThread.isDraft)}
                 messages={activeBuddyThread.messages || []}
@@ -1438,11 +1543,57 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   );
 }
 
+function IntelligrateUnavailable({ availability, isOwner, onRefresh }) {
+  const checking = availability?.code === "checking";
+  const providerLabel = availability?.providerLabel || "No LLM provider configured";
+  const message =
+    availability?.message ||
+    "Intelligrate needs a local GPU model or a configured Gemini API key before it can be used.";
+
+  return (
+    <div className="intelligrate-gate" role="status" aria-live="polite">
+      <div className="intelligrate-gate-card">
+        <span className="intelligrate-gate-icon">
+          <Lock size={24} />
+        </span>
+        <div>
+          <p className="eyebrow">Intelligrate unavailable</p>
+          <h2>{checking ? "Checking provider" : "LLM provider required"}</h2>
+          <p>{message}</p>
+        </div>
+        <div className="intelligrate-gate-status">
+          <span>Current provider</span>
+          <strong>{providerLabel}</strong>
+        </div>
+        {isOwner ? (
+          <div className="intelligrate-gate-owner">
+            <h3>Owner setup</h3>
+            <p>
+              Start the app with the GPU compose override to use the built-in local model,
+              or configure a real Gemini API key in the server environment. Per-room API
+              keys are not stored in the app yet.
+            </p>
+          </div>
+        ) : (
+          <p className="intelligrate-gate-member">
+            Ask the room owner to enable the built-in model or configure an API key.
+          </p>
+        )}
+        <button className="secondary-button compact" onClick={onRefresh} type="button">
+          <Wand2 size={16} />
+          Check again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** Sidebar content that changes based on the active room tool. */
 function RoomContextPanel({
   activeTab,
   activeChannel,
   activeBuddyThreadId,
+  buddyAvailability,
   buddyThreads,
   channelActionLoading,
   channels,
@@ -1480,6 +1631,7 @@ function RoomContextPanel({
   const safeChatDrafts = asObjectRecord(chatDrafts);
   const safeSessions = asArray(sessions);
   const canManageRoom = Boolean(room?.isOwner);
+  const buddyLocked = activeTab === "buddy" && !buddyAvailability?.available;
   const filteredBuddyThreads = safeBuddyThreads.filter((thread) =>
     String(thread?.title || "New Chat")
       .toLowerCase()
@@ -1524,7 +1676,7 @@ function RoomContextPanel({
   if (activeTab === "chat") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Chat" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Convolution" />
         <PanelDivider />
         <ChatSidebar
           activeChannel={activeChannel}
@@ -1588,10 +1740,21 @@ function RoomContextPanel({
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Intelligrate" />
         <PanelDivider />
         <div className="buddy-sidebar-nav">
-          <button className="buddy-nav-action" onClick={onNewBuddyThread} type="button">
+          <button
+            className="buddy-nav-action"
+            disabled={buddyLocked}
+            onClick={onNewBuddyThread}
+            title={buddyLocked ? "Intelligrate needs an LLM provider first" : "New Chat"}
+            type="button"
+          >
             <Edit3 size={17} />
             New Chat
           </button>
+          {buddyLocked ? (
+            <p className="buddy-sidebar-status">
+              {buddyAvailability?.providerLabel || "Provider setup required"}
+            </p>
+          ) : null}
           <label className="buddy-nav-search">
             <Search size={16} />
             <input

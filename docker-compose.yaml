@@ -37,6 +37,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-this-before-deploying}
       DATABASE_URL: postgres://${POSTGRES_USER:-diffriendtiate}:${POSTGRES_PASSWORD:-diffriendtiate_password}@db:5432/${POSTGRES_DB:-diffriendtiate}
       CHATBOT_BASE_URL: http://server-chatbot:5000
+      INTELLIGRATE_GPU_ENABLED: ${INTELLIGRATE_GPU_ENABLED:-false}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
     volumes:
       - uploads_data:/app/apps/server/uploads
     depends_on:
