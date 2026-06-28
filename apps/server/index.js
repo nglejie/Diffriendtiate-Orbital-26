@@ -37,10 +37,27 @@ function readPositiveNumber(value, fallback) {
 }
 
 const chatbotBaseUrl = resolveChatbotBaseUrl();
+const chatbotWarmupBaseUrl = String(
+  process.env.CHATBOT_WARMUP_BASE_URL || chatbotBaseUrl,
+)
+  .trim()
+  .replace(/\/+$/, "");
 const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx"]);
 const chatbotHealthTimeoutMs = readPositiveNumber(
   process.env.CHATBOT_HEALTH_TIMEOUT_MS,
   90_000,
+);
+const chatbotWarmupTimeoutMs = readPositiveNumber(
+  process.env.CHATBOT_WARMUP_TIMEOUT_MS,
+  chatbotHealthTimeoutMs,
+);
+const chatbotWarmupAttempts = Math.max(
+  1,
+  Math.floor(readPositiveNumber(process.env.CHATBOT_WARMUP_ATTEMPTS, 2)),
+);
+const chatbotWarmupRetryDelayMs = readPositiveNumber(
+  process.env.CHATBOT_WARMUP_RETRY_DELAY_MS,
+  10_000,
 );
 const roomCorpusSyncCache = new Map();
 const intelligrateGpuEnabled =
@@ -800,6 +817,10 @@ function chatbotUrl(pathname) {
   return new URL(pathname, `${chatbotBaseUrl}/`);
 }
 
+function chatbotWarmupUrl(pathname) {
+  return new URL(pathname, `${chatbotWarmupBaseUrl}/`);
+}
+
 async function readChatbotPayload(response) {
   const payload = await response.json().catch(() => ({}));
 
@@ -811,6 +832,45 @@ async function readChatbotPayload(response) {
   }
 
   return payload;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function warmChatbotOnStartup() {
+  const providerStatus = getBuddyProviderStatus();
+  if (!providerStatus.available) {
+    console.info("[buddy] Skipping chatbot warm-up because no LLM provider is configured.");
+    return;
+  }
+
+  for (let attempt = 1; attempt <= chatbotWarmupAttempts; attempt += 1) {
+    try {
+      const startedAt = Date.now();
+      console.info(
+        `[buddy] Warming chatbot service (${attempt}/${chatbotWarmupAttempts})...`,
+      );
+
+      const response = await fetch(chatbotWarmupUrl("/health"), {
+        signal: AbortSignal.timeout(chatbotWarmupTimeoutMs),
+      });
+      await readChatbotPayload(response);
+
+      console.info(`[buddy] Chatbot warm-up succeeded in ${Date.now() - startedAt}ms.`);
+      return;
+    } catch (error) {
+      console.warn(
+        `[buddy] Chatbot warm-up failed (${attempt}/${chatbotWarmupAttempts}): ${error.message}`,
+      );
+
+      if (attempt < chatbotWarmupAttempts) {
+        await wait(chatbotWarmupRetryDelayMs);
+      }
+    }
+  }
 }
 
 async function callChatbotJson(pathname, body, timeoutMs = 180_000) {
@@ -2080,4 +2140,5 @@ server.listen(port, () => {
   console.info(
     `Diffriendtiate API running on http://127.0.0.1:${port} using ${storageMode()} storage`,
   );
+  void warmChatbotOnStartup();
 });
