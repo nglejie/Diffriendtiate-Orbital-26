@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "data");
+const dataDir = process.env.DIFFRIENDTIATE_DATA_DIR || path.join(__dirname, "data");
 const dbPath = path.join(dataDir, "db.json");
 const databaseUrl = process.env.DATABASE_URL || "";
 

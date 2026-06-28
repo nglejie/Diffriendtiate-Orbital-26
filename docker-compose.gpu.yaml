@@ -4,7 +4,8 @@ services:
       INTELLIGRATE_GPU_ENABLED: true
 
   ollama:
-    deploy: 
+    profiles: []    # override - remove profile so ollama starts locally
+    deploy:
       resources:
         reservations:
           devices:
@@ -15,3 +16,7 @@ services:
   server-chatbot:
     environment:
       GPU_ENABLED: true
+      USE_GEMINI_EMBEDDINGS: false # use ollama embeddings locally
+    depends_on:
+      ollama:
+        condition: service_healthy

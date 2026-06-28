@@ -6,19 +6,35 @@ from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 CHROMA_DIR = os.getenv("CHROMA_DIR", "/app/chroma_db")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+
+USE_GEMINI_EMBEDDINGS = os.getenv("USE_GEMINI_EMBEDDINGS", "false").lower() == "true"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = None if GEMINI_API_KEY == "your-key-here" else GEMINI_API_KEY # check if gemini key was changed or still default
+GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-2")
+
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
 SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
 
 class VectorStore:
     def __init__(self):
-        self.embeddings = OllamaEmbeddings(
-            model= EMBED_MODEL,
-            base_url = OLLAMA_BASE_URL,
-        )
+        if USE_GEMINI_EMBEDDINGS:
+            print("DEBUG: Using Gemini Embeddings")
+            self.embeddings = GoogleGenerativeAIEmbeddings(
+                model = GEMINI_EMBED_MODEL,
+                google_api_key = GEMINI_API_KEY,
+            )
+        else:
+            print("DEBUG: Using Ollama Embeddings")
+            self.embeddings = OllamaEmbeddings(
+                model = EMBED_MODEL,
+                base_url = OLLAMA_BASE_URL,
+            )
         
         # The document text splitter, to find appropriate chunks
         self.splitter = RecursiveCharacterTextSplitter( 

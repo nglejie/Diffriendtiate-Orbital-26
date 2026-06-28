@@ -43,8 +43,12 @@ services:
     envVars:
       - key: GPU_ENABLED
         value: false
+      - key: USE_GEMINI_EMBEDDINGS
+        value: true
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_EMBED_MODEL
+        value: models/gemini-embedding-2
       - key: NODE_BASE_URL
         value: https://diffriendtiate-orbital-26-ms2.onrender.com
       - key: CHROMA_DIR

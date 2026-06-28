@@ -13,4 +13,15 @@ export default defineConfig({
       },
     },
   },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    include: ["src/**/*.test.{js,jsx}"],
+    setupFiles: ["./src/test/setup.js"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html"],
+      reportsDirectory: "./coverage",
+    },
+  },
 });

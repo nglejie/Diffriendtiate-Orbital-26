@@ -80,8 +80,8 @@ services:
     build:
       context: ./services/server-chatbot
       dockerfile: Dockerfile
-    ports:
-      - "5000:5000" # Keep for DEV Purposes (remove when deploying)
+    # ports:
+      # - "5000:5000" # Keep for DEV Purposes (remove when deploying)
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
@@ -93,18 +93,21 @@ services:
       GPU_ENABLED: false
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-models/gemini-embedding-2}
+      USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment
       PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
     volumes:
       - chroma_db:${CHROMA_DIR}
-    depends_on:
-      ollama:
-        condition: service_healthy
+    # depends_on: # removed when deploying (no need ollama)
+    #   ollama:
+    #     condition: service_healthy
     restart: unless-stopped
 
   ollama:
     build:
       context: ./services/ollama
       dockerfile: Dockerfile
+    profiles: ["local"] # only start when local dev / run
     ports:
       - "11434:11434"
     volumes:

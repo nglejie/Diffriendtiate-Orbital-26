@@ -42,13 +42,23 @@ services/      Independent services, including chatbot/RAG work
 
 Create a local `.env` file from `.env.example`, then run:
 
-CPU Only
+For Deployment / Using Gemini API models (no ollama)
+
+- Requires Gemini API Key
 
 ```cmd
 docker compose up --build
 ```
 
-With NVIDIA GPU
+Local dev without GPU (Ollama for embeddings, Gemini for generation LLM)
+
+- Requires Gemini API Key
+
+```cmd
+docker compose -f docker-compose.yaml -f docker-compose.local.yaml up --build
+```
+
+With NVIDIA GPU (Ollama for all models)
 
 ```cmd
 docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml up --build

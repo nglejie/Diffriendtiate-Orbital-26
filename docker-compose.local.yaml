@@ -1,0 +1,11 @@
+services:
+  ollama:
+    profiles: []    # override — remove profile so ollama starts locally
+
+  server-chatbot:
+    environment:
+      GPU_ENABLED: false
+      USE_GEMINI_EMBEDDINGS: false # use ollama embeddings locally
+    depends_on:
+      ollama:
+        condition: service_healthy
