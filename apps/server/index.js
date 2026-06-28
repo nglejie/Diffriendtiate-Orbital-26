@@ -31,8 +31,17 @@ function resolveChatbotBaseUrl() {
   return "http://127.0.0.1:5000";
 }
 
+function readPositiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const chatbotBaseUrl = resolveChatbotBaseUrl();
 const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx"]);
+const chatbotHealthTimeoutMs = readPositiveNumber(
+  process.env.CHATBOT_HEALTH_TIMEOUT_MS,
+  90_000,
+);
 const roomCorpusSyncCache = new Map();
 const intelligrateGpuEnabled =
   String(process.env.INTELLIGRATE_GPU_ENABLED || process.env.GPU_ENABLED || "")
@@ -1679,7 +1688,7 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
 
   try {
     const response = await fetch(chatbotUrl("/health"), {
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(chatbotHealthTimeoutMs),
     });
     const payload = await readChatbotPayload(response);
     res.json({
