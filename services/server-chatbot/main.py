@@ -79,23 +79,28 @@ async def embed_documents(body: EmbedRequest):
     Returns:
         EmbedResponse: contains the result of the operation, files that succeeded, files that failed, and total chunks embeded
     """
-    print(f"---Embed API for {body.room_id}")
-    if not body.room_id:
-        raise HTTPException(status_code=400, detail="room_id is required")
-    if not body.urls:
-        raise HTTPException(status_code=400, detail="At least one url is required")
-    
-    results = await store.embed_room_documents(
-        room_id = body.room_id,
-        urls = body.urls
-    )
-    
-    return EmbedResponse(
-        result = len(results["failed"]) == 0, # True if no failures
-        success = results["success"],
-        failed = results["failed"],
-        total_chunks = results["total_chunks"],
-    )
+    try:
+        print(f"---Embed API for {body.room_id}")
+        if not body.room_id:
+            raise HTTPException(status_code=400, detail="room_id is required")
+        if not body.urls:
+            raise HTTPException(status_code=400, detail="At least one url is required")
+        
+        results = await store.embed_room_documents(
+            room_id = body.room_id,
+            urls = body.urls
+        )
+        
+        return EmbedResponse(
+            result = len(results["failed"]) == 0, # True if no failures
+            success = results["success"],
+            failed = results["failed"],
+            total_chunks = results["total_chunks"],
+        )
+        
+    except Exception as e:
+        print(f"Unexpected Error {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 @app.post("/predict", response_model=PredictResponse)
 async def predict(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
@@ -212,8 +217,13 @@ async def clear_corpus(room_id: str):
     Returns:
         dict[str, str]: operation result
     """
-    print(f"---Deleting Corupus API for {room_id}")
-    if not room_id:
-        raise HTTPException(status_code=400, detail="room_id is required.")
-    store.clear(room_id=room_id)
-    return {"result": True, "message": f"Corpus cleared for room {room_id}."}
+    try:
+        print(f"---Deleting Corupus API for {room_id}")
+        if not room_id:
+            raise HTTPException(status_code=400, detail="room_id is required.")
+        store.clear(room_id=room_id)
+        return {"result": True, "message": f"Corpus cleared for room {room_id}."}
+
+    except Exception as e:
+        print(f"Unexpected Error {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
