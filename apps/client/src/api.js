@@ -1,7 +1,37 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
+const DEFAULT_CHATBOT_PUBLIC_URL =
+  "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
 const TOKEN_KEY = "diffriendtiate_token";
 
 let authToken = localStorage.getItem(TOKEN_KEY) || "";
+let lastIntelligrateWakeAt = 0;
+
+function getIntelligrateWakeUrl() {
+  const configuredUrl = String(import.meta.env.VITE_CHATBOT_PUBLIC_URL || "").trim();
+  const isRenderPrototype =
+    typeof window !== "undefined" &&
+    window.location.hostname === "diffriendtiate-orbital-26-ms2.onrender.com";
+  const baseUrl = configuredUrl || (isRenderPrototype ? DEFAULT_CHATBOT_PUBLIC_URL : "");
+
+  return baseUrl ? `${baseUrl.replace(/\/+$/, "")}/health` : "";
+}
+
+export function wakeIntelligrateService() {
+  const wakeUrl = getIntelligrateWakeUrl();
+  if (!wakeUrl) return;
+
+  const now = Date.now();
+  if (now - lastIntelligrateWakeAt < 60_000) return;
+  lastIntelligrateWakeAt = now;
+
+  // A no-cors request is enough to wake Render's sleeping chatbot service.
+  // The app still relies on the authenticated backend health endpoint for status.
+  fetch(wakeUrl, {
+    cache: "no-store",
+    keepalive: true,
+    mode: "no-cors",
+  }).catch(() => {});
+}
 
 export function getAuthToken() {
   return authToken;
@@ -170,7 +200,10 @@ export const api = {
     request(`/api/resources/${resourceId}/restore`, { method: "PATCH" }),
   deleteResourcePermanently: (resourceId) =>
     request(`/api/resources/${resourceId}/permanent`, { method: "DELETE" }),
-  getBuddyHealth: (roomId) => request(`/api/rooms/${roomId}/buddy/health`),
+  getBuddyHealth: (roomId) => {
+    wakeIntelligrateService();
+    return request(`/api/rooms/${roomId}/buddy/health`);
+  },
   getBuddyThreads: (roomId) => request(`/api/rooms/${roomId}/buddy/threads`),
   createBuddyThread: (roomId, body) =>
     request(`/api/rooms/${roomId}/buddy/threads`, { method: "POST", body }),
@@ -189,8 +222,15 @@ export const api = {
     request(`/api/rooms/${roomId}/buddy/embed`, { method: "POST" }),
   askBuddy: (roomId, body) =>
     request(`/api/rooms/${roomId}/buddy/message`, { method: "POST", body }),
-  streamBuddy: (roomId, body, onEvent, options) =>
-    streamRequest(`/api/rooms/${roomId}/buddy/message/stream`, body, onEvent, options),
+  streamBuddy: (roomId, body, onEvent, options) => {
+    wakeIntelligrateService();
+    return streamRequest(
+      `/api/rooms/${roomId}/buddy/message/stream`,
+      body,
+      onEvent,
+      options,
+    );
+  },
   getSessions: (roomId) => request(`/api/rooms/${roomId}/sessions`),
   addSession: (roomId, body) =>
     request(`/api/rooms/${roomId}/sessions`, { method: "POST", body }),

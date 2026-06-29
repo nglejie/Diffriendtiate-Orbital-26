@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, getAuthToken, setAuthToken } from "./api.js";
+import { api, getAuthToken, setAuthToken, wakeIntelligrateService } from "./api.js";
 import AuthView from "./features/auth/AuthView.jsx";
 import Dashboard from "./features/dashboard/Dashboard.jsx";
 import RoomView from "./features/room/RoomView.jsx";
@@ -31,6 +31,10 @@ function App() {
   const [route, setRoute] = useState(parseRoute);
   const [booting, setBooting] = useState(Boolean(token));
   const [themeMode, setThemeMode] = useState(readStoredThemeMode);
+
+  useEffect(() => {
+    wakeIntelligrateService();
+  }, []);
 
   useEffect(() => {
     applyThemeMode(themeMode);
