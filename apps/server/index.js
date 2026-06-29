@@ -45,12 +45,16 @@ const isRenderRuntime = Boolean(
 const renderChatbotColdStartTimeoutMs = 180_000;
 const renderChatbotPublicUrl =
   "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
+const chatbotPublicUrl = String(
+  process.env.CHATBOT_PUBLIC_URL || renderChatbotPublicUrl,
+)
+  .trim()
+  .replace(/\/+$/, "");
 const chatbotWarmupBaseUrl = String(
-  process.env.CHATBOT_WARMUP_BASE_URL ||
-    process.env.CHATBOT_PUBLIC_URL ||
-    (isRenderRuntime || process.env.NODE_ENV === "production"
-      ? renderChatbotPublicUrl
-      : chatbotBaseUrl),
+  isRenderRuntime
+    ? chatbotPublicUrl
+    : process.env.CHATBOT_WARMUP_BASE_URL ||
+        (process.env.NODE_ENV === "production" ? chatbotPublicUrl : chatbotBaseUrl),
 )
   .trim()
   .replace(/\/+$/, "");
@@ -2161,5 +2165,6 @@ server.listen(port, () => {
   console.info(
     `Diffriendtiate API running on http://127.0.0.1:${port} using ${storageMode()} storage`,
   );
+  console.info(`[buddy] Chatbot wake target: ${chatbotWarmupBaseUrl}`);
   void warmChatbotOnStartup();
 });
