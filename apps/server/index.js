@@ -42,7 +42,7 @@ const isRenderRuntime = Boolean(
     process.env.RENDER_SERVICE_ID ||
     process.env.RENDER_EXTERNAL_URL,
 );
-const renderChatbotColdStartTimeoutMs = 180_000;
+const renderChatbotColdStartTimeoutMs = 300_000;
 const renderChatbotPublicUrl =
   "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
 const chatbotPublicUrl = String(

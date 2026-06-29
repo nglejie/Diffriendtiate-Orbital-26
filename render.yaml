@@ -29,11 +29,11 @@ services:
           name: Diffriendtiate-Orbital-26-MS2-chatbot
           property: port
       - key: CHATBOT_HEALTH_TIMEOUT_MS
-        value: 180000
+        value: 300000
       - key: CHATBOT_WARMUP_BASE_URL
         value: https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com
       - key: CHATBOT_WARMUP_TIMEOUT_MS
-        value: 180000
+        value: 300000
       - key: CHATBOT_WARMUP_RETRY_DELAY_MS
         value: 5000
       - key: INTELLIGRATE_GPU_ENABLED
