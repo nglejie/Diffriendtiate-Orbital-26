@@ -172,7 +172,140 @@ async function requireAuth(req, res, next) {
 }
 
 function isMember(room, userId) {
-  return room.ownerId === userId || room.memberIds.includes(userId);
+  return (
+    room?.ownerId === userId ||
+    (Array.isArray(room?.memberIds) && room.memberIds.includes(userId))
+  );
+}
+
+const DEFAULT_SPACE_POSITION = { x: 50, y: 62 };
+const SPACE_MIN_POSITION = 5;
+const SPACE_MAX_POSITION = 95;
+const DEFAULT_SPACE_TILE = { col: 21, row: 13 };
+const SPACE_MIN_TILE = 0;
+const SPACE_MAX_TILE_COL = 47;
+const SPACE_MAX_TILE_ROW = 29;
+const ROOM_ACTIVITY_TABS = new Set(["focus", "chat", "buddy", "resources", "space", "calendar"]);
+// Temporary live presence only: Study Space avatar positions are intentionally
+// kept in memory and disappear when the user's room socket leaves/disconnects.
+const spacePresenceByRoom = new Map();
+const roomActivityByRoom = new Map();
+
+function normalizeSpacePosition(value, fallback = null) {
+  if (!value || typeof value !== "object") return fallback;
+
+  const col = Number(value?.col);
+  const row = Number(value?.row);
+
+  if (Number.isFinite(col) && Number.isFinite(row)) {
+    return {
+      col: Math.min(SPACE_MAX_TILE_COL, Math.max(SPACE_MIN_TILE, Math.round(col))),
+      row: Math.min(SPACE_MAX_TILE_ROW, Math.max(SPACE_MIN_TILE, Math.round(row))),
+    };
+  }
+
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+
+  return {
+    x: Math.min(SPACE_MAX_POSITION, Math.max(SPACE_MIN_POSITION, x)),
+    y: Math.min(SPACE_MAX_POSITION, Math.max(SPACE_MIN_POSITION, y)),
+  };
+}
+
+function normalizeRoomActivityTab(value) {
+  const tabId = String(value || "").trim();
+  return ROOM_ACTIVITY_TABS.has(tabId) ? tabId : null;
+}
+
+function getSpaceRoomKey(roomId) {
+  // Keep live avatar broadcasts separate from the room chat Socket.IO room.
+  return `space:${roomId}`;
+}
+
+function getSpacePresence(roomId) {
+  if (!spacePresenceByRoom.has(roomId)) {
+    spacePresenceByRoom.set(roomId, new Map());
+  }
+
+  return spacePresenceByRoom.get(roomId);
+}
+
+function serializeSpacePresence(roomId) {
+  return Array.from(spacePresenceByRoom.get(roomId)?.values() || []).map(
+    ({ socketId: _socketId, ...presence }) => presence,
+  );
+}
+
+function getRoomActivity(roomId) {
+  if (!roomActivityByRoom.has(roomId)) {
+    roomActivityByRoom.set(roomId, new Map());
+  }
+
+  return roomActivityByRoom.get(roomId);
+}
+
+function serializeRoomActivity(roomId) {
+  return Array.from(roomActivityByRoom.get(roomId)?.values() || []).map(
+    ({ socketId: _socketId, ...activity }) => activity,
+  );
+}
+
+function emitRoomActivityState(roomId) {
+  io.to(`room:${roomId}`).emit("room:activity:state", {
+    roomId,
+    members: serializeRoomActivity(roomId),
+  });
+}
+
+function removeSocketSpacePresence(socket, targetRoomId = null) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  for (const [roomId, roomPresence] of Array.from(spacePresenceByRoom.entries())) {
+    if (targetRoomId && roomId !== targetRoomId) continue;
+
+    const presence = roomPresence.get(userId);
+    if (!presence || presence.socketId !== socket.id) continue;
+
+    roomPresence.delete(userId);
+    socket.leave(getSpaceRoomKey(roomId));
+
+    if (roomPresence.size) {
+      io.to(getSpaceRoomKey(roomId)).emit("space:user-left", {
+        roomId,
+        userId,
+      });
+    } else {
+      spacePresenceByRoom.delete(roomId);
+    }
+  }
+}
+
+function removeSocketRoomActivity(socket, targetRoomId = null) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  for (const [roomId, roomActivity] of Array.from(roomActivityByRoom.entries())) {
+    if (targetRoomId && roomId !== targetRoomId) continue;
+
+    const activity = roomActivity.get(userId);
+    if (!activity || activity.socketId !== socket.id) continue;
+
+    roomActivity.delete(userId);
+
+    if (roomActivity.size) {
+      emitRoomActivityState(roomId);
+    } else {
+      roomActivityByRoom.delete(roomId);
+      io.to(`room:${roomId}`).emit("room:activity:state", {
+        roomId,
+        members: [],
+      });
+    }
+  }
 }
 
 function canViewRoom(room, userId) {
@@ -2027,6 +2160,138 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("room:activity:set", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before updating activity." });
+        return;
+      }
+
+      const tabId = normalizeRoomActivityTab(payload?.tabId);
+      if (!tabId) {
+        ack?.({ ok: false, message: "Room activity tab is invalid." });
+        return;
+      }
+
+      const roomActivity = getRoomActivity(room.id);
+      roomActivity.set(socket.user.id, {
+        roomId: room.id,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        tabId,
+        socketId: socket.id,
+        updatedAt: new Date().toISOString(),
+      });
+
+      socket.join(`room:${room.id}`);
+      const members = serializeRoomActivity(room.id);
+      io.to(`room:${room.id}`).emit("room:activity:state", {
+        roomId: room.id,
+        members,
+      });
+      ack?.({ ok: true, members });
+    } catch {
+      ack?.({ ok: false, message: "Unable to update room activity right now." });
+    }
+  });
+
+  socket.on("space:join", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before entering Limeets." });
+        return;
+      }
+
+      const position = normalizeSpacePosition(payload?.position, DEFAULT_SPACE_TILE);
+      const roomPresence = getSpacePresence(room.id);
+      const presence = {
+        roomId: room.id,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        position,
+        socketId: socket.id,
+        updatedAt: new Date().toISOString(),
+      };
+
+      socket.join(getSpaceRoomKey(room.id));
+      roomPresence.set(socket.user.id, presence);
+
+      const users = serializeSpacePresence(room.id);
+      io.to(getSpaceRoomKey(room.id)).emit("space:state", {
+        roomId: room.id,
+        users,
+      });
+      ack?.({ ok: true, users });
+    } catch {
+      ack?.({ ok: false, message: "Unable to enter Limeets right now." });
+    }
+  });
+
+  socket.on("space:move", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before moving in Limeets." });
+        return;
+      }
+
+      const position = normalizeSpacePosition(payload?.position);
+      if (!position) {
+        ack?.({ ok: false, message: "Avatar position is invalid." });
+        return;
+      }
+
+      const roomPresence = getSpacePresence(room.id);
+      const currentPresence = roomPresence.get(socket.user.id);
+      if (!currentPresence || currentPresence.socketId !== socket.id) {
+        ack?.({ ok: false, message: "Enter Limeets before moving." });
+        return;
+      }
+
+      const presence = {
+        ...currentPresence,
+        position,
+        updatedAt: new Date().toISOString(),
+      };
+
+      roomPresence.set(socket.user.id, presence);
+      socket.to(getSpaceRoomKey(room.id)).emit("space:user-moved", {
+        roomId: room.id,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        position,
+      });
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to move in Limeets right now." });
+    }
+  });
+
+  socket.on("space:leave", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Study Space room not found." });
+        return;
+      }
+
+      removeSocketSpacePresence(socket, room.id);
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to leave Limeets right now." });
+    }
+  });
+
   socket.on("message:send", async (payload, ack) => {
     try {
       const db = await readDb();
@@ -2129,6 +2394,11 @@ io.on("connection", (socket) => {
     } catch {
       ack?.({ ok: false, message: "Unable to delete the message right now." });
     }
+  });
+
+  socket.on("disconnect", () => {
+    removeSocketSpacePresence(socket);
+    removeSocketRoomActivity(socket);
   });
 });
 

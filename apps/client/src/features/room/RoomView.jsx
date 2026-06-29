@@ -22,6 +22,7 @@ import {
   Link as LinkIcon,
   Lock,
   LogOut,
+  Map as MapIcon,
   MessageCircle,
   MicOff,
   MoreVertical,
@@ -56,6 +57,7 @@ import {
   ResourceFileManager,
   useResourceDriveController,
 } from "./resources/ResourceFileManager.jsx";
+import { VirtualStudySpace } from "./space/VirtualStudySpace.jsx";
 import {
   DEFAULT_CATEGORY_ID,
   addChannelToCategory,
@@ -112,8 +114,9 @@ const tabs = [
   { id: "focus", label: "Home", icon: House },
   { id: "chat", label: "Convolution", icon: MessageCircle },
   { id: "buddy", label: "Intelligrate", icon: Bot },
-  { id: "resources", label: "Resources", icon: FolderOpen },
-  { id: "calendar", label: "Calendar", icon: CalendarDays, disabled: true },
+  { id: "resources", label: "Infilenite", icon: FolderOpen },
+  { id: "space", label: "Limeets", icon: MapIcon },
+  { id: "calendar", label: "Coordidate", icon: CalendarDays, disabled: true },
 ];
 
 const DEFAULT_BUDDY_AVAILABILITY = {
@@ -193,6 +196,8 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
   const [roomToast, setRoomToast] = useState(null);
+  const [roomSocket, setRoomSocket] = useState(null);
+  const [roomActivityMembers, setRoomActivityMembers] = useState([]);
   const [importantMessages, setImportantMessages] = useState([]);
   const [resourceThreads, setResourceThreads] = useState({});
   const toastTimeoutRef = useRef(null);
@@ -415,6 +420,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       auth: { token },
       path: "/socket.io",
     });
+    setRoomSocket(socket);
 
     socket.on("connect", () => {
       socket.emit("room:join", room.id, (ack) => {
@@ -453,6 +459,11 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       }
     });
 
+    socket.on("room:activity:state", (payload) => {
+      if (payload?.roomId !== room.id) return;
+      setRoomActivityMembers(Array.isArray(payload.members) ? payload.members : []);
+    });
+
     // Chat panel children send messages through this room-scoped socket.
     // The reference is cleared on unmount to avoid leaking a stale connection.
     window.diffriendtiateSocket = socket;
@@ -462,8 +473,21 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       if (window.diffriendtiateSocket === socket) {
         delete window.diffriendtiateSocket;
       }
+      setRoomSocket((currentSocket) => (currentSocket === socket ? null : currentSocket));
+      setRoomActivityMembers([]);
     };
   }, [room?.id, room?.isMember, token]);
+
+  useEffect(() => {
+    if (!roomSocket || !room?.id || !room.isMember || !activeTab) return undefined;
+
+    roomSocket.emit("room:activity:set", {
+      roomId: room.id,
+      tabId: activeTab,
+    });
+
+    return undefined;
+  }, [activeTab, room?.id, room?.isMember, roomSocket]);
 
   /**
    * Fetches the room and all member-only data needed by the active room workspace.
@@ -998,12 +1022,12 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   /** Keeps the detail sidebar open whenever a room tool is selected. */
   function selectRoomTab(tabId) {
     if (tabs.some((tab) => tab.id === tabId && tab.disabled)) {
-      setNotice("Calendar is currently disabled.");
+      setNotice("Coordidate is currently disabled.");
       return;
     }
 
     setActiveTab(tabId);
-    setContextOpen(true);
+    setContextOpen(tabId !== "space");
   }
 
   /** Opens a local draft chat; persistence starts only after the first message. */
@@ -1269,8 +1293,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const safeChannelLayout = asArray(channelLayout);
   const safeChatDrafts = asObjectRecord(chatDrafts);
   const safeMessages = asArray(messages);
+  const safeResources = asArray(resources);
   const safeSessions = asArray(sessions);
   const safeStarredMessageIds = asArray(starredMessageIds);
+  const visibleResourceCount = safeResources.filter((resource) => !resource?.deletedAt).length;
+  const spaceContext = {
+    activeBuddyThreadTitle: activeBuddyThread?.title || "",
+    activeChatChannel,
+    calendarAvailable: false,
+    intelligrateAvailable: Boolean(buddyAvailability.available),
+    intelligrateProviderLabel: buddyAvailability.providerLabel || "",
+    resourceCount: visibleResourceCount,
+    sessionCount: safeSessions.length,
+  };
 
   return (
     <div
@@ -1452,6 +1487,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         {room.isMember && activeTab === "resources" ? (
           <section className="room-content-panel resource-content-panel">
             <ResourceFileManager drive={resourceDrive} />
+          </section>
+        ) : null}
+
+        {room.isMember && activeTab === "space" ? (
+          <section className="room-content-panel study-space-content-panel">
+            <VirtualStudySpace
+              onNavigate={selectRoomTab}
+              room={room}
+              roomActivityMembers={roomActivityMembers}
+              socket={roomSocket}
+              spaceContext={spaceContext}
+              user={user}
+            />
           </section>
         ) : null}
 
@@ -1868,9 +1916,18 @@ function RoomContextPanel({
   if (activeTab === "resources") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Resources" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Infilenite" />
         <PanelDivider />
         <ResourceDriveSidebar drive={resourceDrive} />
+      </>
+    );
+  }
+
+  if (activeTab === "space") {
+    return (
+      <>
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Limeets" />
+        <PanelDivider />
       </>
     );
   }
@@ -1878,7 +1935,7 @@ function RoomContextPanel({
   if (activeTab === "calendar") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Calendar" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Coordidate" />
         <PanelDivider />
         <section className="context-section roomy">
           <h3>Scheduled</h3>
