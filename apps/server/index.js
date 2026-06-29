@@ -37,27 +37,38 @@ function readPositiveNumber(value, fallback) {
 }
 
 const chatbotBaseUrl = resolveChatbotBaseUrl();
+const isRenderRuntime = Boolean(
+  process.env.RENDER ||
+    process.env.RENDER_SERVICE_ID ||
+    process.env.RENDER_EXTERNAL_URL,
+);
+const renderChatbotColdStartTimeoutMs = 180_000;
 const renderChatbotPublicUrl =
   "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
 const chatbotWarmupBaseUrl = String(
   process.env.CHATBOT_WARMUP_BASE_URL ||
     process.env.CHATBOT_PUBLIC_URL ||
-    (process.env.NODE_ENV === "production" ? renderChatbotPublicUrl : chatbotBaseUrl),
+    (isRenderRuntime || process.env.NODE_ENV === "production"
+      ? renderChatbotPublicUrl
+      : chatbotBaseUrl),
 )
   .trim()
   .replace(/\/+$/, "");
 const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx"]);
-const chatbotHealthTimeoutMs = readPositiveNumber(
-  process.env.CHATBOT_HEALTH_TIMEOUT_MS,
-  90_000,
+const chatbotHealthTimeoutMs = Math.max(
+  readPositiveNumber(
+    process.env.CHATBOT_HEALTH_TIMEOUT_MS,
+    isRenderRuntime ? renderChatbotColdStartTimeoutMs : 90_000,
+  ),
+  isRenderRuntime ? renderChatbotColdStartTimeoutMs : 1,
 );
-const chatbotWarmupTimeoutMs = readPositiveNumber(
-  process.env.CHATBOT_WARMUP_TIMEOUT_MS,
-  chatbotHealthTimeoutMs,
+const chatbotWarmupTimeoutMs = Math.max(
+  readPositiveNumber(process.env.CHATBOT_WARMUP_TIMEOUT_MS, chatbotHealthTimeoutMs),
+  isRenderRuntime ? renderChatbotColdStartTimeoutMs : 1,
 );
 const chatbotWarmupRetryDelayMs = readPositiveNumber(
   process.env.CHATBOT_WARMUP_RETRY_DELAY_MS,
-  10_000,
+  5_000,
 );
 const roomCorpusSyncCache = new Map();
 const intelligrateGpuEnabled =
