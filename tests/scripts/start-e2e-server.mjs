@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const dataDir =
   process.env.E2E_DATA_DIR ||
-  path.join(repoRoot, "apps/tests/.tmp/e2e-server-data");
+  path.join(repoRoot, "tests/.tmp/e2e-server-data");
 
 // Reset the E2E data directory before every browser test run so repeated runs
 // start from a predictable empty app state.
@@ -24,4 +24,4 @@ process.env.NODE_ENV = "test";
 process.env.PORT = process.env.E2E_API_PORT || "4011";
 
 // Importing the server starts it with the environment above.
-await import("../../server/index.js");
+await import("../../apps/server/index.js");

@@ -9,7 +9,7 @@ import {
   normalizeBuddyMarkdown,
   normalizeSourceKey,
   splitBuddyVisibleThinking,
-} from "../../client/src/features/room/buddyUtils.js";
+} from "../../apps/client/src/features/room/buddyUtils.js";
 
 describe("Intelligrate presentation utilities", () => {
   // Confirms the frontend separates model-provided <thinking> text from the

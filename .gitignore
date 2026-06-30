@@ -16,7 +16,7 @@ app/server/uploads
 apps/client/dist
 apps/server/data/*.json
 apps/server/uploads
-apps/tests/.tmp/
+tests/.tmp/
 apps/client/coverage
 playwright-report
 test-results

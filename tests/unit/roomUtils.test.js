@@ -5,7 +5,7 @@ import {
   getInitial,
   resourceToAttachment,
   sessionFallsInSlot,
-} from "../../client/src/shared/utils/room.js";
+} from "../../apps/client/src/shared/utils/room.js";
 
 describe("room shared utilities", () => {
   // Ensures the member list shown inside a room is stable and deduplicated. The

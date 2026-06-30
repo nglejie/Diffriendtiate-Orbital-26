@@ -6,7 +6,7 @@ import {
   normaliseThemeMode,
   readStoredThemeMode,
   storeThemeMode,
-} from "../../client/src/theme.js";
+} from "../../apps/client/src/theme.js";
 
 describe("theme mode utilities", () => {
   afterEach(() => {

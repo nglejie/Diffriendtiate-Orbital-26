@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../..",
+  "../..",
 );
 
 export function getRepoRoot() {
@@ -176,6 +176,7 @@ export async function startTestApp(options = {}) {
       CHATBOT_BASE_URL: options.chatbotUrl || "http://127.0.0.1:59999",
       DATABASE_URL: "",
       DIFFRIENDTIATE_DATA_DIR: dataDir,
+      INTELLIGRATE_GPU_ENABLED: "true",
       JWT_SECRET: "diffriendtiate-test-secret",
       NODE_ENV: "test",
       PORT: String(port),

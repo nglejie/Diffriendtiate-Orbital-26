@@ -3,11 +3,11 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 const testsDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(testsDir, "../..");
+const repoRoot = path.resolve(testsDir, "..");
 const apiPort = Number(process.env.E2E_API_PORT || 4011);
 const clientPort = Number(process.env.E2E_CLIENT_PORT || 4174);
 const mockPort = Number(process.env.MOCK_CHATBOT_PORT || 5011);
-const dataDir = path.join(repoRoot, "apps/tests/.tmp/e2e-server-data");
+const dataDir = path.join(repoRoot, "tests/.tmp/e2e-server-data");
 
 export default defineConfig({
   testDir: path.join(testsDir, "e2e"),
@@ -18,7 +18,7 @@ export default defineConfig({
   fullyParallel: false,
   reporter: [
     ["list"],
-    ["html", { open: "never", outputFolder: path.join(repoRoot, "apps/tests/.tmp/playwright-report") }],
+    ["html", { open: "never", outputFolder: path.join(repoRoot, "tests/.tmp/playwright-report") }],
   ],
   use: {
     // Browser UAT starts from the local Vite client and keeps screenshots/traces
@@ -37,7 +37,7 @@ export default defineConfig({
     {
       // Mock Intelligrate first so the app server can reach the configured LLM
       // endpoint as soon as it boots.
-      command: "node apps/tests/scripts/mock-chatbot-server.mjs",
+      command: "node tests/scripts/mock-chatbot-server.mjs",
       cwd: repoRoot,
       env: { MOCK_CHATBOT_PORT: String(mockPort) },
       reuseExistingServer: false,
@@ -46,7 +46,7 @@ export default defineConfig({
     },
     {
       // Start the app API with isolated E2E storage and the mock chatbot URL.
-      command: "node apps/tests/scripts/start-e2e-server.mjs",
+      command: "node tests/scripts/start-e2e-server.mjs",
       cwd: repoRoot,
       env: {
         E2E_API_PORT: String(apiPort),

@@ -4,7 +4,7 @@ import {
   createFilterOptions,
   matchesBackgroundFilters,
   normaliseTags,
-} from "../../client/src/features/dashboard/dashboardUtils.js";
+} from "../../apps/client/src/features/dashboard/dashboardUtils.js";
 
 describe("dashboard helpers", () => {
   // Ensures the dashboard accepts tags from both UI paths: an existing array

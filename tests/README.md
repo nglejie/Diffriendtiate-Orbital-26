@@ -1,24 +1,44 @@
-# Diffriendtiate QA Harness
+# Diffriendtiate QA Suite
 
-This folder contains cross-application tests that run against the app surface rather than one implementation module.
+This is the single root-level test suite for Diffriendtiate. It covers the app
+surface across frontend, backend, integration, Intelligrate orchestration, smoke
+performance, security, and browser UAT flows. Tests intentionally avoid editing
+or depending on `services/` internals.
 
-- `integration/`: Playwright API tests for server/client contracts such as auth and room creation.
-- `e2e/`: Playwright browser tests for critical user journeys.
-- `performance/`: k6 smoke load tests, run through Docker so k6 does not need to be installed locally.
-- `security/`: npm audit plus OWASP ZAP baseline scan wrapper.
+## Why Root-Level
 
-Useful commands:
+The suite lives at the repository root because it validates behavior across both
+`apps/client` and `apps/server`. Keeping these cross-cutting checks in one
+top-level `tests/` directory makes the local commands and GitHub Actions job
+match each other, while still allowing individual folders to target unit,
+integration, AI reliability, performance, security, and browser UAT concerns.
 
-```bash
-npm run test:unit
-npm run test:integration
-npm run test:e2e
-npm run test:performance
-npm run test:security
-npm run qa
-```
+## Coverage Areas
 
-By default, Playwright tests expect the Docker app at `http://127.0.0.1:4000`.
-Set `PLAYWRIGHT_START_APP=1` to let Playwright start the local dev server instead.
+- Build & reproducibility: `npm run test:build`
+- Unit and component tests: `npm run test:unit`
+- API and integration tests: `npm run test:integration`
+- Intelligrate app-side reliability: `npm run test:ai`
+- Performance smoke tests: `npm run test:performance`
+- Security checks: `npm run test:security`
+- End-to-end / UAT browser flows: `npm run test:e2e`
+- Full local QA gate: `npm test`
+- Full QA gate plus production build check: `npm run qa`
+- Evidence run with terminal-log screenshots: `npm run test:evidence`
 
-The Docker-based k6 and ZAP runners target `http://host.docker.internal:4000` by default so the containers can reach the host app. Override with `PERF_BASE_URL` or `ZAP_TARGET_URL` when needed.
+## Layout
+
+- `unit/`: pure helper and business-logic tests.
+- `components/`: React component tests using jsdom and Testing Library.
+- `integration/`: real app API tests with isolated storage and a mock
+  Intelligrate service.
+- `ai/`: app-side Intelligrate reliability and corpus-sync tests.
+- `performance/`: fast smoke budgets plus optional k6 wrapper.
+- `security/`: dependency audit, authorization, private-room, error hygiene, and
+  source-pattern checks.
+- `e2e/`: browser UAT flows using Playwright.
+- `helpers/`, `setup/`, and `scripts/`: shared fixtures, test servers, and
+  evidence generation utilities.
+
+The evidence runner stores raw logs, summaries, and PNG screenshots of real test
+outputs under `docs/QA_Test_Evidence_<timestamp>/`.

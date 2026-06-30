@@ -1,8 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ChatSidebar } from "../../client/src/features/room/chat/ChatSidebar.jsx";
-import { DEFAULT_CATEGORY_ID } from "../../client/src/features/room/chat/chatLayout.js";
+import { ChatSidebar } from "../../apps/client/src/features/room/chat/ChatSidebar.jsx";
+import { DEFAULT_CATEGORY_ID } from "../../apps/client/src/features/room/chat/chatLayout.js";
 
 const layout = [
   { id: DEFAULT_CATEGORY_ID, name: "Text Channels", channels: ["general", "lectures"] },
