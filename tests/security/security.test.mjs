@@ -11,7 +11,11 @@ import { getRepoRoot, startMockChatbot, startTestApp } from "../helpers/testServ
 
 function npmCommand(args) {
   // Run npm through the current Node executable so this security check behaves
-  // consistently on Windows shells and CI environments.
+  // consistently on Windows shells. Unix CI runners already expose npm on PATH.
+  if (process.platform !== "win32") {
+    return { command: "npm", args };
+  }
+
   return {
     command: process.execPath,
     args: [path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"), ...args],

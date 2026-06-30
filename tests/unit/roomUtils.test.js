@@ -42,8 +42,8 @@ describe("room shared utilities", () => {
   // A session should appear only in the hour where it starts, not in adjacent
   // hour rows that happen to be on the same day.
   it("places sessions in their matching calendar hour only", () => {
-    const day = new Date("2026-06-18T00:00:00+08:00");
-    const session = { startsAt: "2026-06-18T14:30:00+08:00" };
+    const day = new Date(2026, 5, 18);
+    const session = { startsAt: new Date(2026, 5, 18, 14, 30).toISOString() };
 
     expect(sessionFallsInSlot(session, day, 14)).toBe(true);
     expect(sessionFallsInSlot(session, day, 15)).toBe(false);
