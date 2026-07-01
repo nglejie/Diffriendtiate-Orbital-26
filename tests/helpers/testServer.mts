@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -16,7 +17,7 @@ export function getRepoRoot() {
   return repoRoot;
 }
 
-export async function getFreePort() {
+export async function getFreePort(): Promise<number> {
   // Ask the OS for an available local port so parallel or repeated test runs do
   // not fight over a hardcoded server port.
   return new Promise((resolve, reject) => {
@@ -24,7 +25,7 @@ export async function getFreePort() {
     server.unref();
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
+      const address = server.address() as AddressInfo;
       server.close(() => resolve(address.port));
     });
   });
@@ -89,11 +90,11 @@ export async function startMockChatbot() {
       calls.embeds.push(body);
       sendJson(response, 200, {
         result: true,
-        success: Array.isArray(body?.urls)
-          ? body.urls.map((item) => item.name || item.file_name || item.url || "resource")
+      success: Array.isArray((body as any)?.urls)
+          ? (body as any).urls.map((item) => item.name || item.file_name || item.url || "resource")
           : [],
         failed: [],
-        total_chunks: Array.isArray(body?.urls) ? body.urls.length : 0,
+        total_chunks: Array.isArray((body as any)?.urls) ? (body as any).urls.length : 0,
       });
       return;
     }
@@ -124,7 +125,9 @@ export async function startMockChatbot() {
     sendJson(response, 404, { message: `Unhandled mock chatbot route: ${request.method} ${url.pathname}` });
   });
 
-  await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
 
   return {
     calls,
@@ -159,7 +162,7 @@ async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
   throw new Error(`Timed out waiting for ${baseUrl}/api/health: ${lastError?.message || "unknown error"}`);
 }
 
-export async function startTestApp(options = {}) {
+export async function startTestApp(options: any = {}) {
   // Launches the real app API in a child process with isolated JSON storage and
   // test-only secrets. This gives integration, AI, performance, and security
   // tests realistic behavior without touching local development data.

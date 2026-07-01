@@ -3,11 +3,25 @@ const TOKEN_KEY = "diffriendtiate_token";
 
 let authToken = localStorage.getItem(TOKEN_KEY) || "";
 
+type ApiRequestOptions = Omit<RequestInit, "body" | "headers"> & {
+  body?: any;
+  headers?: Record<string, string>;
+};
+
+type StreamRequestOptions = {
+  signal?: AbortSignal;
+};
+
+type ResourceQueryOptions = {
+  includeDeleted?: boolean;
+  deletedOnly?: boolean;
+};
+
 export function getAuthToken() {
   return authToken;
 }
 
-export function setAuthToken(token) {
+export function setAuthToken(token: string) {
   authToken = token || "";
 
   if (authToken) {
@@ -22,14 +36,14 @@ export function setAuthToken(token) {
  * It attaches the current bearer token and normalizes API errors into Error objects
  * so feature components can show user-friendly modal messages.
  */
-async function request(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
+async function request(path: string, options: ApiRequestOptions = {}) {
+  const headers: Record<string, string> = { ...(options.headers || {}) };
 
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
   }
 
-  const init = {
+  const init: RequestInit = {
     method: options.method || "GET",
     headers,
   };
@@ -57,9 +71,9 @@ async function request(path, options = {}) {
  * Parses one Server-Sent Events block from the Intelligrate streaming endpoint.
  * The parser keeps `event:` and multi-line `data:` support in one place.
  */
-function parseSseBlock(block) {
+function parseSseBlock(block: string) {
   let event = "message";
-  const data = [];
+  const data: string[] = [];
 
   for (const line of block.split(/\r?\n/)) {
     if (line.startsWith("event:")) {
@@ -77,8 +91,8 @@ function parseSseBlock(block) {
  * Streams a POST request and forwards each SSE event as it arrives.
  * The caller owns cancellation through AbortController so Intelligrate responses can be stopped.
  */
-async function streamRequest(path, body, onEvent, options = {}) {
-  const headers = { "Content-Type": "application/json" };
+async function streamRequest(path: string, body: any, onEvent: any, options: StreamRequestOptions = {}) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
 
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
@@ -150,7 +164,7 @@ export const api = {
       method: "DELETE",
     }),
   getMessages: (roomId) => request(`/api/rooms/${roomId}/messages`),
-  getResources: (roomId, options = {}) => {
+  getResources: (roomId, options: ResourceQueryOptions = {}) => {
     const params = new URLSearchParams();
     if (options.includeDeleted) params.set("includeDeleted", "true");
     if (options.deletedOnly) params.set("deleted", "true");

@@ -140,7 +140,7 @@ function formatResourceDate(value) {
 }
 
 function buildFolderPaths(resources, resourceFolders) {
-  const paths = new Set();
+  const paths = new Set<string>();
   [...resourceFolders, ...resources.map((resource) => resource.folder)]
     .map(normalizePath)
     .filter((folderPath) => folderPath && folderPath !== "All files")

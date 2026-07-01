@@ -71,13 +71,14 @@ function renderBuddyMarkdown(text) {
   if (!markdown) return null;
 
   return (
-    <ReactMarkdown
-      className="buddy-markdown"
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-    >
-      {markdown}
-    </ReactMarkdown>
+    <div className="buddy-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+      >
+        {markdown}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -129,7 +130,7 @@ function fileToPendingAttachment(file, index) {
 }
 
 /** ChatGPT/Claude-style attachment chip with a square preview and filename. */
-function AttachmentPreview({ file, onRemove }) {
+function AttachmentPreview({ file, onRemove = undefined }) {
   const [previewUrl, setPreviewUrl] = useState("");
   const sourceFile = isBrowserFile(file) ? file : file?.file;
   const isImage = isPreviewableImage(file);
@@ -172,7 +173,7 @@ function AttachmentPreview({ file, onRemove }) {
 }
 
 /** Subtle message affordances shown below user messages on hover. */
-function MessageActions({ message, onCopy, onEdit }) {
+function MessageActions({ message, onCopy, onEdit = undefined }) {
   const [copied, setCopied] = useState(false);
   const timestamp = formatMessageHoverTime(message.createdAt);
   const isUserMessage = message.role === "user";

@@ -85,6 +85,7 @@ import {
   formatWeekday,
   getInitial,
   getWeekStart,
+  isSameDate,
   resourceToAttachment,
   sessionFallsInSlot,
 } from "../../shared/utils/room.ts";
@@ -560,7 +561,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
    * so chat/Intelligrate can attach the canonical server records.
    */
   async function uploadSharedFiles(fileList, folder = UPLOADS_FOLDER) {
-    const files = Array.from(fileList || []);
+    const files = Array.from(fileList || []) as File[];
     if (!files.length || !room?.id) return [];
 
     const uploaded = [];
@@ -598,7 +599,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
    * and persisted chain data. The backend owns model behavior; this layer only
    * translates stream events into React state updates.
    */
-  async function askBuddy(messagesForThread, attachmentResources = [], handlers = {}) {
+  async function askBuddy(messagesForThread, attachmentResources = [], handlers: any = {}) {
     if (!room?.id) throw new Error("Open a room before asking Intelligrate.");
 
     return api.streamBuddy(
@@ -647,7 +648,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         }
 
         if (event === "error") {
-          let payload = {};
+          let payload: any = {};
           try {
             payload = JSON.parse(data || "{}");
           } catch {
@@ -664,7 +665,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
    * Sends a chat message over the active room socket and exposes Socket.IO acks as
    * a Promise so panels can use normal async error handling.
    */
-  function sendViaSocket(body, options = {}) {
+  function sendViaSocket(body, options: any = {}) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
@@ -1830,7 +1831,7 @@ function RoomCallDock({ user, variant = "embedded" }) {
 }
 
 /** Shared sidebar header with a collapse control aligned to the title. */
-function PanelHeader({ eyebrow, onCloseSidebar, title, subtitle }) {
+function PanelHeader({ eyebrow = "", onCloseSidebar, title, subtitle = "" }) {
   return (
     <div className="context-panel-topline">
       <header className="context-panel-header">

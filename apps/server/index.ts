@@ -11,6 +11,24 @@ import multer from "multer";
 import { Server } from "socket.io";
 import { initDb, readDb, storageMode, writeDb } from "./store.js";
 
+declare global {
+  namespace Express {
+    interface Request {
+      user?: any;
+    }
+
+    interface Response {
+      flush?: () => void;
+    }
+  }
+}
+
+declare module "socket.io" {
+  interface Socket {
+    user?: any;
+  }
+}
+
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 const serverRootDir = path.basename(runtimeDir) === "dist" ? path.dirname(runtimeDir) : runtimeDir;
 const uploadDir = path.join(serverRootDir, "uploads");
@@ -250,7 +268,7 @@ function normalizeBuddyVisibility(value) {
   return value === "public" ? "public" : "private";
 }
 
-function getBuddyThinkingText(value) {
+function getBuddyThinkingText(value: any) {
   if (typeof value === "string") return value.trim();
   if (value == null) return "";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -272,7 +290,7 @@ function getBuddyThinkingText(value) {
   return "";
 }
 
-function normalizeBuddyThinkingStep(step) {
+function normalizeBuddyThinkingStep(step: any) {
   if (step && typeof step === "object" && !Array.isArray(step)) {
     const text = getBuddyThinkingText(step)
       .trim()
@@ -296,7 +314,7 @@ function normalizeBuddyThinkingStep(step) {
   return text;
 }
 
-function normalizeBuddyThreadMessages(value, actor) {
+function normalizeBuddyThreadMessages(value: any, actor: any = null) {
   if (!Array.isArray(value)) return [];
 
   return value
@@ -657,7 +675,7 @@ function roomCorpusFingerprint(resources) {
  * Embeds supported room resources in Intelligrate's corpus.
  * A fingerprint cache avoids repeated embedding when room documents are unchanged.
  */
-async function syncRoomResourcesWithChatbot(db, room, options = {}) {
+async function syncRoomResourcesWithChatbot(db, room, options: any = {}) {
   const force = Boolean(options.force);
   const supportedResources = db.resources.filter(
     (resource) => resource.roomId === room.id && !resource.deletedAt && isChatbotDocument(resource),
@@ -718,7 +736,7 @@ async function syncRoomResourcesWithChatbot(db, room, options = {}) {
 }
 
 function createHttpError(status, message) {
-  const error = new Error(message);
+  const error = new Error(message) as Error & { status: number };
   error.status = status;
   return error;
 }
@@ -939,7 +957,7 @@ async function createChatbotPredictRequest(pathname, { messageChain, roomId, res
   url.searchParams.set("message_chain", JSON.stringify(messageChain));
   url.searchParams.set("room_id", roomId);
 
-  const init = {
+  const init: RequestInit = {
     method: "POST",
     signal: AbortSignal.timeout(240_000),
   };

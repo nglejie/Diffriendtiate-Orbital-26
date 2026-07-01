@@ -84,7 +84,7 @@ describe("ChatSidebar", () => {
 
     await user.click(document.body);
     const lectureRow = screen.getByRole("button", { name: /^lectures$/i }).closest(".chat-channel-row");
-    await user.click(within(lectureRow).getByRole("button", { name: /lectures options/i }));
+    await user.click(within(lectureRow as HTMLElement).getByRole("button", { name: /lectures options/i }));
     await user.click(screen.getByRole("button", { name: /delete channel/i }));
 
     expect(onRequestDeleteChannel).toHaveBeenCalledWith("lectures");
