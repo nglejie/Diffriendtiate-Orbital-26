@@ -12,6 +12,9 @@ const dataDir = path.join(repoRoot, "tests/.tmp/e2e-server-data");
 export default defineConfig({
   testDir: path.join(testsDir, "e2e"),
   timeout: 60_000,
+  // The browser suite shares one isolated JSON-backed API server, so keep tests
+  // serial to avoid concurrent writes racing during signup/setup flows.
+  workers: 1,
   expect: {
     timeout: 10_000,
   },

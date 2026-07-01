@@ -11,7 +11,9 @@ const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const npmCli = path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
+const npmCli =
+  process.env.npm_execpath ||
+  path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
 
 export function getRepoRoot() {
   return repoRoot;
@@ -138,7 +140,12 @@ export async function startMockChatbot() {
   };
 }
 
-async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
+function formatChildLogs(logs) {
+  const output = logs.join("").trim();
+  return output ? `\n\nServer output:\n${output.slice(-4000)}` : "";
+}
+
+async function waitForHealth(baseUrl, child, logs, timeoutMs = 20_000) {
   // Poll the app health endpoint until the spawned server is ready. If the child
   // exits early or never becomes healthy, fail fast with useful diagnostics.
   const startedAt = Date.now();
@@ -146,7 +153,9 @@ async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
 
   while (Date.now() - startedAt < timeoutMs) {
     if (child.exitCode !== null) {
-      throw new Error(`Server exited before health check passed with code ${child.exitCode}.`);
+      throw new Error(
+        `Server exited before health check passed with code ${child.exitCode}.${formatChildLogs(logs)}`,
+      );
     }
 
     try {
@@ -159,7 +168,9 @@ async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
 
-  throw new Error(`Timed out waiting for ${baseUrl}/api/health: ${lastError?.message || "unknown error"}`);
+  throw new Error(
+    `Timed out waiting for ${baseUrl}/api/health: ${lastError?.message || "unknown error"}${formatChildLogs(logs)}`,
+  );
 }
 
 export async function startTestApp(options: any = {}) {
@@ -191,7 +202,7 @@ export async function startTestApp(options: any = {}) {
   child.stdout.on("data", (chunk) => logs.push(chunk.toString("utf8")));
   child.stderr.on("data", (chunk) => logs.push(chunk.toString("utf8")));
 
-  await waitForHealth(baseUrl, child);
+  await waitForHealth(baseUrl, child, logs);
 
   return {
     baseUrl,
