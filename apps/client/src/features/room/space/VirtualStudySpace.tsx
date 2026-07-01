@@ -527,6 +527,10 @@ function normalizePresencePosition(presence, world) {
   };
 }
 
+function getPresenceKey(presence) {
+  return presence?.presenceId || presence?.socketId || presence?.userId || "";
+}
+
 function rectangleTiles(start, end) {
   if (!start || !end) return [];
   const xStart = Math.min(start.x, end.x);
@@ -736,6 +740,7 @@ export function VirtualStudySpace({
   const lastEmitRef = useRef(0);
   const meetingAreaRef = useRef("");
   const lastPresenceSnapshotRef = useRef("");
+  const lastSpaceJoinRetryRef = useRef(0);
   const panRef = useRef(null);
   const dragTileRef = useRef(null);
   const followPlayerRef = useRef(true);
@@ -776,6 +781,7 @@ export function VirtualStudySpace({
   const isOwner = Boolean(room?.isOwner);
   const avatarSprite = LIMEETS_AVATAR_SPRITES[0];
   const currentUserName = getDisplayName(user);
+  const playerReady = Boolean(player);
 
   const world = useMemo(() => {
     const normalized = normalizeWorldConfig(draftWorld);
@@ -1115,10 +1121,22 @@ export function VirtualStudySpace({
     const activeRoomId = roomIdRef.current;
     if (!activeSocket?.connected || !activeRoomId) return;
 
-    activeSocket.emit("space:move", {
-      roomId: activeRoomId,
-      position,
-    });
+    activeSocket.emit(
+      "space:move",
+      {
+        roomId: activeRoomId,
+        position,
+      },
+      (ack) => {
+        if (ack?.ok || performance.now() - lastSpaceJoinRetryRef.current < 2000) return;
+
+        lastSpaceJoinRetryRef.current = performance.now();
+        activeSocket.emit("space:join", {
+          roomId: activeRoomId,
+          position,
+        });
+      },
+    );
   }, []);
 
   useEffect(() => {
@@ -1304,61 +1322,89 @@ export function VirtualStudySpace({
   }, [editorOpen, redoWorld, undoWorld]);
 
   useEffect(() => {
-    if (!socket || !room?.id || !playerRef.current) return undefined;
+    if (!socket || !room?.id || !playerReady) return undefined;
 
-    const joinPayload = {
-      roomId: room.id,
-      position: serializePlayerPosition(playerRef.current, worldRef.current || world, worldRoomRef.current || worldRoom),
-    };
+    function isCurrentPresence(presence) {
+      const presenceId = getPresenceKey(presence);
+      return presenceId ? presenceId === socket.id : presence?.userId === user?.id;
+    }
 
-    socket.emit("space:join", joinPayload, (ack) => {
-      if (ack?.ok && Array.isArray(ack.users)) {
-        setRemoteMembers(
-          ack.users
-            .filter((presence) => presence.userId !== user?.id)
-            .map((presence) => normalizePresencePosition(presence, worldRef.current || world)),
-        );
-      }
-    });
+    function joinSpace() {
+      if (!playerRef.current || !socket.connected) return;
+
+      const joinPayload = {
+        roomId: room.id,
+        position: serializePlayerPosition(
+          playerRef.current,
+          worldRef.current || world,
+          worldRoomRef.current || worldRoom,
+        ),
+      };
+
+      socket.emit("space:join", joinPayload, (ack) => {
+        if (ack?.ok && Array.isArray(ack.users)) {
+          setRemoteMembers(
+            ack.users
+              .filter((presence) => !isCurrentPresence(presence))
+              .map((presence) => normalizePresencePosition(presence, worldRef.current || world)),
+          );
+        }
+      });
+    }
+
+    joinSpace();
 
     function handleSpaceState(payload) {
       if (payload?.roomId !== room.id || !Array.isArray(payload.users)) return;
       setRemoteMembers(
         payload.users
-          .filter((presence) => presence.userId !== user?.id)
+          .filter((presence) => !isCurrentPresence(presence))
           .map((presence) => normalizePresencePosition(presence, worldRef.current || world)),
       );
     }
 
     function handleUserMoved(payload) {
-      if (payload?.roomId !== room.id || payload.userId === user?.id) return;
+      if (payload?.roomId !== room.id || isCurrentPresence(payload)) return;
       const normalized = normalizePresencePosition(
-        { userId: payload.userId, user: payload.user, position: payload.position },
+        {
+          presenceId: payload.presenceId,
+          userId: payload.userId,
+          user: payload.user,
+          position: payload.position,
+        },
         worldRef.current || world,
       );
+      const nextKey = getPresenceKey(normalized);
 
       setRemoteMembers((current) => [
-        ...current.filter((member) => member.userId !== payload.userId),
+        ...current.filter((member) => getPresenceKey(member) !== nextKey),
         normalized,
       ]);
     }
 
     function handleUserLeft(payload) {
       if (payload?.roomId !== room.id) return;
-      setRemoteMembers((current) => current.filter((member) => member.userId !== payload.userId));
+      const leavingKey = getPresenceKey(payload);
+      setRemoteMembers((current) =>
+        current.filter((member) =>
+          leavingKey ? getPresenceKey(member) !== leavingKey : member.userId !== payload.userId,
+        ),
+      );
     }
 
+    socket.on("connect", joinSpace);
     socket.on("space:state", handleSpaceState);
     socket.on("space:user-moved", handleUserMoved);
     socket.on("space:user-left", handleUserLeft);
 
     return () => {
       socket.emit("space:leave", { roomId: room.id });
+      socket.off("connect", joinSpace);
       socket.off("space:state", handleSpaceState);
       socket.off("space:user-moved", handleUserMoved);
       socket.off("space:user-left", handleUserLeft);
     };
-  }, [room?.id, socket, user?.id, world, worldRoom]);
+  }, [playerReady, room?.id, socket, user?.id, world, worldRoom]);
 
   const getPointFromEvent = useCallback((event) => {
     const viewport = viewportRef.current;
@@ -2770,7 +2816,7 @@ export function VirtualStudySpace({
             .map((member) => (
               <Avatar
                 className="remote"
-                key={member.userId}
+                key={getPresenceKey(member)}
                 name={getDisplayName(member.user)}
                 player={member.position}
                 spriteUrl={avatarSprite}

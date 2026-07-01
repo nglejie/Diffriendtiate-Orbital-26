@@ -396,22 +396,20 @@ function emitMeetingState(roomId, areaId) {
 }
 
 function removeSocketSpacePresence(socket, targetRoomId = null) {
-  const userId = socket.user?.id;
-  if (!userId) return;
-
   for (const [roomId, roomPresence] of Array.from(spacePresenceByRoom.entries())) {
     if (targetRoomId && roomId !== targetRoomId) continue;
 
-    const presence = roomPresence.get(userId);
+    const presence = roomPresence.get(socket.id);
     if (!presence || presence.socketId !== socket.id) continue;
 
-    roomPresence.delete(userId);
+    roomPresence.delete(socket.id);
     socket.leave(getSpaceRoomKey(roomId));
 
     if (roomPresence.size) {
       io.to(getSpaceRoomKey(roomId)).emit("space:user-left", {
+        presenceId: presence.presenceId,
         roomId,
-        userId,
+        userId: presence.userId,
       });
     } else {
       spacePresenceByRoom.delete(roomId);
@@ -2731,6 +2729,7 @@ io.on("connection", (socket) => {
       const position = normalizeSpacePosition(payload?.position, DEFAULT_SPACE_TILE);
       const roomPresence = getSpacePresence(room.id);
       const presence = {
+        presenceId: socket.id,
         roomId: room.id,
         userId: socket.user.id,
         user: publicUser(socket.user),
@@ -2740,7 +2739,7 @@ io.on("connection", (socket) => {
       };
 
       socket.join(getSpaceRoomKey(room.id));
-      roomPresence.set(socket.user.id, presence);
+      roomPresence.set(socket.id, presence);
 
       const users = serializeSpacePresence(room.id);
       io.to(getSpaceRoomKey(room.id)).emit("space:state", {
@@ -2770,7 +2769,7 @@ io.on("connection", (socket) => {
       }
 
       const roomPresence = getSpacePresence(room.id);
-      const currentPresence = roomPresence.get(socket.user.id);
+      const currentPresence = roomPresence.get(socket.id);
       if (!currentPresence || currentPresence.socketId !== socket.id) {
         ack?.({ ok: false, message: "Enter Limeets before moving." });
         return;
@@ -2782,8 +2781,9 @@ io.on("connection", (socket) => {
         updatedAt: new Date().toISOString(),
       };
 
-      roomPresence.set(socket.user.id, presence);
+      roomPresence.set(socket.id, presence);
       socket.to(getSpaceRoomKey(room.id)).emit("space:user-moved", {
+        presenceId: socket.id,
         roomId: room.id,
         userId: socket.user.id,
         user: publicUser(socket.user),
