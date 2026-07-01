@@ -212,10 +212,11 @@ const WORLD_CONFIG_MAX_OBJECTS = 500;
 const WORLD_CONFIG_MAX_ZONES = 48;
 const WORLD_CONFIG_MAX_ROOMS = 24;
 const WORLD_CONFIG_MAX_TILES = 14_000;
-// Temporary live presence only: Study Space avatar positions are intentionally
-// kept in memory and disappear when the user's room socket leaves/disconnects.
+// Temporary live presence only: Limeets avatar positions and meeting sessions
+// are intentionally kept in memory, not durable room knowledge.
 const spacePresenceByRoom = new Map();
 const roomActivityByRoom = new Map();
+const meetingPresenceByRoom = new Map();
 
 function normalizeSpacePosition(value, fallback = null) {
   if (!value || typeof value !== "object") return fallback;
@@ -274,6 +275,83 @@ function getSpaceRoomKey(roomId) {
   return `space:${roomId}`;
 }
 
+function normalizeMeetingAreaId(value) {
+  const areaId = String(value || "").trim().slice(0, 72);
+  return areaId || null;
+}
+
+function getMeetingRoomKey(roomId, areaId) {
+  return `meeting:${roomId}:${areaId}`;
+}
+
+function getMeetingRoomPresence(roomId) {
+  if (!meetingPresenceByRoom.has(roomId)) {
+    meetingPresenceByRoom.set(roomId, new Map());
+  }
+
+  return meetingPresenceByRoom.get(roomId);
+}
+
+function getMeetingAreaPresence(roomId, areaId) {
+  const roomPresence = getMeetingRoomPresence(roomId);
+  if (!roomPresence.has(areaId)) {
+    roomPresence.set(areaId, new Map());
+  }
+
+  return roomPresence.get(areaId);
+}
+
+function serializeMeetingPresence(roomId, areaId) {
+  return Array.from(meetingPresenceByRoom.get(roomId)?.get(areaId)?.values() || []).map(
+    ({ socketId: _socketId, ...presence }) => presence,
+  );
+}
+
+function normalizeMeetingMedia(value) {
+  const media = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    cameraOff: Boolean(media.cameraOff),
+    deafened: Boolean(media.deafened),
+    muted: Boolean(media.muted),
+  };
+}
+
+function normalizeMeetingSignal(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const type = String(value.type || "").trim();
+  if (type === "offer" || type === "answer") {
+    const sdp = String(value.sdp || "");
+    if (!sdp || sdp.length > 200_000) return null;
+    return { type, sdp };
+  }
+
+  if (type === "ice") {
+    const rawCandidate =
+      value.candidate && typeof value.candidate === "object" && !Array.isArray(value.candidate)
+        ? value.candidate
+        : {};
+    const candidate = String(rawCandidate.candidate || "").slice(0, 5_000);
+    if (!candidate) return null;
+
+    return {
+      type,
+      candidate: {
+        candidate,
+        sdpMid:
+          rawCandidate.sdpMid === null || rawCandidate.sdpMid === undefined
+            ? null
+            : String(rawCandidate.sdpMid).slice(0, 64),
+        sdpMLineIndex: Number.isFinite(Number(rawCandidate.sdpMLineIndex))
+          ? Number(rawCandidate.sdpMLineIndex)
+          : null,
+      },
+    };
+  }
+
+  return null;
+}
+
 function getSpacePresence(roomId) {
   if (!spacePresenceByRoom.has(roomId)) {
     spacePresenceByRoom.set(roomId, new Map());
@@ -306,6 +384,14 @@ function emitRoomActivityState(roomId) {
   io.to(`room:${roomId}`).emit("room:activity:state", {
     roomId,
     members: serializeRoomActivity(roomId),
+  });
+}
+
+function emitMeetingState(roomId, areaId) {
+  io.to(getMeetingRoomKey(roomId, areaId)).emit("meeting:state", {
+    roomId,
+    areaId,
+    users: serializeMeetingPresence(roomId, areaId),
   });
 }
 
@@ -353,6 +439,40 @@ function removeSocketRoomActivity(socket, targetRoomId = null) {
         roomId,
         members: [],
       });
+    }
+  }
+}
+
+function removeSocketMeetingPresence(socket, targetRoomId = null, targetAreaId = null) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  for (const [roomId, roomPresence] of Array.from(meetingPresenceByRoom.entries())) {
+    if (targetRoomId && roomId !== targetRoomId) continue;
+
+    for (const [areaId, areaPresence] of Array.from(roomPresence.entries())) {
+      if (targetAreaId && areaId !== targetAreaId) continue;
+
+      const presence = areaPresence.get(userId);
+      if (!presence || presence.socketId !== socket.id) continue;
+
+      areaPresence.delete(userId);
+      socket.leave(getMeetingRoomKey(roomId, areaId));
+
+      if (areaPresence.size) {
+        io.to(getMeetingRoomKey(roomId, areaId)).emit("meeting:user-left", {
+          roomId,
+          areaId,
+          userId,
+        });
+        emitMeetingState(roomId, areaId);
+      } else {
+        roomPresence.delete(areaId);
+      }
+    }
+
+    if (!roomPresence.size) {
+      meetingPresenceByRoom.delete(roomId);
     }
   }
 }
@@ -673,7 +793,7 @@ function normalizeWorldPrivateArea(value, index, columns, rows) {
 
   return {
     id: String(value.id || `private-${index + 1}`).trim().slice(0, 64) || `private-${index + 1}`,
-    label: String(value.label || "Private Area").trim().slice(0, 72) || "Private Area",
+    label: String(value.label || "Meeting Area").trim().slice(0, 72) || "Meeting Area",
     bounds: { col, row, width, height },
   };
 }
@@ -2692,6 +2812,138 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("meeting:join", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before entering a Meeting Area." });
+        return;
+      }
+
+      if (!areaId) {
+        ack?.({ ok: false, message: "Meeting Area is invalid." });
+        return;
+      }
+
+      removeSocketMeetingPresence(socket, room.id);
+
+      const areaPresence = getMeetingAreaPresence(room.id, areaId);
+      const presence = {
+        roomId: room.id,
+        areaId,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        media: normalizeMeetingMedia(payload?.media),
+        socketId: socket.id,
+        joinedAt: new Date().toISOString(),
+      };
+
+      socket.join(getMeetingRoomKey(room.id, areaId));
+      areaPresence.set(socket.user.id, presence);
+
+      const users = serializeMeetingPresence(room.id, areaId);
+      const { socketId: _socketId, ...publicPresence } = presence;
+      socket.to(getMeetingRoomKey(room.id, areaId)).emit("meeting:user-joined", {
+        ...publicPresence,
+      });
+      emitMeetingState(room.id, areaId);
+      ack?.({ ok: true, users });
+    } catch {
+      ack?.({ ok: false, message: "Unable to join the Meeting Area right now." });
+    }
+  });
+
+  socket.on("meeting:leave", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Meeting Area room not found." });
+        return;
+      }
+
+      removeSocketMeetingPresence(socket, room.id, areaId);
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to leave the Meeting Area right now." });
+    }
+  });
+
+  socket.on("meeting:media-state", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+
+      if (!room || !isMember(room, socket.user.id) || !areaId) {
+        ack?.({ ok: false, message: "Meeting Area is invalid." });
+        return;
+      }
+
+      const areaPresence = meetingPresenceByRoom.get(room.id)?.get(areaId);
+      const currentPresence = areaPresence?.get(socket.user.id);
+      if (!currentPresence || currentPresence.socketId !== socket.id) {
+        ack?.({ ok: false, message: "Join the Meeting Area before updating media." });
+        return;
+      }
+
+      const media = normalizeMeetingMedia(payload?.media);
+      areaPresence.set(socket.user.id, {
+        ...currentPresence,
+        media,
+      });
+
+      io.to(getMeetingRoomKey(room.id, areaId)).emit("meeting:user-media", {
+        roomId: room.id,
+        areaId,
+        userId: socket.user.id,
+        media,
+      });
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to update media state right now." });
+    }
+  });
+
+  socket.on("meeting:signal", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+      const targetUserId = String(payload?.targetUserId || "").trim();
+      const signal = normalizeMeetingSignal(payload?.signal);
+
+      if (!room || !isMember(room, socket.user.id) || !areaId || !targetUserId || !signal) {
+        ack?.({ ok: false, message: "Meeting signal is invalid." });
+        return;
+      }
+
+      const areaPresence = meetingPresenceByRoom.get(room.id)?.get(areaId);
+      const sender = areaPresence?.get(socket.user.id);
+      const target = areaPresence?.get(targetUserId);
+      if (!sender || sender.socketId !== socket.id || !target) {
+        ack?.({ ok: false, message: "Meeting participant is unavailable." });
+        return;
+      }
+
+      io.to(target.socketId).emit("meeting:signal", {
+        roomId: room.id,
+        areaId,
+        fromUserId: socket.user.id,
+        fromUser: publicUser(socket.user),
+        signal,
+      });
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to relay meeting signal right now." });
+    }
+  });
+
   socket.on("message:send", async (payload, ack) => {
     try {
       const db = await readDb();
@@ -2799,6 +3051,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     removeSocketSpacePresence(socket);
     removeSocketRoomActivity(socket);
+    removeSocketMeetingPresence(socket);
   });
 });
 

@@ -2823,8 +2823,7 @@ h3 {
   pointer-events: none;
 }
 
-/* The call dock is intentionally visual-only for now; actual media plumbing can
-   hook into these controls later without reshaping the room layout. */
+/* Shared call controls used by Limeets and the broader room shell. */
 .room-call-dock {
   display: flex;
   align-items: center;
@@ -2925,6 +2924,253 @@ h3 {
   border-color: var(--midnight-border-strong);
 
 
+}
+
+.limeets-meeting-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: calc(100dvh - 116px);
+}
+
+.limeets-meeting-status {
+  display: grid;
+  gap: 4px;
+}
+
+.limeets-meeting-status p,
+.limeets-meeting-status span {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.limeets-meeting-status h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.limeets-meeting-warning {
+  margin: 0;
+  padding: 10px 12px;
+  color: color-mix(in srgb, var(--text-primary) 88%, transparent);
+  background: color-mix(in srgb, var(--accent-gold) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-gold) 34%, transparent);
+  border-radius: 12px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.limeets-meeting-grid {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 180px;
+}
+
+.limeets-meeting-tile {
+  position: relative;
+  display: grid;
+  min-height: 122px;
+  overflow: hidden;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(235, 111, 146, 0.12), transparent 34%),
+    color-mix(in srgb, var(--midnight-card) 92%, var(--theme-base));
+  border: 1px solid var(--midnight-border);
+  border-radius: 16px;
+}
+
+.limeets-meeting-tile video {
+  width: 100%;
+  height: 100%;
+  min-height: 122px;
+  object-fit: cover;
+}
+
+.limeets-meeting-tile video.audio-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.limeets-meeting-placeholder {
+  display: grid;
+  width: 54px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  color: var(--button-primary-fg);
+  background: var(--accent-primary);
+  border: 2px solid color-mix(in srgb, var(--text-primary) 28%, transparent);
+  border-radius: 18px;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.limeets-meeting-placeholder img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.limeets-meeting-tile-label {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  color: var(--text-primary);
+  background: rgba(12, 10, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  backdrop-filter: blur(10px);
+}
+
+.limeets-meeting-tile-label span {
+  overflow: hidden;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limeets-meeting-empty {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  gap: 8px;
+  padding: 18px;
+  color: var(--text-muted);
+  text-align: center;
+  background: color-mix(in srgb, var(--midnight-card) 80%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--text-primary) 18%, transparent);
+  border-radius: 16px;
+}
+
+.limeets-meeting-empty p {
+  max-width: 220px;
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.limeets-meeting-controls {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+  padding: 12px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 18px;
+  box-shadow: var(--shadow-soft);
+}
+
+.limeets-meeting-user {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+
+.limeets-meeting-avatar {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  width: 42px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  color: var(--button-primary-fg);
+  background: var(--accent-primary);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 24%, transparent);
+  border-radius: 14px;
+  font-weight: 800;
+}
+
+.limeets-meeting-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.limeets-meeting-avatar i {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 12px;
+  aspect-ratio: 1;
+  background: var(--text-muted);
+  border: 2px solid var(--midnight-card);
+  border-radius: 50%;
+}
+
+.limeets-meeting-avatar i.online {
+  background: var(--green);
+}
+
+.limeets-meeting-user div {
+  display: grid;
+  min-width: 0;
+}
+
+.limeets-meeting-user strong,
+.limeets-meeting-user span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limeets-meeting-user strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.limeets-meeting-user span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.limeets-meeting-control-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.limeets-meeting-control-buttons button {
+  display: grid;
+  min-width: 0;
+  height: 38px;
+  place-items: center;
+  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.limeets-meeting-control-buttons button:hover:not(:disabled),
+.limeets-meeting-control-buttons button.active {
+  color: var(--text-primary);
+  background: var(--discord-hover);
+  border-color: var(--midnight-border-strong);
+}
+
+.limeets-meeting-control-buttons button.danger {
+  color: #fff;
+  background: color-mix(in srgb, var(--danger) 58%, var(--midnight-card));
+}
+
+.limeets-meeting-control-buttons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .room-panel-toggle {
   display: none;

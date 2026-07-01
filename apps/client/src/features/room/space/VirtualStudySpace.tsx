@@ -94,7 +94,7 @@ const EDITOR_PANEL_COPY = {
   },
   special: {
     title: "Special Tiles",
-    description: "Paint collision, spawn, teleport, or private-area markers.",
+    description: "Paint collision, spawn, teleport, or meeting-area markers.",
   },
 };
 
@@ -119,8 +119,8 @@ const SPECIAL_TILES = [
   },
   {
     id: "private",
-    title: "Private Area",
-    description: "Mark a rectangle for future private voice rooms.",
+    title: "Meeting Area",
+    description: "Mark tiles that automatically join voice and video.",
     icon: Grid2X2,
   },
 ];
@@ -717,6 +717,7 @@ function TileSprite({ assetId, layer, tileSize }) {
 }
 
 export function VirtualStudySpace({
+  onMeetingAreaChange,
   onNavigate,
   onWorldChanged,
   room,
@@ -733,6 +734,7 @@ export function VirtualStudySpace({
   const keysRef = useRef(new Set());
   const blockedTilesRef = useRef(new Set());
   const lastEmitRef = useRef(0);
+  const meetingAreaRef = useRef("");
   const lastPresenceSnapshotRef = useRef("");
   const panRef = useRef(null);
   const dragTileRef = useRef(null);
@@ -894,6 +896,14 @@ export function VirtualStudySpace({
   useEffect(() => {
     roomIdRef.current = room?.id;
   }, [room?.id]);
+
+  useEffect(
+    () => () => {
+      meetingAreaRef.current = "";
+      onMeetingAreaChange?.(null);
+    },
+    [onMeetingAreaChange],
+  );
 
   useEffect(() => {
     worldRef.current = world;
@@ -1199,6 +1209,21 @@ export function VirtualStudySpace({
         currentWorld.tileSize,
       );
       const tileData = currentWorldRoom.tilemap?.[makeTileKey(currentTile.x, currentTile.y)];
+      const nextMeetingAreaId = tileData?.privateAreaId || "";
+
+      if (meetingAreaRef.current !== nextMeetingAreaId) {
+        meetingAreaRef.current = nextMeetingAreaId;
+        onMeetingAreaChange?.(
+          nextMeetingAreaId
+            ? {
+                areaId: nextMeetingAreaId,
+                tile: currentTile,
+                worldRoomId: currentWorldRoom.id,
+              }
+            : null,
+        );
+      }
+
       if (tileData?.teleporter && moving) {
         const destinationRoom =
           currentWorld.rooms.find((candidate) => candidate.id === tileData.teleporter.roomId) ||
@@ -1238,7 +1263,7 @@ export function VirtualStudySpace({
 
     animationFrame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [applyWorldUpdate, onNavigate, persistAndBroadcast, setCameraState]);
+  }, [applyWorldUpdate, onMeetingAreaChange, onNavigate, persistAndBroadcast, setCameraState]);
 
   useEffect(() => {
     function handleKeyDown(event) {

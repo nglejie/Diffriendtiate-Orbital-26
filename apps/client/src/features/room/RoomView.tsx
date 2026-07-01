@@ -42,7 +42,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { io } from "socket.io-client";
 import { api } from "../../api.ts";
@@ -52,6 +52,8 @@ import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.ts";
 import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.tsx";
 import { ChatPanel as DiscordChatPanel } from "./chat/ChatPanel.tsx";
 import { ChatSidebar } from "./chat/ChatSidebar.tsx";
+import { MeetingSidebarPanel } from "./meeting/MeetingSidebarPanel.tsx";
+import { useLimeetsMeeting } from "./meeting/useLimeetsMeeting.ts";
 import {
   ResourceDriveSidebar,
   ResourceFileManager,
@@ -202,6 +204,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [importantMessages, setImportantMessages] = useState([]);
   const [resourceThreads, setResourceThreads] = useState({});
   const toastTimeoutRef = useRef(null);
+  const limeetsMeeting = useLimeetsMeeting({ room, socket: roomSocket, user });
 
   const theme = getTheme(room?.theme);
   const background = getBackground(room?.background);
@@ -1031,6 +1034,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     setContextOpen(tabId !== "space");
   }
 
+  const handleMeetingAreaChange = useCallback(
+    (meetingArea) => {
+      if (meetingArea?.areaId) {
+        setContextOpen(true);
+        void limeetsMeeting.joinMeeting(meetingArea.areaId);
+        return;
+      }
+
+      limeetsMeeting.leaveMeeting();
+    },
+    [limeetsMeeting.joinMeeting, limeetsMeeting.leaveMeeting],
+  );
+
   /** Opens a local draft chat; persistence starts only after the first message. */
   async function startBuddyThread() {
     if (!room?.id) return;
@@ -1384,6 +1400,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             chatDrafts={safeChatDrafts}
             copyInviteLink={copyInviteLink}
             inviteCopied={inviteCopied}
+            meetingCall={limeetsMeeting}
             onCloseSidebar={() => setContextOpen(false)}
             onCreateCategory={openCreateCategoryDialog}
             onCreateChannel={openCreateChannelDialog}
@@ -1494,6 +1511,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         {room.isMember && activeTab === "space" ? (
           <section className="room-content-panel study-space-content-panel">
             <VirtualStudySpace
+              onMeetingAreaChange={handleMeetingAreaChange}
               onNavigate={selectRoomTab}
               onWorldChanged={(updatedRoom) => {
                 setRoom(updatedRoom);
@@ -1654,6 +1672,7 @@ function RoomContextPanel({
   chatDrafts,
   copyInviteLink,
   inviteCopied,
+  meetingCall,
   onCloseSidebar,
   onCreateCategory,
   onCreateChannel,
@@ -1933,6 +1952,7 @@ function RoomContextPanel({
       <>
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Limeets" />
         <PanelDivider />
+        <MeetingSidebarPanel meeting={meetingCall} user={user} />
       </>
     );
   }
