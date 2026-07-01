@@ -27,6 +27,26 @@ function supportsWebRtc() {
   return typeof RTCPeerConnection !== "undefined";
 }
 
+function hasTransceiverForKind(peer, kind) {
+  return peer
+    .getTransceivers?.()
+    .some(
+      (transceiver) =>
+        transceiver.sender?.track?.kind === kind ||
+        transceiver.receiver?.track?.kind === kind,
+    );
+}
+
+function ensureReceiveTransceivers(peer) {
+  if (!peer?.addTransceiver || !peer.getTransceivers) return;
+  if (!hasTransceiverForKind(peer, "audio")) {
+    peer.addTransceiver("audio", { direction: "recvonly" });
+  }
+  if (!hasTransceiverForKind(peer, "video")) {
+    peer.addTransceiver("video", { direction: "recvonly" });
+  }
+}
+
 export function useLimeetsMeeting({ room, socket, user }) {
   const [activeAreaId, setActiveAreaId] = useState("");
   const [participants, setParticipants] = useState([]);
@@ -159,13 +179,17 @@ export function useLimeetsMeeting({ room, socket, user }) {
       if (!supportsWebRtc()) return null;
 
       const existing = peerConnectionsRef.current.get(targetUserId);
-      if (existing && existing.connectionState !== "closed") return existing;
+      if (existing && existing.connectionState !== "closed") {
+        ensureReceiveTransceivers(existing);
+        return existing;
+      }
 
       const peer = new RTCPeerConnection(PEER_CONFIG);
       const stream = localStreamRef.current;
       if (stream) {
         stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       }
+      ensureReceiveTransceivers(peer);
 
       peer.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -201,7 +225,11 @@ export function useLimeetsMeeting({ room, socket, user }) {
       const peer = getPeerConnection(targetUserId);
       if (!peer) return;
 
-      const offer = await peer.createOffer();
+      ensureReceiveTransceivers(peer);
+      const offer = await peer.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
       await peer.setLocalDescription(offer);
       sendSignal(targetUserId, {
         type: "offer",
@@ -209,6 +237,57 @@ export function useLimeetsMeeting({ room, socket, user }) {
       });
     },
     [ensureLocalStream, getPeerConnection, sendSignal],
+  );
+
+  const renegotiatePeer = useCallback(
+    async (targetUserId) => {
+      const peer = peerConnectionsRef.current.get(targetUserId);
+      if (!peer || peer.connectionState === "closed") return;
+
+      try {
+        ensureReceiveTransceivers(peer);
+        const offer = await peer.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true,
+        });
+        await peer.setLocalDescription(offer);
+        sendSignal(targetUserId, {
+          type: "offer",
+          sdp: offer.sdp,
+        });
+      } catch {
+        setMediaError("Meeting connection is retrying. If it persists, leave and re-enter the area.");
+      }
+    },
+    [sendSignal],
+  );
+
+  const addLocalTrackToPeers = useCallback(
+    (track, stream) => {
+      peerConnectionsRef.current.forEach((peer, targetUserId) => {
+        const sender =
+          peer.getSenders?.().find((candidate) => candidate.track?.kind === track.kind) ||
+          peer
+            .getTransceivers?.()
+            .find(
+              (transceiver) =>
+                !transceiver.sender?.track && transceiver.receiver?.track?.kind === track.kind,
+            )?.sender;
+        if (sender) {
+          void sender.replaceTrack(track);
+          const transceiver = peer
+            .getTransceivers?.()
+            .find((candidate) => candidate.sender === sender);
+          if (transceiver && transceiver.direction === "recvonly") {
+            transceiver.direction = "sendrecv";
+          }
+        } else {
+          peer.addTrack(track, stream);
+        }
+        void renegotiatePeer(targetUserId);
+      });
+    },
+    [renegotiatePeer],
   );
 
   const leaveMeeting = useCallback(() => {
@@ -400,10 +479,41 @@ export function useLimeetsMeeting({ room, socket, user }) {
   }, []);
 
   const toggleCamera = useCallback(() => {
+    async function enableMissingCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMediaError("This browser cannot access camera devices.");
+        emitMediaState(mediaState(mutedRef.current, true, deafenedRef.current));
+        return;
+      }
+
+      try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+        const [videoTrack] = videoStream.getVideoTracks();
+        if (!videoTrack) throw new Error("No camera track returned.");
+
+        const currentStream = localStreamRef.current || new MediaStream();
+        currentStream.addTrack(videoTrack);
+        videoTrack.enabled = true;
+
+        const nextStream = new MediaStream(currentStream.getTracks());
+        localStreamRef.current = nextStream;
+        cameraOffRef.current = false;
+        setCameraOff(false);
+        setLocalStream(nextStream);
+        setMediaError("");
+        addLocalTrackToPeers(videoTrack, nextStream);
+        emitMediaState(mediaState(mutedRef.current, false, deafenedRef.current));
+      } catch {
+        cameraOffRef.current = true;
+        setCameraOff(true);
+        setMediaError("Camera is unavailable on this device.");
+        emitMediaState(mediaState(mutedRef.current, true, deafenedRef.current));
+      }
+    }
+
     const videoTracks = localStreamRef.current?.getVideoTracks?.() || [];
     if (!videoTracks.length && cameraOffRef.current) {
-      setMediaError("Camera is unavailable on this device.");
-      emitMediaState(mediaState(mutedRef.current, true, deafenedRef.current));
+      void enableMissingCamera();
       return;
     }
 
@@ -413,8 +523,14 @@ export function useLimeetsMeeting({ room, socket, user }) {
     videoTracks.forEach((track) => {
       track.enabled = !nextCameraOff;
     });
+    if (!nextCameraOff) {
+      videoTracks.forEach((track) => {
+        const stream = localStreamRef.current;
+        if (stream) addLocalTrackToPeers(track, stream);
+      });
+    }
     emitMediaState(mediaState(mutedRef.current, nextCameraOff, deafenedRef.current));
-  }, []);
+  }, [addLocalTrackToPeers]);
 
   const toggleDeafened = useCallback(() => {
     const nextDeafened = !deafenedRef.current;
