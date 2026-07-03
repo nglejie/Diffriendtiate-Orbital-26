@@ -2677,6 +2677,7 @@ h3 {
 }
 
 .room-workspace {
+  --room-dock-reserve: 86px;
   position: relative;
   display: grid;
   grid-template-columns: 74px 0 minmax(0, 1fr);
@@ -2695,6 +2696,14 @@ h3 {
 
 .room-workspace.context-open {
   grid-template-columns: 74px minmax(286px, 320px) minmax(0, 1fr);
+}
+
+.room-workspace.meeting-active {
+  --room-dock-reserve: 174px;
+}
+
+.room-workspace.dock-preview-active {
+  --room-dock-reserve: 286px;
 }
 
 .room-workspace::before {
@@ -2721,11 +2730,13 @@ h3 {
 }
 
 .room-icon-rail {
+  grid-column: 1;
+  grid-row: 1;
   display: grid;
   grid-template-rows: auto 1fr;
   align-content: space-between;
   height: 100dvh;
-  padding: 14px 10px;
+  padding: 14px 10px calc(var(--room-dock-reserve) + 14px);
   background: var(--room-sidebar-bg);
   border-right: 1px solid var(--midnight-border);
   backdrop-filter: blur(18px);
@@ -2740,6 +2751,14 @@ h3 {
 
 .room-rail-bottom {
   align-self: end;
+}
+
+.room-rail-divider {
+  width: 32px;
+  height: 1px;
+  margin: 2px 0;
+  background: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  border-radius: 999px;
 }
 
 .room-icon-rail button {
@@ -2789,13 +2808,15 @@ h3 {
 }
 
 .room-context-panel {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   gap: 22px;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-  padding: 20px 18px 24px;
+  padding: 20px 18px calc(var(--room-dock-reserve) + 24px);
   color: var(--text-primary);
   background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
   border-right: 1px solid var(--midnight-border);
@@ -2807,11 +2828,13 @@ h3 {
 .room-context-content {
   display: grid;
   align-content: start;
+  flex: 1 1 auto;
   gap: 22px;
   min-height: 0;
+  margin-right: -12px;
   overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: 12px;
   scrollbar-gutter: stable;
 }
 
@@ -2823,42 +2846,213 @@ h3 {
   pointer-events: none;
 }
 
-/* Shared call controls used by Limeets and the broader room shell. */
-.room-call-dock {
+.room-sidebar-dock {
+  z-index: 6;
+  display: block;
+  grid-column: 1 / 3;
+  grid-row: 1;
+  align-self: end;
+  width: 100%;
+  min-width: 0;
+  padding: 0 10px 12px;
+  pointer-events: none;
+}
+
+.room-workspace.context-collapsed .room-sidebar-dock {
+  grid-column: 1 / 2;
+  padding-inline: 8px;
+}
+
+.room-workspace.context-collapsed .room-voice-connected,
+.room-workspace.context-collapsed .meeting-dock-preview,
+.room-workspace.context-collapsed .room-call-copy,
+.room-workspace.context-collapsed .room-call-actions {
+  display: none;
+}
+
+.room-workspace.context-collapsed .room-user-controls {
+  justify-content: center;
+  padding: 8px;
+}
+
+/* Persistent room voice dock, spanning the rail and context sidebar. */
+.room-voice-dock {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  width: 100%;
+  margin-top: auto;
+  color: var(--text-primary);
+  pointer-events: auto;
+}
+
+.room-voice-connected,
+.meeting-dock-preview,
+.room-user-controls {
+  width: 100%;
+  background: color-mix(in srgb, var(--midnight-card-strong) 95%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft);
+}
+
+.room-voice-connected {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.meeting-dock-preview {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
+.meeting-dock-preview-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--midnight-card) 94%, var(--theme-base));
-  border: 1px solid var(--midnight-border-strong);
-  box-shadow: var(--shadow-soft);
-  backdrop-filter: none;
-}
-
-.room-call-dock.embedded {
-  position: sticky;
-  bottom: 0;
   justify-content: space-between;
-  margin-top: auto;
-  padding: 10px;
-  border-radius: 18px;
+  gap: 8px;
 }
 
-.room-call-dock.floating {
-  position: fixed;
-  bottom: 22px;
-  left: 50%;
-  z-index: 24;
-  padding: 10px 12px;
-  border-radius: 999px;
-  transform: translateX(-50%);
+.meeting-dock-preview-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
 }
 
+.meeting-dock-preview-header button:first-child {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+}
+
+.meeting-dock-preview-header button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.meeting-dock-preview-header span {
+  overflow: hidden;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-dock-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.meeting-dock-preview-grid .limeets-meeting-tile {
+  min-height: 92px;
+  height: 92px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.meeting-dock-preview-grid .limeets-meeting-placeholder {
+  width: 42px;
+  border-radius: 14px;
+}
+
+.meeting-dock-preview-grid .limeets-meeting-tile-label {
+  right: 5px;
+  bottom: 5px;
+  left: 5px;
+  padding: 4px 6px;
+}
+
+.meeting-dock-preview-grid .limeets-meeting-tile-label span {
+  font-size: 0.68rem;
+}
+
+.room-voice-connected-header,
+.room-user-controls,
 .room-call-user {
   display: flex;
   align-items: center;
   min-width: 0;
+}
+
+.room-voice-connected-header {
   gap: 10px;
+}
+
+.room-voice-signal {
+  display: grid;
+  width: 32px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  border-radius: 10px;
+}
+
+.room-voice-connected-header div,
+.room-call-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.room-voice-connected-header strong {
+  color: var(--green);
+  font-size: 0.88rem;
+}
+
+.room-voice-connected-header span,
+.room-call-copy span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-voice-connected-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.room-user-controls {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+}
+
+.room-profile-control {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.room-call-user {
+  flex: 1 1 auto;
+  gap: 10px;
+}
+
+.room-call-user-button {
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.room-call-user-button:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
 }
 
 .room-call-avatar {
@@ -2868,9 +3062,9 @@ h3 {
   width: 42px;
   aspect-ratio: 1;
   place-items: center;
-  overflow: hidden;
-  color: var(--button-primary-fg);
-  background: var(--accent-primary);
+  overflow: visible;
+  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--theme-base));
   border: 1px solid color-mix(in srgb, var(--text-primary) 24%, transparent);
   border-radius: 14px;
   font-size: 1rem;
@@ -2880,23 +3074,45 @@ h3 {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: inherit;
 }
 
 .room-call-avatar i {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
+  right: -2px;
+  bottom: -2px;
+  z-index: 2;
   width: 12px;
   aspect-ratio: 1;
-  background: var(--green);
-  border: 2px solid var(--midnight-card);
+  background: var(--text-muted);
+  border: 2px solid color-mix(in srgb, var(--midnight-card) 92%, var(--theme-base));
   border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 
-.room-call-name {
+.room-call-avatar i.online,
+.room-profile-popover-avatar i.online {
+  background: #23d160;
+}
+
+.room-call-avatar i.away,
+.room-profile-popover-avatar i.away {
+  background: #f6c177;
+}
+
+.room-call-avatar i.dnd,
+.room-profile-popover-avatar i.dnd {
+  background: var(--danger);
+}
+
+.room-call-avatar i.invisible,
+.room-profile-popover-avatar i.invisible {
+  background: color-mix(in srgb, var(--text-muted) 76%, var(--theme-base));
+}
+
+.room-call-copy strong {
   overflow: hidden;
-  max-width: 116px;
-  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  color: var(--text-primary);
   font-size: 0.88rem;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2907,7 +3123,8 @@ h3 {
   gap: 6px;
 }
 
-.room-call-actions button {
+.room-call-actions button,
+.room-voice-connected-actions button {
   display: grid;
   width: 38px;
   aspect-ratio: 1;
@@ -2918,48 +3135,1078 @@ h3 {
   border-radius: 13px;
 }
 
-.room-call-actions button:hover {
+.room-voice-connected-actions button {
+  width: 100%;
+  height: 34px;
+  aspect-ratio: auto;
+}
+
+.room-call-actions button:hover:not(:disabled),
+.room-call-actions button.active,
+.room-voice-connected-actions button:hover,
+.room-voice-connected-actions button.is-on {
   color: var(--text-primary);
   background: var(--discord-hover);
   border-color: var(--midnight-border-strong);
+}
 
+.room-call-actions button.danger,
+.room-voice-connected-actions button.danger,
+.room-voice-connected-actions button.is-off {
+  color: #fff;
+  background: color-mix(in srgb, var(--danger) 58%, var(--midnight-card));
+}
 
+.room-call-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.room-profile-popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  z-index: 9000;
+  width: min(304px, calc(100vw - 24px));
+  overflow: visible;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 38%, var(--midnight-border));
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(4, 3, 12, 0.42);
+}
+
+.room-profile-popover-banner {
+  height: 60px;
+  background:
+    linear-gradient(135deg, rgba(235, 111, 146, 0.42), rgba(246, 193, 119, 0.16)),
+    var(--room-background-image, linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)));
+  background-position: center;
+  background-size: cover;
+  border-radius: 13px 13px 0 0;
+}
+
+.room-profile-popover-identity {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px 12px;
+  margin-top: -22px;
+}
+
+.room-profile-popover-avatar {
+  position: relative;
+  display: grid;
+  width: 72px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: visible;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-secondary) 28%, var(--theme-base));
+  border: 4px solid color-mix(in srgb, var(--midnight-card-strong) 98%, var(--theme-base));
+  border-radius: 50%;
+  font-size: 1.5rem;
+  font-weight: 900;
+}
+
+.room-profile-popover-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.room-profile-popover-avatar i {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  z-index: 2;
+  width: 14px;
+  aspect-ratio: 1;
+  background: var(--text-muted);
+  border: 3px solid color-mix(in srgb, var(--midnight-card-strong) 98%, var(--theme-base));
+  border-radius: 50%;
+}
+
+.room-profile-popover-nameplate {
+  display: grid;
+  align-self: center;
+  min-width: 0;
+  padding: 9px 10px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 74%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 11px;
+  box-shadow: 0 10px 28px rgba(4, 3, 12, 0.16);
+}
+
+.room-profile-popover-nameplate strong,
+.room-profile-popover-nameplate span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-profile-popover-nameplate span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.room-profile-popover-actions {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  margin: 0 10px 12px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border-radius: 12px;
+}
+
+.room-profile-popover-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.room-profile-action-chevron {
+  margin-left: auto;
+}
+
+.room-profile-popover-actions button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.room-profile-status-chip {
+  min-width: 0;
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-profile-status-chip.online,
+.room-profile-status-menu button.online {
+  color: #23d160;
+}
+
+.room-profile-status-chip.away,
+.room-profile-status-menu button.away {
+  color: #f6c177;
+}
+
+.room-profile-status-chip.dnd,
+.room-profile-status-menu button.dnd {
+  color: var(--danger);
+}
+
+.room-profile-status-dot {
+  flex: 0 0 auto;
+  width: 12px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.room-profile-status-dot.online {
+  background: #23d160;
+}
+
+.room-profile-status-dot.away {
+  background: #f6c177;
+}
+
+.room-profile-status-dot.dnd {
+  background: var(--danger);
+}
+
+.room-profile-status-dot.invisible {
+  background: transparent;
+  border: 2px solid var(--text-muted);
+}
+
+.room-profile-status-menu {
+  position: absolute;
+  top: auto;
+  bottom: 0;
+  left: calc(100% + 10px);
+  z-index: 2;
+  display: grid;
+  gap: 4px;
+  width: 248px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(4, 3, 12, 0.42);
+}
+
+.room-profile-status-menu button {
+  justify-content: flex-start;
+  padding: 8px;
+  font-weight: 800;
+}
+
+.room-profile-status-menu i {
+  width: 10px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.room-profile-status-menu i.online {
+  background: #23d160;
+}
+
+.room-profile-status-menu i.away {
+  background: #f6c177;
+}
+
+.room-profile-status-menu i.dnd {
+  background: var(--danger);
+}
+
+.room-profile-status-menu i.invisible {
+  background: var(--text-muted);
+}
+
+.room-profile-status-menu button.selected {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+.room-profile-status-menu button.selected.online {
+  color: #23d160;
+}
+
+.room-profile-status-menu button.selected.away {
+  color: #f6c177;
+}
+
+.room-profile-status-menu button.selected.dnd {
+  color: var(--danger);
+}
+
+.room-profile-modal-backdrop {
+  z-index: 9200;
+}
+
+.room-profile-editor {
+  position: relative;
+  width: min(430px, calc(100vw - 28px));
+  max-height: min(720px, calc(100vh - 32px));
+  overflow: hidden;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-strong) 98%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(4, 3, 12, 0.48);
+}
+
+.room-profile-editor:has(.room-avatar-picker) {
+  height: min(704px, calc(100vh - 32px));
+}
+
+.room-profile-editor header,
+.room-profile-editor footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.room-profile-editor header {
+  border-bottom: 1px solid var(--midnight-border);
+}
+
+.room-profile-editor h2 {
+  margin: 0;
+  font-size: 1.02rem;
+}
+
+.room-profile-editor header button {
+  display: grid;
+  width: 32px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+}
+
+.room-profile-editor header button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.room-profile-editor-body {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.room-profile-editor-media {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  text-align: center;
+}
+
+.room-profile-editor-media > div {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.room-profile-editor-media span,
+.room-profile-name-field span {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.room-profile-image-button,
+.room-profile-avatar-button {
+  position: relative;
+  display: grid;
+  width: 92px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: visible;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-secondary) 30%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
+  border-radius: 50%;
+  font-size: 2rem;
+  font-weight: 900;
+}
+
+.room-profile-image-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.room-profile-avatar-button {
+  background: color-mix(in srgb, var(--text-primary) 9%, var(--theme-base));
+}
+
+.room-profile-avatar-button .limeets-avatar-stack {
+  transform: translateY(-1px);
+}
+
+.room-profile-image-button i,
+.room-profile-avatar-button i {
+  position: absolute;
+  right: -2px;
+  bottom: 3px;
+  display: grid;
+  width: 30px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-strong) 94%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(4, 3, 12, 0.28);
+}
+
+.room-profile-name-field input {
+  width: 100%;
+}
+
+.room-profile-editor footer {
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  border-top: 1px solid var(--midnight-border);
+}
+
+.room-avatar-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-strong) 98%, var(--theme-base));
+}
+
+.room-avatar-picker header,
+.room-avatar-picker footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+}
+
+.room-avatar-picker header span {
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--theme-base) 78%, transparent);
+  border-radius: 8px;
+  font-weight: 900;
+}
+
+.room-avatar-picker header button {
+  display: grid;
+  width: 34px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+}
+
+.room-avatar-picker header button:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.room-avatar-picker-hero {
+  display: grid;
+  min-height: 136px;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 78%, rgba(0, 0, 0, 0.18) 0 32px, transparent 33px),
+    linear-gradient(135deg, rgba(235, 111, 146, 0.22), rgba(156, 207, 216, 0.12));
+  border-block: 1px solid var(--midnight-border);
+}
+
+.room-avatar-picker-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 0 18px;
+  border-bottom: 1px solid var(--midnight-border);
+}
+
+.room-avatar-picker-tabs button {
+  min-width: 0;
+  padding: 13px 6px 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-weight: 900;
+}
+
+.room-avatar-picker-tabs button.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+
+.room-avatar-picker-body {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.room-avatar-picker-slots {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 14px 18px 8px;
+  scrollbar-width: none;
+}
+
+.room-avatar-picker-slots::-webkit-scrollbar {
+  display: none;
+}
+
+.room-avatar-picker-slots button {
+  flex: 0 0 auto;
+  padding: 8px 13px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.room-avatar-picker-slots button.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 34%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary) 48%, transparent);
+}
+
+.room-avatar-picker-colours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  overflow: visible;
+  padding: 4px 20px 12px;
+}
+
+.room-avatar-picker-colours button {
+  position: relative;
+  width: 24px;
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  background: var(--avatar-choice-colour);
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.room-avatar-picker-colours button.selected {
+  border-color: var(--text-primary);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent-primary) 42%, transparent),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.room-avatar-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 18px 18px;
+}
+
+.room-avatar-picker-grid button {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 10px 7px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 2px solid transparent;
+  border-radius: 14px;
+}
+
+.room-avatar-picker-grid button.selected {
+  border-color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+}
+
+.room-avatar-picker-grid button img {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.room-avatar-picker-grid button span {
+  overflow: visible;
+  max-width: 100%;
+  color: color-mix(in srgb, var(--text-primary) 84%, transparent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.18;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.room-avatar-picker-grid button.room-avatar-none-card {
+  align-content: center;
+}
+
+.room-avatar-picker-grid button.room-avatar-none-card > span {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 12px;
+}
+
+.room-avatar-picker-grid button.room-avatar-none-card strong {
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-avatar-picker footer {
+  justify-content: center;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+.limeets-avatar-stack {
+  --limeets-avatar-render-size: 64px;
+  --limeets-avatar-frame-height: calc(var(--limeets-avatar-render-size) * 1.24);
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--limeets-avatar-render-size);
+  height: var(--limeets-avatar-frame-height);
+  image-rendering: pixelated;
+  overflow: hidden;
+}
+
+.limeets-avatar-stack.tiny {
+  --limeets-avatar-render-size: 28px;
+}
+
+.limeets-avatar-stack.small {
+  --limeets-avatar-render-size: 42px;
+}
+
+.limeets-avatar-stack.medium {
+  --limeets-avatar-render-size: 58px;
+}
+
+.limeets-avatar-stack.profile {
+  --limeets-avatar-render-size: 72px;
+}
+
+.limeets-avatar-stack.large {
+  --limeets-avatar-render-size: 96px;
+}
+
+.limeets-avatar-stack.world {
+  --limeets-avatar-render-size: 46px;
+  filter: drop-shadow(0 5px 3px rgba(0, 0, 0, 0.22));
+}
+
+.limeets-avatar-layer {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
 }
 
 .limeets-meeting-panel {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: calc(100dvh - 116px);
+  min-height: 0;
 }
 
-.limeets-meeting-status {
+.limeets-meeting-panel.info {
+  gap: 18px;
+}
+
+.limeets-sidebar-section {
   display: grid;
-  gap: 4px;
+  gap: 10px;
 }
 
-.limeets-meeting-status p,
-.limeets-meeting-status span {
+.limeets-sidebar-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.limeets-sidebar-section-heading.toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.limeets-sidebar-section-heading.toggle > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.limeets-sidebar-section-heading.toggle:hover {
+  color: color-mix(in srgb, var(--text-primary) 84%, transparent);
+}
+
+.limeets-meeting-summary-list {
+  display: grid;
+  gap: 8px;
+}
+
+.limeets-meeting-summary {
+  display: grid;
+  gap: 12px;
+  padding: 13px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid var(--midnight-border);
+  border-radius: 14px;
+}
+
+.limeets-meeting-summary strong,
+.limeets-online-member strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limeets-meeting-summary span,
+.limeets-online-member span,
+.limeets-sidebar-muted {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.78rem;
 }
 
-.limeets-meeting-status h3 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 1rem;
+.limeets-meeting-avatar-stack {
+  display: flex;
+  min-height: 32px;
 }
 
-.limeets-meeting-warning {
-  margin: 0;
-  padding: 10px 12px;
-  color: color-mix(in srgb, var(--text-primary) 88%, transparent);
-  background: color-mix(in srgb, var(--accent-gold) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-gold) 34%, transparent);
+.limeets-meeting-avatar-stack .limeets-sidebar-avatar + .limeets-sidebar-avatar {
+  margin-left: -8px;
+}
+
+.limeets-online-list {
+  display: grid;
+  gap: 8px;
+}
+
+.limeets-online-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
   border-radius: 12px;
-  font-size: 0.8rem;
-  line-height: 1.35;
+}
+
+.limeets-online-member:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+.limeets-online-member.offline {
+  opacity: 0.58;
+}
+
+.limeets-online-member div {
+  display: grid;
+  min-width: 0;
+}
+
+.limeets-online-member small {
+  margin-left: auto;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.limeets-sidebar-avatar {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--theme-base));
+  border-radius: 12px;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.limeets-sidebar-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.limeets-sidebar-avatar i {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  aspect-ratio: 1;
+  background: var(--text-muted);
+  border: 2px solid var(--midnight-card);
+  border-radius: 50%;
+}
+
+.limeets-sidebar-avatar i.online {
+  background: #23d160;
+}
+
+.limeets-sidebar-avatar i.away {
+  background: #f6c177;
+}
+
+.limeets-sidebar-avatar i.dnd {
+  background: var(--danger);
+}
+
+.limeets-sidebar-avatar i.offline,
+.limeets-sidebar-avatar i.invisible {
+  background: color-mix(in srgb, var(--text-muted) 72%, var(--theme-base));
+}
+
+.meeting-media-strip.overlay {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: min(980px, calc(100% - 40px));
+  padding: 0;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.meeting-media-strip.overlay.has-nav {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: min(980px, calc(100% - 40px));
+}
+
+.meeting-media-strip-track {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0 2px 6px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.meeting-media-strip-track::-webkit-scrollbar {
+  display: none;
+}
+
+.meeting-media-strip-track:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 4px;
+  border-radius: 10px;
+}
+
+.meeting-media-strip-nav {
+  display: grid;
+  width: 34px;
+  height: 94px;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(14, 13, 18, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+}
+
+.meeting-media-strip-nav:hover {
+  background: rgba(44, 40, 54, 0.82);
+}
+
+.meeting-media-strip.overlay .limeets-meeting-tile {
+  flex: 0 0 clamp(270px, 28vw, 380px);
+  height: 172px;
+  min-height: 172px;
+  border-radius: 8px;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+
+.meeting-media-strip.overlay .limeets-meeting-tile video {
+  height: 100%;
+  min-height: 0;
+}
+
+.meeting-content-panel {
+  padding: 0;
+  background: #111;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: none;
+}
+
+.meeting-display-stage {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: rgba(255, 255, 255, 0.92);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(235, 111, 146, 0.1), transparent 32%),
+    #111;
+  overflow: hidden;
+}
+
+.meeting-display-room-name {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  max-width: min(420px, calc(100% - 36px));
+  padding: 7px 12px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(18, 16, 25, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+  font-size: 0.86rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  backdrop-filter: blur(14px);
+}
+
+.meeting-display-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(184px, 18vw, 250px);
+  gap: 10px;
+  min-height: 0;
+  padding: 62px 18px 96px;
+}
+
+.meeting-display-layout.single {
+  grid-template-columns: minmax(320px, min(1080px, 100%));
+  justify-content: center;
+}
+
+.meeting-display-primary {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.meeting-display-primary .limeets-meeting-tile {
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  border-radius: 10px;
+}
+
+.meeting-display-primary:fullscreen {
+  display: grid;
+  padding: 0;
+  background: #050506;
+}
+
+.meeting-display-primary:fullscreen .limeets-meeting-tile {
+  height: 100dvh;
+  min-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+
+.meeting-display-primary:fullscreen .meeting-display-primary-actions {
+  top: 18px;
+  right: 18px;
+}
+
+.meeting-display-primary-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+}
+
+.meeting-display-primary-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(14, 13, 18, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+  font-size: 0.76rem;
+  font-weight: 800;
+  backdrop-filter: blur(12px);
+}
+
+.meeting-display-primary-actions button:hover {
+  color: #fff;
+  background: rgba(44, 40, 54, 0.84);
+}
+
+.meeting-display-primary .limeets-meeting-placeholder {
+  width: clamp(76px, 8vw, 112px);
+  border-radius: 28px;
+  font-size: clamp(1.45rem, 2vw, 2.1rem);
+}
+
+.meeting-display-filmstrip {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
+  scrollbar-width: thin;
+}
+
+.meeting-display-filmstrip .limeets-meeting-tile {
+  width: 100%;
+  height: 140px;
+  min-height: 140px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.meeting-display-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 0;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+}
+
+@media (max-width: 980px) {
+  .meeting-media-strip.overlay .limeets-meeting-tile {
+    flex-basis: clamp(240px, 70vw, 340px);
+  }
+
+  .meeting-display-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(320px, 1fr) auto;
+  }
+
+  .meeting-display-filmstrip {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(200px, 260px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-right: 0;
+    padding-bottom: 4px;
+  }
+
+  .meeting-display-filmstrip .limeets-meeting-tile {
+    height: 126px;
+    min-height: 126px;
+  }
 }
 
 .limeets-meeting-grid {
@@ -2982,11 +4229,32 @@ h3 {
   border-radius: 16px;
 }
 
+button.limeets-meeting-tile {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.limeets-meeting-tile.selected {
+  border-color: color-mix(in srgb, var(--accent-primary) 58%, rgba(255, 255, 255, 0.22));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 34%, transparent);
+}
+
 .limeets-meeting-tile video {
   width: 100%;
   height: 100%;
   min-height: 122px;
   object-fit: cover;
+}
+
+.limeets-meeting-tile.screen video {
+  background: #050506;
+  object-fit: contain;
+}
+
+.limeets-meeting-tile.screen {
+  background: #050506;
 }
 
 .limeets-meeting-tile video.audio-only {
@@ -3003,9 +4271,9 @@ h3 {
   aspect-ratio: 1;
   place-items: center;
   overflow: hidden;
-  color: var(--button-primary-fg);
-  background: var(--accent-primary);
-  border: 2px solid color-mix(in srgb, var(--text-primary) 28%, transparent);
+  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--theme-base));
+  border: 2px solid color-mix(in srgb, var(--text-primary) 22%, transparent);
   border-radius: 18px;
   font-size: 1.05rem;
   font-weight: 800;
@@ -3056,122 +4324,6 @@ h3 {
   border-radius: 16px;
 }
 
-.limeets-meeting-empty p {
-  max-width: 220px;
-  margin: 0;
-  font-size: 0.84rem;
-  line-height: 1.4;
-}
-
-.limeets-meeting-controls {
-  display: grid;
-  gap: 12px;
-  margin-top: auto;
-  padding: 12px;
-  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
-  border: 1px solid var(--midnight-border-strong);
-  border-radius: 18px;
-  box-shadow: var(--shadow-soft);
-}
-
-.limeets-meeting-user {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 10px;
-}
-
-.limeets-meeting-avatar {
-  position: relative;
-  display: grid;
-  flex: 0 0 auto;
-  width: 42px;
-  aspect-ratio: 1;
-  place-items: center;
-  overflow: hidden;
-  color: var(--button-primary-fg);
-  background: var(--accent-primary);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 24%, transparent);
-  border-radius: 14px;
-  font-weight: 800;
-}
-
-.limeets-meeting-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.limeets-meeting-avatar i {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 12px;
-  aspect-ratio: 1;
-  background: var(--text-muted);
-  border: 2px solid var(--midnight-card);
-  border-radius: 50%;
-}
-
-.limeets-meeting-avatar i.online {
-  background: var(--green);
-}
-
-.limeets-meeting-user div {
-  display: grid;
-  min-width: 0;
-}
-
-.limeets-meeting-user strong,
-.limeets-meeting-user span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.limeets-meeting-user strong {
-  color: var(--text-primary);
-  font-size: 0.9rem;
-}
-
-.limeets-meeting-user span {
-  color: var(--text-muted);
-  font-size: 0.76rem;
-}
-
-.limeets-meeting-control-buttons {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.limeets-meeting-control-buttons button {
-  display: grid;
-  min-width: 0;
-  height: 38px;
-  place-items: center;
-  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
-  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
-  border: 1px solid transparent;
-  border-radius: 12px;
-}
-
-.limeets-meeting-control-buttons button:hover:not(:disabled),
-.limeets-meeting-control-buttons button.active {
-  color: var(--text-primary);
-  background: var(--discord-hover);
-  border-color: var(--midnight-border-strong);
-}
-
-.limeets-meeting-control-buttons button.danger {
-  color: #fff;
-  background: color-mix(in srgb, var(--danger) 58%, var(--midnight-card));
-}
-
-.limeets-meeting-control-buttons button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 .room-panel-toggle {
   display: none;
 }
@@ -3800,6 +4952,9 @@ h3 {
 }
 
 .room-main-stage {
+  position: relative;
+  grid-column: 3;
+  grid-row: 1;
   display: grid;
   min-width: 0;
   height: 100dvh;
@@ -11202,20 +12357,11 @@ button.attachment-preview-card {
   }
 
   .room-icon-rail {
-    padding: 10px 6px;
+    padding: 10px 6px calc(var(--room-dock-reserve) + 10px);
   }
 
   .room-icon-rail button {
     width: 44px;
-  }
-
-  .room-call-dock.floating {
-    bottom: 14px;
-    max-width: calc(100vw - 92px);
-  }
-
-  .room-call-dock.embedded {
-    padding: 8px;
   }
 
   .room-call-avatar {
@@ -13255,6 +14401,48 @@ button.attachment-preview-card {
   background: rgba(235, 111, 146, 0.22);
 }
 
+.limeets-gather-area-gizmo {
+  position: absolute;
+  display: grid;
+  place-items: start center;
+  padding-top: 8px;
+  border: 2px solid rgba(235, 111, 146, 0.76);
+  border-radius: 4px;
+  background: rgba(235, 111, 146, 0.14);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 0 0 1px rgba(15, 12, 26, 0.45);
+  pointer-events: none;
+}
+
+.limeets-gather-area-gizmo.draft {
+  border-color: rgba(246, 193, 119, 0.9);
+  background: rgba(246, 193, 119, 0.18);
+}
+
+.limeets-gather-area-gizmo.selected {
+  border-color: #f6c177;
+  background: rgba(246, 193, 119, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+    0 0 0 2px rgba(246, 193, 119, 0.18),
+    0 16px 32px rgba(7, 5, 18, 0.16);
+}
+
+.limeets-gather-area-gizmo span {
+  max-width: calc(100% - 12px);
+  padding: 3px 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(20, 16, 36, 0.82);
+}
+
 .limeets-gather-ghost {
   position: absolute;
   display: grid;
@@ -13267,6 +14455,24 @@ button.attachment-preview-card {
 .limeets-gather-ghost.blocked {
   background: rgba(255, 86, 122, 0.22);
   box-shadow: inset 0 0 0 2px rgba(255, 86, 122, 0.78);
+}
+
+.limeets-gather-ghost.erase-rect {
+  background: rgba(255, 43, 64, 0.2);
+  border: 2px solid rgba(255, 58, 78, 0.96);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 0 28px rgba(255, 43, 64, 0.32);
+}
+
+.limeets-gather-ghost.erase-rect span {
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 11px;
+  font-weight: 800;
+  background: rgba(20, 16, 36, 0.82);
 }
 
 .limeets-gather-ghost-preview {
@@ -13332,14 +14538,17 @@ button.attachment-preview-card {
   position: absolute;
   left: 0;
   top: 0;
-  display: grid;
-  justify-items: center;
   width: 48px;
-  transform: translate(calc(var(--avatar-x) - 24px), calc(var(--avatar-y) - 46px));
+  height: 58px;
+  transform: translate(calc(var(--avatar-x) - 24px), calc(var(--avatar-y) - 58px));
   pointer-events: none;
 }
 
 .limeets-gather-avatar-name {
+  position: absolute;
+  bottom: 52px;
+  left: 50%;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -13354,7 +14563,7 @@ button.attachment-preview-card {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.24);
   background: color-mix(in srgb, var(--accent-primary) 78%, #20172f);
   box-shadow: 0 4px 12px rgba(9, 7, 18, 0.24);
-  transform: translateY(-2px);
+  transform: translateX(-50%);
 }
 
 .limeets-gather-avatar.remote .limeets-gather-avatar-name {
@@ -13369,14 +14578,31 @@ button.attachment-preview-card {
   background: #2dd36f;
 }
 
+.limeets-gather-avatar-name span.online {
+  background: #23d160;
+}
+
+.limeets-gather-avatar-name span.away {
+  background: #f6c177;
+}
+
+.limeets-gather-avatar-name span.dnd {
+  background: var(--danger);
+}
+
+.limeets-gather-avatar-name span.invisible {
+  background: color-mix(in srgb, var(--text-muted) 76%, var(--theme-base));
+}
+
 .limeets-gather-avatar-sprite {
-  width: 32px;
-  height: 32px;
-  background-image: var(--avatar-sheet);
-  background-position: var(--avatar-offset-x) var(--avatar-offset-y);
-  background-repeat: no-repeat;
+  position: absolute;
+  bottom: 0;
+  left: 1px;
+  display: grid;
+  width: 46px;
+  height: 58px;
+  place-items: end center;
   image-rendering: pixelated;
-  filter: drop-shadow(0 5px 3px rgba(0, 0, 0, 0.22));
 }
 
 .limeets-gather-hud,
@@ -13869,11 +15095,237 @@ button.attachment-preview-card {
   background: rgba(9, 7, 18, 0.22);
 }
 
+.limeets-gather-field select {
+  padding-right: 34px;
+  appearance: none;
+  background-color: rgba(20, 22, 38, 0.72);
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.72) 50%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.72) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-repeat: no-repeat;
+  background-size: 5px 5px, 5px 5px;
+}
+
+.limeets-gather-field select:hover,
+.limeets-gather-field select:focus {
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, rgba(255, 255, 255, 0.16));
+  background-color: rgba(32, 28, 48, 0.82);
+}
+
+.limeets-gather-field select option {
+  color: #fff;
+  background: #1f1b2f;
+}
+
+.limeets-gather-select-menu {
+  min-width: 0;
+}
+
+.limeets-gather-select-menu .field-option-list {
+  z-index: 7000;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.limeets-gather-area-editor {
+  padding: 12px;
+  border: 1px solid rgba(235, 111, 146, 0.18);
+  border-radius: 13px;
+  background: rgba(235, 111, 146, 0.08);
+}
+
+.limeets-gather-area-intro {
+  display: grid;
+  gap: 4px;
+}
+
+.limeets-gather-inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: fit-content;
+  min-height: 32px;
+  margin-top: 6px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.limeets-gather-inline-toggle:hover {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--accent-primary) 40%, rgba(255, 255, 255, 0.14));
+  background: color-mix(in srgb, var(--accent-primary) 20%, rgba(255, 255, 255, 0.08));
+}
+
+.limeets-gather-area-property-palette,
+.limeets-gather-area-list,
+.limeets-gather-area-details {
+  display: grid;
+  gap: 9px;
+}
+
+.limeets-gather-area-property-palette {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.limeets-gather-area-property-palette button,
+.limeets-gather-area-list button {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.82);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.limeets-gather-area-property-palette button {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  min-height: 76px;
+  padding: 10px;
+}
+
+.limeets-gather-area-list button {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 54px;
+  padding: 9px 10px;
+}
+
+.limeets-gather-area-property-palette button:hover,
+.limeets-gather-area-property-palette button.active,
+.limeets-gather-area-list button:hover {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--accent-primary) 46%, rgba(255, 255, 255, 0.14));
+  background: color-mix(in srgb, var(--accent-primary) 22%, rgba(255, 255, 255, 0.08));
+}
+
+.limeets-gather-area-property-palette button.active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 42%, transparent);
+}
+
+.limeets-gather-area-property-palette svg,
+.limeets-gather-area-list svg {
+  color: #f6c177;
+}
+
+.limeets-gather-area-property-palette strong,
+.limeets-gather-area-property-palette small,
+.limeets-gather-area-list strong,
+.limeets-gather-area-list small {
+  display: block;
+}
+
+.limeets-gather-area-property-palette strong,
+.limeets-gather-area-list strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.limeets-gather-area-property-palette small,
+.limeets-gather-area-list small {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 11px;
+  line-height: 1.28;
+}
+
+.limeets-gather-area-property-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(20, 16, 36, 0.38);
+}
+
+.limeets-gather-area-property-card.stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.limeets-gather-area-property-card svg {
+  color: #f6c177;
+}
+
+.limeets-gather-area-property-card strong,
+.limeets-gather-area-property-card span {
+  display: block;
+}
+
+.limeets-gather-area-property-card strong {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+}
+
+.limeets-gather-area-property-card span {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.limeets-gather-effect-list {
+  display: grid;
+  gap: 8px;
+}
+
+.limeets-gather-effect-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.limeets-gather-effect-toggle input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent-primary);
+}
+
+.limeets-gather-effect-toggle strong,
+.limeets-gather-effect-toggle small {
+  display: block;
+}
+
+.limeets-gather-effect-toggle strong {
+  font-size: 13px;
+}
+
+.limeets-gather-effect-toggle small {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 .limeets-gather-two-cols,
 .limeets-gather-button-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.limeets-gather-button-row.single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .limeets-gather-eraser-targets {
@@ -14072,14 +15524,16 @@ button.attachment-preview-card {
 }
 
 .limeets-gather-current-action {
-  top: 14px;
-  right: 526px;
+  top: auto;
+  right: auto;
+  bottom: 16px;
+  left: 50%;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  width: min(520px, calc(100% - 620px));
-  min-width: 340px;
+  width: min(560px, calc(100% - 32px));
+  min-width: min(340px, calc(100% - 32px));
   padding: 12px;
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 14px;
@@ -14087,7 +15541,13 @@ button.attachment-preview-card {
   background: rgba(20, 16, 36, 0.9);
   box-shadow: 0 18px 54px rgba(7, 5, 18, 0.32);
   backdrop-filter: blur(16px);
-  transform: none;
+  transform: translateX(-50%);
+}
+
+.limeets-gather-root.editor-open .limeets-gather-current-action {
+  left: calc((100% - 520px) / 2);
+  width: min(520px, calc(100% - 580px));
+  min-width: 0;
 }
 
 .limeets-gather-current-thumb,
@@ -14299,10 +15759,17 @@ button.attachment-preview-card {
 
 @media (max-width: 1180px) {
   .limeets-gather-current-action {
-    left: 14px;
-    right: 526px;
-    width: auto;
+    left: 50%;
+    right: auto;
+    width: min(500px, calc(100% - 32px));
     min-width: 0;
+    transform: translateX(-50%);
+  }
+
+  .limeets-gather-root.editor-open .limeets-gather-current-action {
+    left: 14px;
+    width: calc(100% - 558px);
+    transform: none;
   }
 }
 
@@ -14312,9 +15779,11 @@ button.attachment-preview-card {
     width: auto;
   }
 
+  .limeets-gather-root.editor-open .limeets-gather-current-action,
   .limeets-gather-current-action {
     left: 14px;
     right: 14px;
+    bottom: 14px;
     width: calc(100% - 28px);
     min-width: 0;
     transform: none;

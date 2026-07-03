@@ -7,20 +7,6 @@ export const AVATAR_SPEED_PX_PER_SECOND = 190;
 export const AVATAR_RUN_MULTIPLIER = 1.8;
 export const AVATAR_ANIMATION_FPS = 10;
 
-export const IDLE_FRAMES = {
-  down: 1,
-  left: 4,
-  right: 7,
-  up: 10,
-};
-
-const WALK_FRAMES = {
-  down: [0, 1, 2, 1],
-  left: [3, 4, 5, 4],
-  right: [6, 7, 8, 7],
-  up: [9, 10, 11, 10],
-};
-
 const DIRECTIONS = [
   [0, 1],
   [1, 0],
@@ -42,16 +28,15 @@ export function getDirectionFromDelta(dx, dy, fallback = "down") {
 }
 
 export function getAvatarFrame(direction, moving, elapsedMs) {
-  if (!moving) return IDLE_FRAMES[direction] ?? IDLE_FRAMES.down;
-  const frames = WALK_FRAMES[direction] || WALK_FRAMES.down;
+  if (!moving) return 0;
   const frameDuration = 1000 / AVATAR_ANIMATION_FPS;
-  return frames[Math.floor(elapsedMs / frameDuration) % frames.length];
+  return Math.floor(elapsedMs / frameDuration);
 }
 
 export function tileToWorldPoint(tile, tileSize = TILE_SIZE) {
   return {
     x: tile.x * tileSize + tileSize / 2,
-    y: tile.y * tileSize + tileSize * 0.72,
+    y: tile.y * tileSize + tileSize / 2,
   };
 }
 

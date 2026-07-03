@@ -1,4 +1,6 @@
 export const CUSTOM_WORLD_MAP_ID = "custom-world";
+const DEFAULT_WORLD_COLUMNS = 64;
+const DEFAULT_WORLD_ROWS = 40;
 
 export const WORLD_LAYERS = ["floor", "above_floor", "object"];
 
@@ -10,7 +12,7 @@ export const SPECIAL_TILE_TYPES = [
 ];
 
 export const WORLD_ZONE_PRESETS = [
-  { tabId: "space", label: "Limeets", description: "Starting area" },
+  { tabId: "space", label: "World", description: "Virtual world" },
   { tabId: "focus", label: "Home", description: "Room board and overview" },
   { tabId: "chat", label: "Convolution", description: "Group discussion" },
   { tabId: "resources", label: "Infilenite", description: "Library and resources" },
@@ -21,6 +23,9 @@ export const WORLD_ZONE_PRESETS = [
 export const DEFAULT_WORLD_ROOM = {
   id: CUSTOM_WORLD_MAP_ID,
   name: "World",
+  backgroundImage: "",
+  columns: DEFAULT_WORLD_COLUMNS,
+  rows: DEFAULT_WORLD_ROWS,
   tilemap: {},
 };
 
@@ -29,8 +34,8 @@ export const DEFAULT_CUSTOM_WORLD_CONFIG = {
   version: 2,
   backgroundImage: "",
   tileSize: 32,
-  columns: 64,
-  rows: 40,
+  columns: DEFAULT_WORLD_COLUMNS,
+  rows: DEFAULT_WORLD_ROWS,
   activeRoomId: CUSTOM_WORLD_MAP_ID,
   spawnpoint: { roomId: CUSTOM_WORLD_MAP_ID, x: 32, y: 20 },
   rooms: [DEFAULT_WORLD_ROOM],
@@ -50,6 +55,11 @@ function clampInteger(value, min, max, fallback) {
 
 function safeString(value, fallback = "") {
   return String(value ?? fallback).trim();
+}
+
+function normalizeBackgroundImage(value) {
+  const image = safeString(value);
+  return image.startsWith("data:image/") ? image : "";
 }
 
 export function makeTileKey(x, y) {
@@ -135,6 +145,11 @@ function normalizeTileEntry(value, columns, rows, roomId) {
   const portal = normalizePortal(value.portal);
   if (portal) tile.portal = portal;
 
+  const openUrl = safeString(value.openUrl || value.linkUrl).slice(0, 500);
+  if (openUrl) tile.openUrl = openUrl;
+
+  if (value.entryExit === true) tile.entryExit = true;
+
   return Object.keys(tile).length ? tile : null;
 }
 
@@ -154,15 +169,83 @@ function normalizeTilemap(tilemap, columns, rows, roomId) {
   return normalized;
 }
 
-function normalizeRoom(value, index, columns, rows) {
+function normalizeRoom(value, index, columns, rows, backgroundImage) {
   const room = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const fallbackId = index === 0 ? CUSTOM_WORLD_MAP_ID : `world-room-${index + 1}`;
   const id = safeString(room.id || room.roomId || room.mapId || fallbackId, fallbackId).slice(0, 64);
+  const roomColumns = clampInteger(room.columns, 12, 256, columns);
+  const roomRows = clampInteger(room.rows, 10, 256, rows);
+  const rawName = room.name ?? room.label;
+  const name = rawName == null
+    ? (index === 0 ? "World" : `Zone ${index + 1}`)
+    : safeString(rawName).slice(0, 72);
 
   return {
     id,
-    name: safeString(room.name || (index === 0 ? "World" : `Room ${index + 1}`), "World").slice(0, 72),
-    tilemap: normalizeTilemap(room.tilemap, columns, rows, id),
+    name,
+    backgroundImage: normalizeBackgroundImage(room.backgroundImage) || backgroundImage,
+    columns: roomColumns,
+    rows: roomRows,
+    tilemap: normalizeTilemap(room.tilemap, roomColumns, roomRows, id),
+  };
+}
+
+function normalizeAreaEffects(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    entryExit: source.entryExit === true,
+    impassable: source.impassable === true,
+    meeting: source.meeting === true,
+    openLink: source.openLink === true,
+    teleport: source.teleport === true,
+  };
+}
+
+function normalizeAreaTabId(value) {
+  const tabId = safeString(value);
+  return WORLD_ZONE_PRESETS.some((preset) => preset.tabId === tabId && tabId !== "focus")
+    ? tabId
+    : "chat";
+}
+
+function normalizeAreaProperties(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((property) => {
+      if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+      const type = safeString(property.type).slice(0, 48);
+      if (!type) return null;
+      return {
+        ...property,
+        type,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
+function normalizePrivateArea(value, index, columns, rows, fallbackRoomId) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const bounds = value.bounds && typeof value.bounds === "object" ? value.bounds : value;
+  const col = clampInteger(bounds.col ?? bounds.x, 0, columns - 1, 0);
+  const row = clampInteger(bounds.row ?? bounds.y, 0, rows - 1, 0);
+  const width = clampInteger(bounds.width ?? bounds.w, 1, columns - col, 1);
+  const height = clampInteger(bounds.height ?? bounds.h, 1, rows - row, 1);
+  const label = safeString(value.name || value.label || "Area", "Area").slice(0, 72);
+  const roomId = safeString(value.roomId || value.mapId || fallbackRoomId, fallbackRoomId).slice(0, 64);
+  const destination = normalizeTeleporter(value.destination || value.teleporter, columns, rows, roomId);
+
+  return {
+    id: safeString(value.id || `area-${index + 1}`, `area-${index + 1}`).slice(0, 64),
+    label,
+    name: label,
+    roomId,
+    bounds: { col, row, width, height },
+    effects: normalizeAreaEffects(value.effects),
+    properties: normalizeAreaProperties(value.properties),
+    linkUrl: safeString(value.linkUrl || value.url).slice(0, 500),
+    tabId: normalizeAreaTabId(value.tabId || value.targetTabId || value.portal?.tabId),
+    destination: destination || { roomId, x: 0, y: 0 },
   };
 }
 
@@ -232,50 +315,82 @@ export function normalizeWorldConfig(value) {
   const config = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const columns = clampInteger(config.columns, 12, 256, DEFAULT_CUSTOM_WORLD_CONFIG.columns);
   const rows = clampInteger(config.rows, 10, 256, DEFAULT_CUSTOM_WORLD_CONFIG.rows);
-  const backgroundImage = safeString(config.backgroundImage).startsWith("data:image/")
-    ? safeString(config.backgroundImage)
-    : "";
+  const backgroundImage = normalizeBackgroundImage(config.backgroundImage);
+  const hasExplicitRooms = Array.isArray(config.rooms) && config.rooms.length > 0;
 
-  const sourceRooms = Array.isArray(config.rooms) && config.rooms.length
+  const sourceRooms = hasExplicitRooms
     ? config.rooms
     : [
         {
           ...DEFAULT_WORLD_ROOM,
+          backgroundImage,
+          columns,
+          rows,
           tilemap: migrateLegacyTilemap(config, columns, rows),
         },
       ];
 
   const rooms = sourceRooms
-    .map((room, index) => normalizeRoom(room, index, columns, rows))
-    .filter((room) => room.id && room.name)
+    .map((room, index) => normalizeRoom(room, index, columns, rows, !hasExplicitRooms && index === 0 ? backgroundImage : ""))
+    .filter((room) => room.id)
     .slice(0, 24);
 
-  if (!rooms.length) rooms.push({ ...DEFAULT_WORLD_ROOM, tilemap: {} });
+  if (!rooms.length) rooms.push(normalizeRoom(DEFAULT_WORLD_ROOM, 0, columns, rows, backgroundImage));
 
   const activeRoomId = rooms.some((room) => room.id === config.activeRoomId)
     ? safeString(config.activeRoomId)
     : rooms[0].id;
+  const activeRoom = rooms.find((room) => room.id === activeRoomId) || rooms[0];
+  const activeColumns = activeRoom.columns || columns;
+  const activeRows = activeRoom.rows || rows;
+  const activeBackgroundImage = activeRoom.backgroundImage || "";
 
   const fallbackSpawn = {
     roomId: rooms[0].id,
-    x: Math.floor(columns / 2),
-    y: Math.floor(rows / 2),
+    x: Math.floor((rooms[0].columns || columns) / 2),
+    y: Math.floor((rooms[0].rows || rows) / 2),
   };
   const spawnSource = config.spawnpoint || config.spawn || fallbackSpawn;
-  const spawnpoint = normalizeWorldTile(spawnSource, columns, rows, fallbackSpawn);
+  const spawnRoomId = safeString(spawnSource?.roomId || spawnSource?.mapId || fallbackSpawn.roomId, fallbackSpawn.roomId);
+  const spawnRoom = rooms.find((room) => room.id === spawnRoomId) || rooms[0];
+  const spawnpoint = normalizeWorldTile(
+    { ...spawnSource, roomId: spawnRoom.id },
+    spawnRoom.columns || columns,
+    spawnRoom.rows || rows,
+    {
+      roomId: spawnRoom.id,
+      x: Math.floor((spawnRoom.columns || columns) / 2),
+      y: Math.floor((spawnRoom.rows || rows) / 2),
+    },
+  );
   if (!rooms.some((room) => room.id === spawnpoint.roomId)) {
     spawnpoint.roomId = rooms[0].id;
   }
+
+  const privateAreas = normalizeLegacyArray(config.privateAreas)
+    .map((area, index) => {
+      const roomId = safeString(area?.roomId || area?.mapId || activeRoomId, activeRoomId).slice(0, 64);
+      const areaRoom = rooms.find((room) => room.id === roomId) || activeRoom;
+      return normalizePrivateArea(
+        { ...area, roomId: areaRoom.id },
+        index,
+        areaRoom.columns || activeColumns,
+        areaRoom.rows || activeRows,
+        areaRoom.id,
+      );
+    })
+    .filter(Boolean)
+    .slice(0, 48);
 
   return {
     ...DEFAULT_CUSTOM_WORLD_CONFIG,
     ...config,
     enabled: config.enabled !== false,
     version: 2,
-    backgroundImage,
+    backgroundImage: activeBackgroundImage,
     tileSize: clampInteger(config.tileSize, 24, 72, DEFAULT_CUSTOM_WORLD_CONFIG.tileSize),
-    columns,
-    rows,
+    columns: activeColumns,
+    rows: activeRows,
     activeRoomId,
     spawnpoint,
     spawn: {
@@ -286,7 +401,7 @@ export function normalizeWorldConfig(value) {
     rooms,
     collisions: normalizeLegacyArray(config.collisions),
     objects: normalizeLegacyArray(config.objects),
-    privateAreas: normalizeLegacyArray(config.privateAreas),
+    privateAreas,
     zones: normalizeLegacyArray(config.zones),
   };
 }

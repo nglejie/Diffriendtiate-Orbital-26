@@ -40,7 +40,14 @@ export function storageMode() {
  */
 function normalizeDb(db) {
   return {
-    users: db.users || [],
+    users: (db.users || []).map((user) => ({
+      ...user,
+      avatarPreset:
+        user.avatarPreset && typeof user.avatarPreset === "object" && !Array.isArray(user.avatarPreset)
+          ? user.avatarPreset
+          : null,
+      avatarUrl: user.avatarUrl || "",
+    })),
     rooms: (db.rooms || []).map((room) => ({
       ...room,
       academicTerm: room.academicTerm || "",
@@ -279,6 +286,9 @@ async function initPostgres() {
       ON resources(room_id, content_hash)
       WHERE content_hash <> ''
   `);
+
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_preset JSONB");
 }
 
 /**
@@ -330,6 +340,8 @@ export async function readDb() {
         id,
         name,
         email,
+        avatar_url AS "avatarUrl",
+        avatar_preset AS "avatarPreset",
         password_hash AS "passwordHash",
         created_at AS "createdAt"
       FROM users
@@ -493,10 +505,18 @@ async function writePostgresDb(db) {
     for (const user of db.users) {
       await client.query(
         `
-          INSERT INTO users (id, name, email, password_hash, created_at)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO users (id, name, email, avatar_url, avatar_preset, password_hash, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
-        [user.id, user.name, user.email, user.passwordHash, user.createdAt],
+        [
+          user.id,
+          user.name,
+          user.email,
+          user.avatarUrl || "",
+          JSON.stringify(user.avatarPreset || null),
+          user.passwordHash,
+          user.createdAt,
+        ],
       );
     }
 

@@ -147,6 +147,27 @@ function hashString(value: string): string {
   return hash.toString(36);
 }
 
+const TITLE_CASE_CONNECTORS = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with"]);
+const HEX_LABEL_PATTERN = /^#[0-9a-f]{6}$/i;
+
+function toDisplayTitle(value: string | undefined): string {
+  return String(value || "")
+    .split("/")
+    .map((segment) =>
+      segment
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word, index) => {
+          if (HEX_LABEL_PATTERN.test(word)) return word.toUpperCase();
+          const lower = word.toLowerCase();
+          if (index > 0 && TITLE_CASE_CONNECTORS.has(lower)) return lower;
+          return lower.charAt(0).toUpperCase() + lower.slice(1);
+        })
+        .join(" "),
+    )
+    .join("/");
+}
+
 function inferDirection(pathOrKey: string | undefined): string | undefined {
   if (!pathOrKey) return undefined;
   const lower = pathOrKey.toLowerCase();
@@ -190,31 +211,37 @@ function makeGatherObjectAsset(input: {
   variantKey?: string;
   variantName?: string;
   direction?: string;
-}): LimeetsAsset {
+}): LimeetsAsset | null {
+  const dimensions = gatherDimensions[input.relativePath];
+  if (!dimensions || HEX_LABEL_PATTERN.test(input.label)) return null;
+
   const bucket = inferManifestBucket(input.category);
   const defaultLayer = inferDefaultLayer(input.category, bucket);
-  const dimensions = gatherDimensions[input.relativePath];
-  const familyId = `gather:${slugify(input.category)}:${slugify(input.label)}`;
+  const category = toDisplayTitle(input.category);
+  const label = toDisplayTitle(input.label);
+  const familyId = `gather:${slugify(category)}:${slugify(label)}`;
   const suffix = `${input.variantKey || "default"}:${input.direction || "default"}:${hashString(input.relativePath)}`;
   const id = `${familyId}:${slugify(suffix)}`;
 
   return {
     allowedLayers: allowedLayersFor(bucket),
-    baseLabel: input.label,
+    baseLabel: label,
     blocks: bucket === "object",
     bucket,
-    category: input.category,
+    category,
     defaultLayer,
     direction: input.direction,
     familyId,
     height: Math.max(1, Math.min(12, dimensions?.tilesHigh || 1)),
     id,
-    label: input.label,
+    label,
     layer: defaultLayer,
     src: gatherAssetUrl(input.relativePath),
     variantHex: input.variantHex,
     variantKey: input.variantKey,
-    variantName: input.variantName,
+    variantName: HEX_LABEL_PATTERN.test(input.variantName || "")
+      ? input.variantName?.toUpperCase()
+      : toDisplayTitle(input.variantName),
     width: Math.max(1, Math.min(12, dimensions?.tilesWide || 1)),
   };
 }
@@ -279,7 +306,9 @@ function buildGatherTileAssets(): LimeetsAsset[] {
         ? Number(category.tile_id_end)
         : (Number(category.row_end || sheet.rows! - 1) + 1) * sheet.cols! - 1;
       const categoryName = category.name || sheetName;
-      const pickerCategory = `${sheetName}/${categoryName}`;
+      const displaySheetName = toDisplayTitle(sheetName);
+      const displayCategoryName = toDisplayTitle(categoryName);
+      const pickerCategory = `${displaySheetName}/${displayCategoryName}`;
       const defaultLayer = inferTileDefaultLayer(sheetName, categoryName);
 
       for (let tileId = start; tileId <= end; tileId += 1) {
@@ -290,7 +319,7 @@ function buildGatherTileAssets(): LimeetsAsset[] {
           makeGatherTileAsset({
             category: pickerCategory,
             defaultLayer,
-            label: `${categoryName} ${tileId - start + 1}`,
+            label: `${displayCategoryName} ${tileId - start + 1}`,
             relativePath: sheet.sheet,
             sheetCols: sheet.cols,
             sheetRows: sheet.rows,
@@ -308,6 +337,8 @@ function buildGatherObjectAssets(): LimeetsAsset[] {
   const assets: LimeetsAsset[] = [];
   Object.entries(gatherManifest.objects || {}).forEach(([category, items]) => {
     Object.entries(items || {}).forEach(([label, item]) => {
+      if (HEX_LABEL_PATTERN.test(label)) return;
+
       const variantSprites = item.variants?.flatMap((variant) =>
         Object.entries(variant.sprites || {}).map(([direction, relativePath]) =>
           makeGatherObjectAsset({
@@ -320,7 +351,7 @@ function buildGatherObjectAssets(): LimeetsAsset[] {
             variantName: variant.name || variant.hex,
           }),
         ),
-      ) || [];
+      ).filter((asset): asset is LimeetsAsset => Boolean(asset)) || [];
 
       if (variantSprites.length) {
         assets.push(...variantSprites);
@@ -329,16 +360,15 @@ function buildGatherObjectAssets(): LimeetsAsset[] {
 
       const namedSprites = item.named_sprites?.length ? item.named_sprites : item.preview ? [item.preview] : [];
       namedSprites.forEach((relativePath) => {
-        assets.push(
-          makeGatherObjectAsset({
-            category,
-            direction: inferDirection(relativePath),
-            label,
-            relativePath,
-            variantKey: "default",
-            variantName: "Default",
-          }),
-        );
+        const asset = makeGatherObjectAsset({
+          category,
+          direction: inferDirection(relativePath),
+          label,
+          relativePath,
+          variantKey: "default",
+          variantName: "Default",
+        });
+        if (asset) assets.push(asset);
       });
     });
   });

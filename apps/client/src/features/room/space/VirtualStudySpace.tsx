@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Box,
+  ChevronDown,
   ChevronRight,
   DoorOpen,
   Eraser,
@@ -31,14 +32,17 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.ts";
 import { getBackground } from "../../../constants.ts";
+import { AvatarPreview } from "../profile/AvatarPreview.tsx";
+import { normalizeLimeetsAvatarPreset } from "../profile/avatarPresets.ts";
+import { normalizeProfileStatus } from "../profile/UserProfileControls.tsx";
 import {
   CUSTOM_WORLD_MAP_ID,
+  WORLD_ZONE_PRESETS,
   makeTileKey,
   normalizeWorldConfig,
   parseTileKey,
 } from "./worldConfig.ts";
 import {
-  LIMEETS_AVATAR_SPRITES,
   LIMEETS_OBJECT_ASSETS,
   canAssetUseLayer,
   getAssetColorOptions,
@@ -52,15 +56,16 @@ import {
   AVATAR_SPEED_PX_PER_SECOND,
   getAvatarFrame,
   getDirectionFromDelta,
-  getFramePosition,
   findTilePath,
   tileToWorldPoint,
   worldPointToTile,
 } from "./gatherMovement.ts";
 
-const CAMERA_MIN_SCALE = 0.22;
+const CAMERA_MIN_SCALE = 0.08;
 const CAMERA_MAX_SCALE = 5.2;
 const CAMERA_ZOOM_STEP = 1.16;
+const FIT_WORLD_PADDING_PX = 56;
+const EDITOR_FIT_RESERVED_WIDTH_PX = 536;
 const MOVE_EMIT_INTERVAL_MS = 120;
 const PAN_DRAG_THRESHOLD_PX = 5;
 const EXPLORE_NOTICE_TEXT = "How about we explore the area ahead of us later?";
@@ -85,16 +90,12 @@ const EDITOR_PANEL_COPY = {
     description: "Search, choose an object, then stamp it on the map.",
   },
   rooms: {
-    title: "Rooms",
-    description: "Create, rename, switch, or remove connected world rooms.",
-  },
-  setup: {
-    title: "World Setup",
-    description: "Adjust the map size and background image.",
+    title: "World Setup & Zones",
+    description: "Create zones, then set each zone's size, spawn, and background.",
   },
   special: {
-    title: "Special Tiles",
-    description: "Paint collision, spawn, teleport, or meeting-area markers.",
+    title: "Special Areas",
+    description: "Draw named areas and stack movement, meeting, link, or teleport effects.",
   },
 };
 
@@ -108,7 +109,7 @@ const SPECIAL_TILES = [
   {
     id: "teleport",
     title: "Teleport",
-    description: "Move players to another room tile.",
+    description: "Move players to another zone tile.",
     icon: DoorOpen,
   },
   {
@@ -120,8 +121,52 @@ const SPECIAL_TILES = [
   {
     id: "private",
     title: "Meeting Area",
-    description: "Mark tiles that automatically join voice and video.",
+    description: "Draw an area that can auto-join voice and video.",
     icon: Grid2X2,
+  },
+];
+
+const DEFAULT_AREA_EFFECTS = {
+  entryExit: false,
+  impassable: false,
+  meeting: false,
+  openLink: false,
+  teleport: false,
+};
+
+const NAVIGATION_AREA_OPTIONS = WORLD_ZONE_PRESETS.filter((preset) => preset.tabId !== "focus");
+const DEFAULT_NAVIGATION_TAB = "chat";
+
+const AREA_PROPERTY_OPTIONS = [
+  {
+    id: "meeting",
+    title: "Meeting Area",
+    description: "Join Limeets voice/video when a member enters.",
+    icon: Grid2X2,
+  },
+  {
+    id: "entryExit",
+    title: "Navigate",
+    description: "Send members to a tab when they stop in this area.",
+    icon: Navigation,
+  },
+  {
+    id: "openLink",
+    title: "Open Link",
+    description: "Attach a link interaction to the area.",
+    icon: Navigation,
+  },
+  {
+    id: "teleport",
+    title: "Teleport",
+    description: "Move members to another zone tile.",
+    icon: DoorOpen,
+  },
+  {
+    id: "impassable",
+    title: "Block Movement",
+    description: "Make the whole selected area impassable.",
+    icon: Lock,
   },
 ];
 
@@ -130,7 +175,7 @@ const ERASER_TARGETS = [
   { id: "floor", label: "Floor", icon: Layers },
   { id: "above_floor", label: "Above", icon: ImageIcon },
   { id: "object", label: "Objects", icon: Box },
-  { id: "special", label: "Special", icon: MapPin },
+  { id: "special", label: "Areas", icon: Grid2X2 },
 ];
 
 const LAYER_LABELS = {
@@ -170,6 +215,33 @@ function getStorageKey(roomId) {
   return roomId ? `diffriendtiate:room:${roomId}:limeets-gather-player` : "";
 }
 
+function getAreaTriggerStorageKey(roomId) {
+  return roomId ? `diffriendtiate:room:${roomId}:limeets-area-trigger` : "";
+}
+
+function readAreaTriggerStorage(roomId) {
+  const storageKey = getAreaTriggerStorageKey(roomId);
+  if (!storageKey || typeof window === "undefined") return "";
+
+  try {
+    return window.localStorage.getItem(storageKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeAreaTriggerStorage(roomId, areaId) {
+  const storageKey = getAreaTriggerStorageKey(roomId);
+  if (!storageKey || typeof window === "undefined") return;
+
+  try {
+    if (areaId) window.localStorage.setItem(storageKey, areaId);
+    else window.localStorage.removeItem(storageKey);
+  } catch {
+    // Local UI state should never break the world if storage is unavailable.
+  }
+}
+
 function isTypingTarget(target) {
   const tagName = target?.tagName;
   return (
@@ -188,6 +260,35 @@ function getWorldSize(world) {
   return {
     width: world.columns * world.tileSize,
     height: world.rows * world.tileSize,
+  };
+}
+
+function getEditorReservedWidth(viewportWidth, editorOpen, isOwner) {
+  if (!editorOpen || !isOwner) return 0;
+  return Math.min(EDITOR_FIT_RESERVED_WIDTH_PX, Math.max(0, viewportWidth - 240));
+}
+
+function getVisibleViewportSize(viewportSize, editorOpen, isOwner) {
+  const reservedWidth = getEditorReservedWidth(viewportSize.width, editorOpen, isOwner);
+  return {
+    reservedWidth,
+    width: Math.max(1, viewportSize.width - reservedWidth),
+    height: Math.max(1, viewportSize.height),
+  };
+}
+
+function getZoneFallbackName(index) {
+  return `Zone ${index + 1}`;
+}
+
+function prepareWorldForSave(worldConfig) {
+  const normalized = normalizeWorldConfig(worldConfig);
+  return {
+    ...normalized,
+    rooms: normalized.rooms.map((room, index) => ({
+      ...room,
+      name: String(room.name || "").trim() || getZoneFallbackName(index),
+    })),
   };
 }
 
@@ -531,6 +632,14 @@ function getPresenceKey(presence) {
   return presence?.presenceId || presence?.socketId || presence?.userId || "";
 }
 
+function mergePresenceUser(presence, nextUser) {
+  if (!presence?.user || !nextUser || presence.user.id !== nextUser.id) return presence;
+  return {
+    ...presence,
+    user: { ...presence.user, ...nextUser },
+  };
+}
+
 function rectangleTiles(start, end) {
   if (!start || !end) return [];
   const xStart = Math.min(start.x, end.x);
@@ -546,6 +655,207 @@ function rectangleTiles(start, end) {
   }
 
   return tiles;
+}
+
+function getAreaRectFromPoints(start, end, world) {
+  if (!start || !end || !world) return null;
+
+  const minX = clamp(Math.min(start.x, end.x), 0, world.width);
+  const minY = clamp(Math.min(start.y, end.y), 0, world.height);
+  const maxX = clamp(Math.max(start.x, end.x), 0, world.width);
+  const maxY = clamp(Math.max(start.y, end.y), 0, world.height);
+  const fallbackWidth = world.tileSize;
+  const fallbackHeight = world.tileSize;
+  const pixelWidth = Math.max(maxX - minX, fallbackWidth);
+  const pixelHeight = Math.max(maxY - minY, fallbackHeight);
+  const col = clamp(Math.floor(minX / world.tileSize), 0, world.columns - 1);
+  const row = clamp(Math.floor(minY / world.tileSize), 0, world.rows - 1);
+  const endCol = clamp(Math.ceil((minX + pixelWidth) / world.tileSize) - 1, col, world.columns - 1);
+  const endRow = clamp(Math.ceil((minY + pixelHeight) / world.tileSize) - 1, row, world.rows - 1);
+
+  return {
+    bounds: {
+      col,
+      row,
+      width: endCol - col + 1,
+      height: endRow - row + 1,
+    },
+    pixel: {
+      x: minX,
+      y: minY,
+      width: pixelWidth,
+      height: pixelHeight,
+    },
+    tiles: rectangleTiles({ x: col, y: row }, { x: endCol, y: endRow }),
+  };
+}
+
+function getPrivateAreaBounds(area) {
+  const bounds = area?.bounds || area;
+  const col = Number(bounds?.col ?? bounds?.x);
+  const row = Number(bounds?.row ?? bounds?.y);
+  const width = Number(bounds?.width ?? bounds?.w);
+  const height = Number(bounds?.height ?? bounds?.h);
+  if (![col, row, width, height].every(Number.isFinite)) return null;
+  return { col, row, width, height };
+}
+
+function getAreaEffects(area) {
+  return {
+    ...DEFAULT_AREA_EFFECTS,
+    ...(area?.effects && typeof area.effects === "object" ? area.effects : {}),
+  };
+}
+
+function getAreaDestination(area, fallbackRoomId) {
+  const destination = area?.destination || area?.teleporter || {};
+  return {
+    roomId: String(destination.roomId || destination.mapId || fallbackRoomId || CUSTOM_WORLD_MAP_ID),
+    x: Number.isFinite(Number(destination.x ?? destination.col)) ? Number(destination.x ?? destination.col) : 0,
+    y: Number.isFinite(Number(destination.y ?? destination.row)) ? Number(destination.y ?? destination.row) : 0,
+  };
+}
+
+function getAreaNavigationTarget(area) {
+  const target = String(area?.tabId || area?.targetTabId || area?.portal?.tabId || "").trim();
+  return NAVIGATION_AREA_OPTIONS.some((option) => option.tabId === target)
+    ? target
+    : DEFAULT_NAVIGATION_TAB;
+}
+
+function getNavigationPreset(tabId) {
+  return NAVIGATION_AREA_OPTIONS.find((option) => option.tabId === tabId) || NAVIGATION_AREA_OPTIONS[0];
+}
+
+function getAreaTiles(area, world) {
+  const bounds = getPrivateAreaBounds(area);
+  if (!bounds || !world) return [];
+  const start = {
+    x: clamp(bounds.col, 0, world.columns - 1),
+    y: clamp(bounds.row, 0, world.rows - 1),
+  };
+  const end = {
+    x: clamp(bounds.col + bounds.width - 1, start.x, world.columns - 1),
+    y: clamp(bounds.row + bounds.height - 1, start.y, world.rows - 1),
+  };
+  return rectangleTiles(start, end);
+}
+
+function getAreaCenterTile(area, world) {
+  const bounds = getPrivateAreaBounds(area);
+  if (!bounds || !world) return { x: 0, y: 0 };
+  return {
+    x: clamp(Math.floor(bounds.col + bounds.width / 2), 0, world.columns - 1),
+    y: clamp(Math.floor(bounds.row + bounds.height / 2), 0, world.rows - 1),
+  };
+}
+
+function buildAreaProperties(area) {
+  const effects = getAreaEffects(area);
+  const properties = [];
+  if (effects.meeting) properties.push({ type: "meetingArea" });
+  if (effects.entryExit) properties.push({ type: "navigate", tabId: getAreaNavigationTarget(area) });
+  if (effects.openLink) properties.push({ type: "openWebsite", url: area?.linkUrl || "" });
+  if (effects.teleport) properties.push({ type: "teleport", destination: area?.destination || null });
+  if (effects.impassable) properties.push({ type: "impassable" });
+  return properties;
+}
+
+function clearAreaTileEffects(worldConfig, area) {
+  if (!worldConfig || !area?.id) return;
+  const room = worldConfig.rooms?.find((candidate) => candidate.id === (area.roomId || worldConfig.activeRoomId));
+  if (!room) return;
+
+  const effects = getAreaEffects(area);
+  const affectedKeys = new Set(getAreaTiles(area, worldConfig).map((tile) => makeTileKey(tile.x, tile.y)));
+  Object.entries(room.tilemap || {}).forEach(([key, tile]) => {
+    if (tile?.privateAreaId === area.id) affectedKeys.add(key);
+  });
+
+  affectedKeys.forEach((key) => {
+    const entry = { ...(room.tilemap[key] || {}) };
+    if (!Object.keys(entry).length) return;
+    if (entry.privateAreaId === area.id) delete entry.privateAreaId;
+    if (effects.entryExit) delete entry.entryExit;
+    if (effects.entryExit) delete entry.portal;
+    if (effects.openLink) delete entry.openUrl;
+    if (effects.teleport) delete entry.teleporter;
+    if (effects.impassable) delete entry.impassable;
+
+    if (Object.keys(entry).length) room.tilemap[key] = entry;
+    else delete room.tilemap[key];
+  });
+}
+
+function materializeAreaTileEffects(worldConfig, area, previousArea = null) {
+  if (!worldConfig || !area?.id) return;
+  if (previousArea) clearAreaTileEffects(worldConfig, previousArea);
+
+  const room = worldConfig.rooms?.find((candidate) => candidate.id === (area.roomId || worldConfig.activeRoomId));
+  if (!room) return;
+
+  const effects = getAreaEffects(area);
+  const destination = getAreaDestination(area, worldConfig.activeRoomId);
+  const navigationPreset = getNavigationPreset(getAreaNavigationTarget(area));
+  getAreaTiles(area, worldConfig).forEach((tile) => {
+    const key = makeTileKey(tile.x, tile.y);
+    const entry = { ...(room.tilemap[key] || {}) };
+    if (effects.meeting) entry.privateAreaId = area.id;
+    if (effects.entryExit) {
+      delete entry.entryExit;
+      entry.portal = {
+        tabId: navigationPreset.tabId,
+        label: navigationPreset.label,
+      };
+    }
+    if (effects.openLink && area.linkUrl) entry.openUrl = area.linkUrl;
+    if (effects.teleport) entry.teleporter = destination;
+    if (effects.impassable) entry.impassable = true;
+    if (Object.keys(entry).length) room.tilemap[key] = entry;
+    else delete room.tilemap[key];
+  });
+}
+
+function getAreaAtPoint(point, world, worldRoomId) {
+  if (!point || !world) return null;
+  const candidates = (Array.isArray(world.privateAreas) ? world.privateAreas : []).filter(
+    (area) => !area.roomId || area.roomId === worldRoomId,
+  );
+
+  return [...candidates].reverse().find((area) => {
+    const bounds = getPrivateAreaBounds(area);
+    if (!bounds) return false;
+    const left = bounds.col * world.tileSize;
+    const top = bounds.row * world.tileSize;
+    const right = left + bounds.width * world.tileSize;
+    const bottom = top + bounds.height * world.tileSize;
+    return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+  }) || null;
+}
+
+function areaContainsTile(area, tile) {
+  const bounds = getPrivateAreaBounds(area);
+  if (!bounds || !tile) return false;
+  return (
+    tile.x >= bounds.col &&
+    tile.x < bounds.col + bounds.width &&
+    tile.y >= bounds.row &&
+    tile.y < bounds.row + bounds.height
+  );
+}
+
+function getAreaAtTile(tile, world, worldRoomId) {
+  if (!tile || !world) return null;
+  const candidates = (Array.isArray(world.privateAreas) ? world.privateAreas : []).filter(
+    (area) => !area.roomId || area.roomId === worldRoomId,
+  );
+  return [...candidates].reverse().find((area) => areaContainsTile(area, tile)) || null;
+}
+
+function areaRectContainsSpawn(areaRect, world) {
+  const spawn = world?.spawnpoint;
+  if (!areaRect?.tiles?.length || !spawn || spawn.roomId !== world?.activeRoomId) return false;
+  return areaRect.tiles.some((tile) => tile.x === spawn.x && tile.y === spawn.y);
 }
 
 function tileContainsObject(tilemap, targetTile) {
@@ -564,6 +874,8 @@ function clearTileEntry(entry, target) {
     delete next.teleporter;
     delete next.privateAreaId;
     delete next.portal;
+    delete next.entryExit;
+    delete next.openUrl;
   }
 
   return next;
@@ -587,8 +899,9 @@ function canPlaceAssetAtTile(asset, layer, tile, world, tilemap) {
   return true;
 }
 
-function Avatar({ className = "", name, player, spriteUrl, status = "Online" }) {
-  const frame = getFramePosition(player.frame || 1);
+function Avatar({ avatarPreset, className = "", name, player, status = "online" }) {
+  const avatar = normalizeLimeetsAvatarPreset(avatarPreset);
+  const statusClass = normalizeProfileStatus(status);
 
   return (
     <div
@@ -600,19 +913,22 @@ function Avatar({ className = "", name, player, spriteUrl, status = "Online" }) 
       }}
     >
       <div className="limeets-gather-avatar-name">
-        <span aria-hidden="true" />
+        <span className={statusClass} aria-hidden="true" />
         {name}
       </div>
       <div
         aria-label={`${name} avatar, ${status}`}
         className="limeets-gather-avatar-sprite"
         role="img"
-        style={{
-          "--avatar-sheet": `url("${spriteUrl}")`,
-          "--avatar-offset-x": `${-frame.x}px`,
-          "--avatar-offset-y": `${-frame.y}px`,
-        }}
-      />
+      >
+        <AvatarPreview
+          avatar={avatar}
+          direction={player.direction || "down"}
+          frame={player.frame ?? 0}
+          moving={Boolean(player.moving)}
+          size="world"
+        />
+      </div>
     </div>
   );
 }
@@ -643,6 +959,53 @@ function LayerButton({ active, children, disabled = false, layer, onClick }) {
     >
       {children}
     </button>
+  );
+}
+
+function FieldSelectMenu({ label, onChange, options, value }) {
+  const [open, setOpen] = useState(false);
+  const selectedOption = options.find((option) => option.value === value) || options[0];
+
+  function chooseOption(option) {
+    onChange(option.value);
+    setOpen(false);
+  }
+
+  return (
+    <label className="limeets-gather-field">
+      <span>{label}</span>
+      <div
+        className="field-select-menu academic-term-select limeets-gather-select-menu"
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+      >
+        <button
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          onClick={() => setOpen((current) => !current)}
+          type="button"
+        >
+          {selectedOption?.label || "Select"}
+          <ChevronDown size={17} />
+        </button>
+
+        {open ? (
+          <div className="custom-option-list field-option-list" role="listbox">
+            {options.map((option) => (
+              <button
+                className={option.value === value ? "active" : ""}
+                key={option.value}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseOption(option)}
+                role="option"
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </label>
   );
 }
 
@@ -724,12 +1087,16 @@ export function VirtualStudySpace({
   onMeetingAreaChange,
   onNavigate,
   onWorldChanged,
+  onWorldDirtyChange,
+  profileStatus = "online",
+  returnToSpawnSignal = 0,
   room,
   roomActivityMembers = [],
   socket,
   spaceContext,
   user,
 }) {
+  const currentProfileStatus = normalizeProfileStatus(profileStatus);
   const viewportRef = useRef(null);
   const worldRef = useRef(null);
   const worldRoomRef = useRef(null);
@@ -739,9 +1106,14 @@ export function VirtualStudySpace({
   const blockedTilesRef = useRef(new Set());
   const lastEmitRef = useRef(0);
   const meetingAreaRef = useRef("");
+  const activeAreaRef = useRef("");
+  const triggeredAreaRef = useRef("");
+  const lastIdleActionKeyRef = useRef("");
   const lastPresenceSnapshotRef = useRef("");
   const lastSpaceJoinRetryRef = useRef(0);
+  const lastReturnToSpawnSignalRef = useRef(0);
   const panRef = useRef(null);
+  const areaDragRef = useRef(null);
   const dragTileRef = useRef(null);
   const followPlayerRef = useRef(true);
   const socketRef = useRef(socket);
@@ -760,6 +1132,7 @@ export function VirtualStudySpace({
   const [player, setPlayer] = useState(null);
   const [remoteMembers, setRemoteMembers] = useState([]);
   const [hoveredTile, setHoveredTile] = useState(null);
+  const [areaPreview, setAreaPreview] = useState(null);
   const [dragPreview, setDragPreview] = useState(null);
   const [notice, setNotice] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
@@ -775,11 +1148,13 @@ export function VirtualStudySpace({
   const [selectedTileKey, setSelectedTileKey] = useState("");
   const [selectedPlacement, setSelectedPlacement] = useState(null);
   const [selectedTileKeys, setSelectedTileKeys] = useState([]);
+  const [selectedAreaId, setSelectedAreaId] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [teleportDraft, setTeleportDraft] = useState({ roomId: CUSTOM_WORLD_MAP_ID, x: 0, y: 0 });
+  const [worldSizeDraft, setWorldSizeDraft] = useState({ columns: "", rows: "" });
 
   const isOwner = Boolean(room?.isOwner);
-  const avatarSprite = LIMEETS_AVATAR_SPRITES[0];
+  const avatarPreset = normalizeLimeetsAvatarPreset(user?.avatarPreset);
   const currentUserName = getDisplayName(user);
   const playerReady = Boolean(player);
 
@@ -802,16 +1177,31 @@ export function VirtualStudySpace({
   const currentAssetCategory = selectedCategory || assetCategoryTree;
   const fitScale = useMemo(() => {
     if (!viewportSize.width || !viewportSize.height || !world.width || !world.height) return 1;
+    const visibleViewport = getVisibleViewportSize(viewportSize, editorOpen, isOwner);
+    const paddedWidth = Math.max(1, visibleViewport.width - FIT_WORLD_PADDING_PX * 2);
+    const paddedHeight = Math.max(1, visibleViewport.height - FIT_WORLD_PADDING_PX * 2);
     return clamp(
-      Math.max(viewportSize.width / world.width, viewportSize.height / world.height),
+      Math.min(paddedWidth / world.width, paddedHeight / world.height),
       CAMERA_MIN_SCALE,
       CAMERA_MAX_SCALE,
     );
-  }, [viewportSize.height, viewportSize.width, world.height, world.width]);
+  }, [editorOpen, isOwner, viewportSize, world.height, world.width]);
   const selectedTile = useMemo(
     () => (selectedTileKey ? worldRoom.tilemap?.[selectedTileKey] || null : null),
     [selectedTileKey, worldRoom.tilemap],
   );
+  const worldAreas = useMemo(
+    () =>
+      (Array.isArray(world.privateAreas) ? world.privateAreas : []).filter(
+        (area) => !area.roomId || area.roomId === worldRoom.id,
+      ),
+    [world.privateAreas, worldRoom.id],
+  );
+  const selectedArea = useMemo(
+    () => worldAreas.find((area) => area?.id === selectedAreaId) || null,
+    [selectedAreaId, worldAreas],
+  );
+  const selectedAreaEffects = useMemo(() => getAreaEffects(selectedArea), [selectedArea]);
   const selectedPlacementInfo = useMemo(() => {
     if (!selectedPlacement) return null;
     const tile = worldRoom.tilemap?.[selectedPlacement.key];
@@ -862,6 +1252,18 @@ export function VirtualStudySpace({
   }, [currentAssetCategory, filteredAssetMatches, searchTerm]);
   const selectedColorOptions = useMemo(() => getAssetColorOptions(selectedAsset), [selectedAsset]);
   const selectedDirectionOptions = useMemo(() => getAssetDirectionOptions(selectedAsset), [selectedAsset]);
+  const zoneOptions = useMemo(
+    () =>
+      world.rooms.map((candidate, index) => ({
+        label: candidate.name || getZoneFallbackName(index),
+        value: candidate.id,
+      })),
+    [world.rooms],
+  );
+  const navigationOptions = useMemo(
+    () => NAVIGATION_AREA_OPTIONS.map((option) => ({ label: option.label, value: option.tabId })),
+    [],
+  );
 
   const handleSelectLayer = useCallback((layer: LimeetsLayer) => {
     if (selectedAsset && !canAssetUseLayer(selectedAsset, layer)) return;
@@ -892,8 +1294,42 @@ export function VirtualStudySpace({
     setSelectedAsset(null);
     setSelectedCategoryPath("");
     setSelectedSpecial("");
+    setSelectedAreaId("");
+    setAreaPreview(null);
     setEditorPanel("objects");
+    meetingAreaRef.current = "";
+    activeAreaRef.current = "";
+    lastIdleActionKeyRef.current = "";
+    triggeredAreaRef.current = readAreaTriggerStorage(room?.id);
   }, [room?.id, room?.worldConfig]);
+
+  useEffect(() => {
+    onWorldDirtyChange?.(!worldSaved);
+  }, [onWorldDirtyChange, worldSaved]);
+
+  useEffect(() => {
+    if (!isOwner || worldSaved) return undefined;
+
+    function handleBeforeUnload(event) {
+      event.preventDefault();
+      event.returnValue = "";
+      return "";
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isOwner, worldSaved]);
+
+  useEffect(() => {
+    if (selectedAreaId && !selectedArea) setSelectedAreaId("");
+  }, [selectedArea, selectedAreaId]);
+
+  useEffect(() => {
+    setWorldSizeDraft({
+      columns: String(world.columns),
+      rows: String(world.rows),
+    });
+  }, [world.activeRoomId, world.columns, world.rows]);
 
   useEffect(() => {
     socketRef.current = socket;
@@ -902,14 +1338,6 @@ export function VirtualStudySpace({
   useEffect(() => {
     roomIdRef.current = room?.id;
   }, [room?.id]);
-
-  useEffect(
-    () => () => {
-      meetingAreaRef.current = "";
-      onMeetingAreaChange?.(null);
-    },
-    [onMeetingAreaChange],
-  );
 
   useEffect(() => {
     worldRef.current = world;
@@ -946,7 +1374,9 @@ export function VirtualStudySpace({
       const rect = viewport.getBoundingClientRect();
       const scaledWidth = world.width * nextCamera.scale;
       const scaledHeight = world.height * nextCamera.scale;
-      const edgePaddingX = editorOpen && isOwner ? Math.min(520, Math.max(240, rect.width * 0.28)) : 96;
+      const reservedWidth = getEditorReservedWidth(rect.width, editorOpen, isOwner);
+      const visibleWidth = Math.max(1, rect.width - reservedWidth);
+      const edgePaddingX = editorOpen && isOwner ? Math.min(180, Math.max(88, visibleWidth * 0.12)) : 96;
       const edgePaddingY = editorOpen && isOwner ? Math.min(260, Math.max(140, rect.height * 0.18)) : 96;
       const clampAxis = (position, viewportLength, scaledLength, padding) => {
         if (scaledLength + padding * 2 <= viewportLength) return (viewportLength - scaledLength) / 2;
@@ -955,7 +1385,7 @@ export function VirtualStudySpace({
 
       return {
         ...nextCamera,
-        x: clampAxis(nextCamera.x, rect.width, scaledWidth, edgePaddingX),
+        x: clampAxis(nextCamera.x, visibleWidth, scaledWidth, edgePaddingX),
         y: clampAxis(nextCamera.y, rect.height, scaledHeight, edgePaddingY),
       };
     },
@@ -968,15 +1398,20 @@ export function VirtualStudySpace({
       if (!viewport) return;
       const rect = viewport.getBoundingClientRect();
       const scale = clamp(nextScale, fitScale, CAMERA_MAX_SCALE);
+      const visibleViewport = getVisibleViewportSize(
+        { width: rect.width, height: rect.height },
+        editorOpen,
+        isOwner,
+      );
       const nextCamera = constrainCamera({
         scale,
-        x: rect.width / 2 - point.x * scale,
+        x: visibleViewport.width / 2 - point.x * scale,
         y: rect.height / 2 - point.y * scale,
       });
       cameraRef.current = nextCamera;
       setCamera(nextCamera);
     },
-    [constrainCamera, fitScale],
+    [constrainCamera, editorOpen, fitScale, isOwner],
   );
 
   useEffect(() => {
@@ -1124,6 +1559,7 @@ export function VirtualStudySpace({
     activeSocket.emit(
       "space:move",
       {
+        profileStatus: currentProfileStatus,
         roomId: activeRoomId,
         position,
       },
@@ -1132,12 +1568,74 @@ export function VirtualStudySpace({
 
         lastSpaceJoinRetryRef.current = performance.now();
         activeSocket.emit("space:join", {
+          profileStatus: currentProfileStatus,
           roomId: activeRoomId,
           position,
         });
       },
     );
-  }, []);
+  }, [currentProfileStatus]);
+
+  const movePlayerToSpawn = useCallback(() => {
+    const currentWorld = worldRef.current || world;
+    const currentPlayer = playerRef.current;
+    if (!currentWorld || !currentPlayer) return;
+
+    const spawn = currentWorld.spawnpoint || {
+      roomId: currentWorld.activeRoomId,
+      x: Math.floor(currentWorld.columns / 2),
+      y: Math.floor(currentWorld.rows / 2),
+    };
+    const spawnRoom =
+      currentWorld.rooms.find((candidate) => candidate.id === spawn.roomId) ||
+      currentWorld.rooms[0] ||
+      worldRoomRef.current;
+    const point = tileToWorldPoint({ x: spawn.x, y: spawn.y }, currentWorld.tileSize);
+    const nextPlayer = {
+      ...currentPlayer,
+      ...point,
+      direction: "down",
+      frame: getAvatarFrame("down", false, 0),
+      moving: false,
+      path: [],
+    };
+
+    keysRef.current.clear();
+    playerRef.current = nextPlayer;
+    setPlayer(nextPlayer);
+    followPlayerRef.current = true;
+    meetingAreaRef.current = "";
+    activeAreaRef.current = "";
+    triggeredAreaRef.current = "";
+    lastIdleActionKeyRef.current = "";
+    writeAreaTriggerStorage(roomIdRef.current || room?.id, "");
+    onMeetingAreaChange?.(null);
+
+    if (spawnRoom?.id) {
+      worldRoomRef.current = spawnRoom;
+      if (spawnRoom.id !== currentWorld.activeRoomId) {
+        applyWorldUpdate(
+          (current) => ({
+            ...current,
+            activeRoomId: spawnRoom.id,
+          }),
+          { snapshot: false },
+        );
+      }
+    }
+
+    centerCameraOn(nextPlayer, cameraRef.current.scale || fitScale || 1);
+    persistAndBroadcast(nextPlayer, performance.now() + MOVE_EMIT_INTERVAL_MS);
+  }, [applyWorldUpdate, centerCameraOn, fitScale, onMeetingAreaChange, persistAndBroadcast, room?.id, world]);
+
+  useEffect(() => {
+    if (!returnToSpawnSignal || returnToSpawnSignal <= lastReturnToSpawnSignalRef.current || !playerReady) {
+      return;
+    }
+
+    lastReturnToSpawnSignalRef.current = returnToSpawnSignal;
+    movePlayerToSpawn();
+  }, [movePlayerToSpawn, playerReady, returnToSpawnSignal]);
 
   useEffect(() => {
     let animationFrame = 0;
@@ -1170,6 +1668,7 @@ export function VirtualStudySpace({
       const keyboardMoving = vectorX !== 0 || vectorY !== 0;
       if (keyboardMoving) {
         currentPlayer.path = [];
+        followPlayerRef.current = true;
       } else if (currentPlayer.path?.length) {
         const target = currentPlayer.path[0];
         const dx = target.x - currentPlayer.x;
@@ -1185,7 +1684,7 @@ export function VirtualStudySpace({
         }
       }
 
-      const moving = vectorX !== 0 || vectorY !== 0;
+      const moving = vectorX !== 0 || vectorY !== 0 || Boolean(currentPlayer.path?.length);
       const speed =
         AVATAR_SPEED_PX_PER_SECOND *
         (keysRef.current.has("Shift") ? AVATAR_RUN_MULTIPLIER : 1);
@@ -1226,39 +1725,103 @@ export function VirtualStudySpace({
         currentWorld.rows,
         currentWorld.tileSize,
       );
-      const tileData = currentWorldRoom.tilemap?.[makeTileKey(currentTile.x, currentTile.y)];
-      const nextMeetingAreaId = tileData?.privateAreaId || "";
+      const currentTileKey = makeTileKey(currentTile.x, currentTile.y);
+      const tileData = currentWorldRoom.tilemap?.[currentTileKey];
+      const currentArea = getAreaAtPoint(currentPlayer, currentWorld, currentWorldRoom.id);
+      const currentAreaId = currentArea?.id || "";
+      const currentAreaEffects = getAreaEffects(currentArea);
+      const currentAreaHasIdleEffect = Boolean(
+        currentArea &&
+          (currentAreaEffects.meeting ||
+            currentAreaEffects.entryExit ||
+            currentAreaEffects.teleport ||
+            currentAreaEffects.openLink),
+      );
+      const triggerAreaId = currentAreaHasIdleEffect ? currentAreaId : "";
+      const nextMeetingAreaId = currentAreaEffects.meeting ? currentAreaId : tileData?.privateAreaId || "";
+      const nextMeetingArea =
+        currentAreaEffects.meeting && currentArea
+          ? currentArea
+          : Array.isArray(currentWorld.privateAreas) && nextMeetingAreaId
+          ? currentWorld.privateAreas.find((area) => area?.id === nextMeetingAreaId)
+          : null;
 
-      if (meetingAreaRef.current !== nextMeetingAreaId) {
-        meetingAreaRef.current = nextMeetingAreaId;
-        onMeetingAreaChange?.(
-          nextMeetingAreaId
-            ? {
-                areaId: nextMeetingAreaId,
-                tile: currentTile,
-                worldRoomId: currentWorldRoom.id,
-              }
-            : null,
-        );
+      activeAreaRef.current = currentAreaId;
+      if (triggeredAreaRef.current && triggeredAreaRef.current !== currentAreaId) {
+        triggeredAreaRef.current = "";
+        writeAreaTriggerStorage(roomIdRef.current, "");
       }
 
-      if (tileData?.teleporter && moving) {
-        const destinationRoom =
-          currentWorld.rooms.find((candidate) => candidate.id === tileData.teleporter.roomId) ||
-          currentWorldRoom;
-        const point = tileToWorldPoint(tileData.teleporter, currentWorld.tileSize);
-        currentPlayer.x = point.x;
-        currentPlayer.y = point.y;
-        currentPlayer.path = [];
-        applyWorldUpdate(
-          (current) => ({
-            ...current,
-            activeRoomId: destinationRoom.id,
-          }),
-          { snapshot: false },
+      if (moving) {
+        lastIdleActionKeyRef.current = "";
+      } else {
+        const idleActionKey = [
+          currentWorldRoom.id,
+          currentTileKey,
+          nextMeetingAreaId,
+          tileData?.teleporter
+            ? `${tileData.teleporter.roomId}:${tileData.teleporter.x}:${tileData.teleporter.y}`
+            : "",
+          tileData?.portal?.tabId || "",
+          tileData?.openUrl || "",
+        ].join("|");
+
+        const areaActionAlreadyTriggered = Boolean(
+          triggerAreaId && triggeredAreaRef.current === triggerAreaId,
         );
-      } else if (tileData?.portal?.tabId && tileData.portal.tabId !== "space") {
-        onNavigate?.(tileData.portal.tabId);
+
+        if (areaActionAlreadyTriggered) {
+          lastIdleActionKeyRef.current = idleActionKey;
+        } else if (lastIdleActionKeyRef.current !== idleActionKey) {
+          if (triggerAreaId) {
+            triggeredAreaRef.current = triggerAreaId;
+            writeAreaTriggerStorage(roomIdRef.current, triggerAreaId);
+          }
+
+          lastIdleActionKeyRef.current = idleActionKey;
+
+          if (meetingAreaRef.current !== nextMeetingAreaId) {
+            meetingAreaRef.current = nextMeetingAreaId;
+            onMeetingAreaChange?.(
+              nextMeetingAreaId
+                ? {
+                    areaId: nextMeetingAreaId,
+                    name: nextMeetingArea?.name || nextMeetingArea?.label || "Meeting Area",
+                    tile: currentTile,
+                    worldRoomId: currentWorldRoom.id,
+                  }
+                : null,
+            );
+          }
+
+          const areaDestination = currentAreaEffects.teleport
+            ? getAreaDestination(currentArea, currentWorld.activeRoomId)
+            : null;
+          const destination = areaDestination || tileData?.teleporter || null;
+          const destinationTabId = currentAreaEffects.entryExit
+            ? getAreaNavigationTarget(currentArea)
+            : tileData?.portal?.tabId || "";
+
+          if (destination) {
+            const destinationRoom =
+              currentWorld.rooms.find((candidate) => candidate.id === destination.roomId) ||
+              currentWorldRoom;
+            const point = tileToWorldPoint(destination, currentWorld.tileSize);
+            currentPlayer.x = point.x;
+            currentPlayer.y = point.y;
+            currentPlayer.path = [];
+            lastIdleActionKeyRef.current = "";
+            applyWorldUpdate(
+              (current) => ({
+                ...current,
+                activeRoomId: destinationRoom.id,
+              }),
+              { snapshot: false },
+            );
+          } else if (destinationTabId && destinationTabId !== "space") {
+            onNavigate?.(destinationTabId);
+          }
+        }
       }
 
       const nextPlayer = { ...currentPlayer };
@@ -1268,9 +1831,14 @@ export function VirtualStudySpace({
       if (moving && followPlayerRef.current && viewportRef.current) {
         const rect = viewportRef.current.getBoundingClientRect();
         const currentCamera = cameraRef.current;
+        const visibleViewport = getVisibleViewportSize(
+          { width: rect.width, height: rect.height },
+          editorOpen,
+          isOwner,
+        );
         setCameraState({
           ...currentCamera,
-          x: currentCamera.x + (rect.width / 2 - nextPlayer.x * currentCamera.scale - currentCamera.x) * 0.16,
+          x: currentCamera.x + (visibleViewport.width / 2 - nextPlayer.x * currentCamera.scale - currentCamera.x) * 0.16,
           y: currentCamera.y + (rect.height / 2 - nextPlayer.y * currentCamera.scale - currentCamera.y) * 0.16,
         });
       }
@@ -1281,7 +1849,7 @@ export function VirtualStudySpace({
 
     animationFrame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [applyWorldUpdate, onMeetingAreaChange, onNavigate, persistAndBroadcast, setCameraState]);
+  }, [applyWorldUpdate, editorOpen, isOwner, onMeetingAreaChange, onNavigate, persistAndBroadcast, setCameraState]);
 
   useEffect(() => {
     function handleKeyDown(event) {
@@ -1333,6 +1901,7 @@ export function VirtualStudySpace({
       if (!playerRef.current || !socket.connected) return;
 
       const joinPayload = {
+        profileStatus: currentProfileStatus,
         roomId: room.id,
         position: serializePlayerPosition(
           playerRef.current,
@@ -1346,6 +1915,7 @@ export function VirtualStudySpace({
           setRemoteMembers(
             ack.users
               .filter((presence) => !isCurrentPresence(presence))
+              .filter((presence) => normalizeProfileStatus(presence.profileStatus || "online") !== "invisible")
               .map((presence) => normalizePresencePosition(presence, worldRef.current || world)),
           );
         }
@@ -1359,6 +1929,7 @@ export function VirtualStudySpace({
       setRemoteMembers(
         payload.users
           .filter((presence) => !isCurrentPresence(presence))
+          .filter((presence) => normalizeProfileStatus(presence.profileStatus || "online") !== "invisible")
           .map((presence) => normalizePresencePosition(presence, worldRef.current || world)),
       );
     }
@@ -1370,11 +1941,16 @@ export function VirtualStudySpace({
           presenceId: payload.presenceId,
           userId: payload.userId,
           user: payload.user,
+          profileStatus: payload.profileStatus,
           position: payload.position,
         },
         worldRef.current || world,
       );
       const nextKey = getPresenceKey(normalized);
+      if (normalizeProfileStatus(normalized.profileStatus || "online") === "invisible") {
+        setRemoteMembers((current) => current.filter((member) => getPresenceKey(member) !== nextKey));
+        return;
+      }
 
       setRemoteMembers((current) => [
         ...current.filter((member) => getPresenceKey(member) !== nextKey),
@@ -1392,19 +1968,28 @@ export function VirtualStudySpace({
       );
     }
 
+    function handleProfileUpdated(payload) {
+      if (payload?.roomId !== room.id || !payload.user?.id) return;
+      setRemoteMembers((current) =>
+        current.map((member) => mergePresenceUser(member, payload.user)),
+      );
+    }
+
     socket.on("connect", joinSpace);
     socket.on("space:state", handleSpaceState);
     socket.on("space:user-moved", handleUserMoved);
     socket.on("space:user-left", handleUserLeft);
+    socket.on("user:profile-updated", handleProfileUpdated);
 
     return () => {
-      socket.emit("space:leave", { roomId: room.id });
+      // Keep avatar presence alive when switching room tabs; socket disconnect cleans it up on room exit.
       socket.off("connect", joinSpace);
       socket.off("space:state", handleSpaceState);
       socket.off("space:user-moved", handleUserMoved);
       socket.off("space:user-left", handleUserLeft);
+      socket.off("user:profile-updated", handleProfileUpdated);
     };
-  }, [playerReady, room?.id, socket, user?.id, world, worldRoom]);
+  }, [currentProfileStatus, playerReady, room?.id, socket, user?.id, world, worldRoom]);
 
   const getPointFromEvent = useCallback((event) => {
     const viewport = viewportRef.current;
@@ -1442,6 +2027,12 @@ export function VirtualStudySpace({
 
       if (selectedSpecial) {
         if (selectedSpecial === "spawn") {
+          if (getAreaAtTile(tile, draftWorldRef.current, draftWorldRef.current?.activeRoomId)) {
+            setNotice("Spawn cannot be placed inside an area.");
+            window.setTimeout(() => setNotice(""), 1800);
+            return;
+          }
+
           applyWorldUpdate((current) => ({
             ...current,
             spawnpoint: { roomId: current.activeRoomId, x: tile.x, y: tile.y },
@@ -1611,9 +2202,137 @@ export function VirtualStudySpace({
     setSelectedTileKeys([]);
   }, [applyWorldUpdate, selectedTileKeys]);
 
+  const createAreaFromRect = useCallback(
+    (areaRect) => {
+      if (!areaRect?.tiles?.length || !isOwner) return;
+
+      if (areaRectContainsSpawn(areaRect, draftWorldRef.current)) {
+        setNotice("Areas cannot include the spawn tile.");
+        window.setTimeout(() => setNotice(""), 1800);
+        return;
+      }
+
+      const areaId = `area-${Date.now()}`;
+      const existingCount = Array.isArray(draftWorldRef.current?.privateAreas)
+        ? draftWorldRef.current.privateAreas.length
+        : 0;
+      const areaName = `Area ${existingCount + 1}`;
+
+      applyWorldUpdate((current) => {
+        const next = clone(current);
+        const area = {
+          id: areaId,
+          label: areaName,
+          name: areaName,
+          roomId: next.activeRoomId,
+          bounds: areaRect.bounds,
+          effects: { ...DEFAULT_AREA_EFFECTS },
+          properties: [],
+          linkUrl: "",
+          tabId: DEFAULT_NAVIGATION_TAB,
+          destination: { roomId: next.activeRoomId, x: 0, y: 0 },
+        };
+
+        next.privateAreas = [
+          ...(Array.isArray(next.privateAreas) ? next.privateAreas : []),
+          area,
+        ].slice(-48);
+
+        return next;
+      });
+
+      setSelectedAreaId(areaId);
+      setSelectedPlacement(null);
+      setSelectedTileKey("");
+      setSelectedTileKeys([]);
+    },
+    [applyWorldUpdate, isOwner],
+  );
+
+  const updateSelectedArea = useCallback(
+    (updater, options = {}) => {
+      if (!selectedAreaId || !isOwner) return;
+
+      applyWorldUpdate((current) => {
+        const next = clone(current);
+        const areas = Array.isArray(next.privateAreas) ? next.privateAreas : [];
+        const areaIndex = areas.findIndex((area) => area?.id === selectedAreaId);
+        if (areaIndex < 0) return next;
+
+        const previousArea = clone(areas[areaIndex]);
+        const updatedDraft =
+          typeof updater === "function"
+            ? updater(clone(areas[areaIndex]), next)
+            : { ...areas[areaIndex], ...updater };
+        const label = String(updatedDraft.name || updatedDraft.label || "Area").trim().slice(0, 72) || "Area";
+        const effects = getAreaEffects(updatedDraft);
+        const updatedArea = {
+          ...updatedDraft,
+          id: previousArea.id,
+          label,
+          name: label,
+          roomId: String(updatedDraft.roomId || previousArea.roomId || next.activeRoomId),
+          bounds: updatedDraft.bounds || previousArea.bounds,
+          destination: getAreaDestination(updatedDraft, next.activeRoomId),
+          effects,
+          linkUrl: String(updatedDraft.linkUrl || "").trim().slice(0, 500),
+          tabId: getAreaNavigationTarget(updatedDraft),
+        };
+        updatedArea.properties = buildAreaProperties(updatedArea);
+
+        areas[areaIndex] = updatedArea;
+        next.privateAreas = areas;
+        materializeAreaTileEffects(next, updatedArea, previousArea);
+        return next;
+      }, options);
+    },
+    [applyWorldUpdate, isOwner, selectedAreaId],
+  );
+
+  const toggleSelectedAreaProperty = useCallback(
+    (propertyId) => {
+      updateSelectedArea((area) => {
+        const effects = getAreaEffects(area);
+        return {
+          ...area,
+          effects: {
+            ...effects,
+            [propertyId]: !effects[propertyId],
+          },
+        };
+      });
+    },
+    [updateSelectedArea],
+  );
+
+  const deleteSelectedArea = useCallback(() => {
+    if (!selectedAreaId || !isOwner) return;
+
+    applyWorldUpdate((current) => {
+      const next = clone(current);
+      const areas = Array.isArray(next.privateAreas) ? next.privateAreas : [];
+      const area = areas.find((candidate) => candidate?.id === selectedAreaId);
+      if (area) clearAreaTileEffects(next, area);
+      next.privateAreas = areas.filter((candidate) => candidate?.id !== selectedAreaId);
+      return next;
+    });
+
+    setSelectedAreaId("");
+    setSelectedTileKeys([]);
+  }, [applyWorldUpdate, isOwner, selectedAreaId]);
+
   const applyTileAction = useCallback(
     (tiles) => {
       if (!tiles.length) return;
+      if (
+        selectedSpecial === "spawn" &&
+        tiles.some((tile) => getAreaAtTile(tile, draftWorldRef.current, draftWorldRef.current?.activeRoomId))
+      ) {
+        setNotice("Spawn cannot be placed inside an area.");
+        window.setTimeout(() => setNotice(""), 1800);
+        return;
+      }
+
       const privateAreaId = selectedSpecial === "private" ? `private-${Date.now()}` : "";
       applyWorldUpdate((current) => {
         const next = clone(current);
@@ -1622,11 +2341,14 @@ export function VirtualStudySpace({
 
         if (activeTool === "erase") {
           const removedPlacements = new Set();
+          const removedAreaIds = new Set();
           tiles.forEach((tile) => {
             const key = makeTileKey(tile.x, tile.y);
+            const existingEntry = activeRoom.tilemap[key] || {};
 
             if (eraserTarget === "special") {
-              const entry = clearTileEntry(activeRoom.tilemap[key] || {}, "special");
+              if (existingEntry.privateAreaId) removedAreaIds.add(existingEntry.privateAreaId);
+              const entry = clearTileEntry(existingEntry, "special");
               if (Object.keys(entry).length) activeRoom.tilemap[key] = entry;
               else delete activeRoom.tilemap[key];
               return;
@@ -1643,10 +2365,28 @@ export function VirtualStudySpace({
               return;
             }
 
-            const entry = clearTileEntry(activeRoom.tilemap[key] || {}, eraserTarget);
+            if (eraserTarget === "all" && existingEntry.privateAreaId) {
+              removedAreaIds.add(existingEntry.privateAreaId);
+            }
+            const entry = clearTileEntry(existingEntry, eraserTarget);
             if (Object.keys(entry).length) activeRoom.tilemap[key] = entry;
             else delete activeRoom.tilemap[key];
           });
+
+          if (removedAreaIds.size) {
+            Object.entries(activeRoom.tilemap).forEach(([key, entry]) => {
+              if (!removedAreaIds.has(entry?.privateAreaId)) return;
+              const nextEntry = { ...entry };
+              delete nextEntry.privateAreaId;
+              delete nextEntry.entryExit;
+              delete nextEntry.openUrl;
+              if (Object.keys(nextEntry).length) activeRoom.tilemap[key] = nextEntry;
+              else delete activeRoom.tilemap[key];
+            });
+            next.privateAreas = (Array.isArray(next.privateAreas) ? next.privateAreas : []).filter(
+              (area) => !removedAreaIds.has(area?.id),
+            );
+          }
           return next;
         }
 
@@ -1716,6 +2456,17 @@ export function VirtualStudySpace({
       if (event.button !== 0 && event.button !== 1) return;
 
       const tile = getTileFromEvent(event);
+      const point = getPointFromEvent(event);
+      if (
+        point &&
+        editorOpen &&
+        isOwner &&
+        event.button === 0 &&
+        activeTool === "area"
+      ) {
+        areaDragRef.current = point;
+        setAreaPreview({ x: point.x, y: point.y, width: world.tileSize, height: world.tileSize });
+      }
       dragTileRef.current = tile;
       panRef.current = {
         button: event.button,
@@ -1727,20 +2478,39 @@ export function VirtualStudySpace({
       };
       event.currentTarget.setPointerCapture?.(event.pointerId);
     },
-    [getTileFromEvent],
+    [activeTool, editorOpen, getPointFromEvent, getTileFromEvent, isOwner, world.tileSize],
   );
 
   const handleViewportPointerMove = useCallback(
     (event) => {
       updateHover(event);
 
+      const areaStart = areaDragRef.current;
+      if (
+        areaStart &&
+        editorOpen &&
+        activeTool === "area"
+      ) {
+        const point = getPointFromEvent(event);
+        const areaRect = getAreaRectFromPoints(areaStart, point, world);
+        if (areaRect) setAreaPreview(areaRect.pixel);
+      }
+
       const currentTile = getTileFromEvent(event);
       const forceSinglePreview =
-        activeTool !== "select" &&
+        activeTool === "paint" &&
         (selectedSpecial === "spawn" ||
           selectedSpecial === "teleport" ||
           (!selectedSpecial && selectedLayer === "object"));
-      if (dragTileRef.current && currentTile && editorOpen && paintMode === "rectangle" && !forceSinglePreview) {
+      if (
+        dragTileRef.current &&
+        currentTile &&
+        editorOpen &&
+        activeTool !== "area" &&
+        paintMode === "rectangle" &&
+        !forceSinglePreview &&
+        selectedSpecial !== "private"
+      ) {
         setDragPreview({ start: dragTileRef.current, end: currentTile });
       }
 
@@ -1769,6 +2539,7 @@ export function VirtualStudySpace({
     [
       activeTool,
       editorOpen,
+      getPointFromEvent,
       getTileFromEvent,
       paintMode,
       selectedAsset,
@@ -1776,25 +2547,51 @@ export function VirtualStudySpace({
       selectedSpecial,
       setCameraState,
       updateHover,
+      world,
     ],
   );
 
   const handleViewportPointerUp = useCallback(
     (event) => {
       const pan = panRef.current;
+      const areaStart = areaDragRef.current;
       const startTile = dragTileRef.current;
       const endTile = getTileFromEvent(event);
+      const endPoint = getPointFromEvent(event);
       panRef.current = null;
+      areaDragRef.current = null;
       dragTileRef.current = null;
       setDragPreview(null);
+      setAreaPreview(null);
       event.currentTarget.releasePointerCapture?.(event.pointerId);
 
       if (event.target.closest(MAP_OVERLAY_SELECTOR)) {
         return;
       }
-      if (pan?.dragged || event.button !== 0 || !endTile) return;
+      if (pan?.dragged || event.button !== 0) return;
 
       if (editorOpen && isOwner) {
+        if (activeTool === "area") {
+          if (!endPoint) return;
+          const areaRect = areaStart ? getAreaRectFromPoints(areaStart, endPoint, world) : null;
+          const dragDistance = areaStart
+            ? Math.hypot(endPoint.x - areaStart.x, endPoint.y - areaStart.y)
+            : 0;
+
+          if (areaStart && areaRect && dragDistance >= PAN_DRAG_THRESHOLD_PX) {
+            createAreaFromRect(areaRect);
+          } else {
+            const area = getAreaAtPoint(endPoint, world, worldRoom.id);
+            setSelectedAreaId(area?.id || "");
+            setSelectedPlacement(null);
+            setSelectedTileKey("");
+            setSelectedTileKeys([]);
+          }
+          return;
+        }
+
+        if (!endTile) return;
+
         if (activeTool === "paint") {
           const forceSingleTile =
             selectedSpecial === "spawn" ||
@@ -1842,13 +2639,17 @@ export function VirtualStudySpace({
     [
       activeTool,
       applyTileAction,
+      createAreaFromRect,
       editorOpen,
+      getPointFromEvent,
       getTileFromEvent,
       isOwner,
       paintMode,
       selectedAsset,
       selectedLayer,
       selectedSpecial,
+      world,
+      worldRoom.id,
       worldRoom.tilemap,
     ],
   );
@@ -1863,6 +2664,24 @@ export function VirtualStudySpace({
         window.setTimeout(() => setNotice(""), 2200);
         return;
       }
+      movePlayerToTile(tile);
+    },
+    [editorOpen, getTileFromEvent, isOwner, movePlayerToTile],
+  );
+
+  const handleViewportContextMenu = useCallback(
+    (event) => {
+      if (event.target.closest(MAP_OVERLAY_SELECTOR)) return;
+      event.preventDefault();
+      if (editorOpen && isOwner) return;
+
+      const tile = getTileFromEvent(event);
+      if (!tile) {
+        setNotice(EXPLORE_NOTICE_TEXT);
+        window.setTimeout(() => setNotice(""), 2200);
+        return;
+      }
+
       movePlayerToTile(tile);
     },
     [editorOpen, getTileFromEvent, isOwner, movePlayerToTile],
@@ -1907,12 +2726,18 @@ export function VirtualStudySpace({
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
+        const backgroundImage =
+          typeof reader.result === "string" && reader.result.startsWith("data:image/")
+            ? reader.result
+            : "";
+        if (!backgroundImage) return;
         applyWorldUpdate((current) => ({
           ...current,
-          backgroundImage:
-            typeof reader.result === "string" && reader.result.startsWith("data:image/")
-              ? reader.result
-              : current.backgroundImage,
+          rooms: current.rooms.map((candidate) =>
+            candidate.id === current.activeRoomId
+              ? { ...candidate, backgroundImage }
+              : candidate,
+          ),
         }));
       };
       reader.readAsDataURL(file);
@@ -1924,9 +2749,12 @@ export function VirtualStudySpace({
     if (!room?.id || !isOwner) return;
     setSaveState("saving");
     try {
+      const worldConfig = prepareWorldForSave(draftWorldRef.current);
       const payload = await api.updateRoom(room.id, {
-        worldConfig: normalizeWorldConfig(draftWorldRef.current),
+        worldConfig,
       });
+      draftWorldRef.current = worldConfig;
+      setDraftWorld(worldConfig);
       setWorldSaved(true);
       setSaveState("saved");
       onWorldChanged?.(payload.room);
@@ -1941,17 +2769,28 @@ export function VirtualStudySpace({
   const createWorldRoom = useCallback(() => {
     applyWorldUpdate((current) => {
       let counter = current.rooms.length + 1;
-      let name = `Room ${counter}`;
+      let name = `Zone ${counter}`;
       const names = new Set(current.rooms.map((item) => item.name.toLowerCase()));
       while (names.has(name.toLowerCase())) {
         counter += 1;
-        name = `Room ${counter}`;
+        name = `Zone ${counter}`;
       }
       const id = `world-room-${Date.now()}`;
+      const activeRoom = current.rooms.find((candidate) => candidate.id === current.activeRoomId);
       return {
         ...current,
         activeRoomId: id,
-        rooms: [...current.rooms, { id, name, tilemap: {} }],
+        rooms: [
+          ...current.rooms,
+          {
+            id,
+            name,
+            backgroundImage: activeRoom?.backgroundImage || current.backgroundImage || "",
+            columns: activeRoom?.columns || current.columns,
+            rows: activeRoom?.rows || current.rows,
+            tilemap: {},
+          },
+        ],
       };
     });
   }, [applyWorldUpdate]);
@@ -1966,13 +2805,18 @@ export function VirtualStudySpace({
           if (tile.teleporter?.roomId === current.activeRoomId) delete tile.teleporter;
         });
       });
+      const nextActiveRoom = remaining.find((candidate) => candidate.id === nextActiveId) || remaining[0];
       return {
         ...current,
         activeRoomId: nextActiveId,
         rooms: remaining,
         spawnpoint:
           current.spawnpoint.roomId === current.activeRoomId
-            ? { roomId: nextActiveId, x: Math.floor(current.columns / 2), y: Math.floor(current.rows / 2) }
+            ? {
+                roomId: nextActiveId,
+                x: Math.floor((nextActiveRoom?.columns || current.columns) / 2),
+                y: Math.floor((nextActiveRoom?.rows || current.rows) / 2),
+              }
             : current.spawnpoint,
       };
     });
@@ -1995,15 +2839,63 @@ export function VirtualStudySpace({
 
   const changeWorldSize = useCallback(
     (key, value) => {
+      const nextValue = Number(value);
       applyWorldUpdate(
         (current) => ({
           ...current,
-          [key]: Number(value),
+          [key]: nextValue,
+          rooms: current.rooms.map((candidate) =>
+            candidate.id === current.activeRoomId ? { ...candidate, [key]: nextValue } : candidate,
+          ),
         }),
         { snapshot: false },
       );
     },
     [applyWorldUpdate],
+  );
+
+  const updateWorldSizeDraft = useCallback((key, value) => {
+    const digits = String(value || "").replace(/[^\d]/g, "").slice(0, 3);
+    setWorldSizeDraft((current) => ({ ...current, [key]: digits }));
+  }, []);
+
+  const commitWorldSizeDraft = useCallback(
+    (key) => {
+      const min = key === "columns" ? 12 : 10;
+      const currentValue = key === "columns" ? world.columns : world.rows;
+      const rawValue = String(worldSizeDraft[key] || "").trim();
+
+      if (!rawValue) {
+        setWorldSizeDraft((current) => ({ ...current, [key]: String(currentValue) }));
+        return;
+      }
+
+      const parsed = Number(rawValue);
+      const nextValue = Number.isFinite(parsed)
+        ? clamp(Math.round(parsed), min, 256)
+        : currentValue;
+
+      setWorldSizeDraft((current) => ({ ...current, [key]: String(nextValue) }));
+      if (nextValue !== currentValue) changeWorldSize(key, nextValue);
+    },
+    [changeWorldSize, world.columns, world.rows, worldSizeDraft],
+  );
+
+  const handleWorldSizeKeyDown = useCallback(
+    (event, key) => {
+      if (event.key === "Enter") {
+        commitWorldSizeDraft(key);
+        event.currentTarget.blur();
+      }
+      if (event.key === "Escape") {
+        setWorldSizeDraft((current) => ({
+          ...current,
+          [key]: String(key === "columns" ? world.columns : world.rows),
+        }));
+        event.currentTarget.blur();
+      }
+    },
+    [commitWorldSizeDraft, world.columns, world.rows],
   );
 
   const renderTileLayer = (layer) => (
@@ -2040,16 +2932,49 @@ export function VirtualStudySpace({
       world.spawnpoint?.roomId === worldRoom.id
         ? { x: world.spawnpoint.x, y: world.spawnpoint.y }
         : null;
+    const configuredAreas = worldAreas;
+    const configuredAreaIds = new Set(configuredAreas.map((area) => area.id));
 
     return (
       <div className={`limeets-gather-special-layer ${showGizmos ? "" : "hidden"}`} aria-hidden="true">
+        {areaPreview ? (
+          <div
+            className="limeets-gather-area-gizmo draft"
+            style={{
+              left: `${areaPreview.x}px`,
+              top: `${areaPreview.y}px`,
+              height: `${areaPreview.height}px`,
+              width: `${areaPreview.width}px`,
+            }}
+          >
+            <span>New area</span>
+          </div>
+        ) : null}
+        {configuredAreas.map((area) => {
+          const bounds = getPrivateAreaBounds(area);
+          if (!bounds) return null;
+          return (
+            <div
+              className={`limeets-gather-area-gizmo ${area.id === selectedAreaId ? "selected" : ""}`}
+              key={`area-${area.id}`}
+              style={{
+                left: `${bounds.col * world.tileSize}px`,
+                top: `${bounds.row * world.tileSize}px`,
+                height: `${bounds.height * world.tileSize}px`,
+                width: `${bounds.width * world.tileSize}px`,
+              }}
+            >
+              <span>{area.name || area.label || "Meeting Area"}</span>
+            </div>
+          );
+        })}
         {Object.entries(worldRoom.tilemap || {}).flatMap(([key, tile]) => {
           const parsed = parseTileKey(key);
           if (!parsed) return [];
           const items = [];
           if (tile.impassable) items.push("impassable");
           if (tile.teleporter) items.push("teleport");
-          if (tile.privateAreaId) items.push("private");
+          if (tile.privateAreaId && !configuredAreaIds.has(tile.privateAreaId)) items.push("private");
           return items.map((type) => (
             <div
               className={`limeets-gather-special-tile ${type}`}
@@ -2081,7 +3006,29 @@ export function VirtualStudySpace({
 
   const renderGhost = () => {
     const tiles = dragPreview ? rectangleTiles(dragPreview.start, dragPreview.end) : hoveredTile ? [hoveredTile] : [];
-    if (!editorOpen || activeTool === "select" || activeTool === "pan" || !tiles.length) return null;
+    if (!editorOpen || activeTool === "select" || activeTool === "pan" || activeTool === "area" || !tiles.length) return null;
+    if (activeTool === "erase" && dragPreview) {
+      const minX = Math.min(dragPreview.start.x, dragPreview.end.x);
+      const minY = Math.min(dragPreview.start.y, dragPreview.end.y);
+      const maxX = Math.max(dragPreview.start.x, dragPreview.end.x);
+      const maxY = Math.max(dragPreview.start.y, dragPreview.end.y);
+
+      return (
+        <div className="limeets-gather-ghost-layer" aria-hidden="true">
+          <div
+            className="limeets-gather-ghost erase-rect"
+            style={{
+              left: `${minX * world.tileSize}px`,
+              top: `${minY * world.tileSize}px`,
+              height: `${(maxY - minY + 1) * world.tileSize}px`,
+              width: `${(maxX - minX + 1) * world.tileSize}px`,
+            }}
+          >
+            <span>Erase</span>
+          </div>
+        </div>
+      );
+    }
     const asset =
       activeTool === "paint" && canAssetUseLayer(selectedAsset, selectedLayer) && !selectedSpecial
         ? selectedAsset
@@ -2223,7 +3170,7 @@ export function VirtualStudySpace({
                 />
               ))}
               {!currentAssetCategory.children.length ? (
-                <p className="limeets-gather-empty">No assets yet.</p>
+                <p className="limeets-gather-empty">No Assets Yet.</p>
               ) : null}
             </div>
           ) : null}
@@ -2241,79 +3188,217 @@ export function VirtualStudySpace({
                 ))}
               </div>
               {!visibleAssets.length ? (
-                <p className="limeets-gather-empty">No matching assets.</p>
+                <p className="limeets-gather-empty">No Matching Assets.</p>
               ) : null}
             </div>
           ) : null}
 
           {editorPanel === "special" ? (
-            <section className="limeets-gather-section limeets-gather-section-first">
-            <div className="limeets-gather-special-list">
-              {SPECIAL_TILES.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    className={selectedSpecial === item.id ? "selected" : ""}
-                    key={item.id}
-                    onClick={() => {
-                      setSelectedSpecial(item.id);
-                      setSelectedAsset(null);
-                      setActiveTool("paint");
-                      setEditorPanel("special");
-                      if (item.id === "private") setPaintMode("rectangle");
-                    }}
-                    type="button"
-                  >
-                    <Icon size={18} />
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>{item.description}</small>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            </section>
-          ) : null}
-
-          {editorPanel === "special" && selectedSpecial === "teleport" ? (
-            <section className="limeets-gather-section">
-              <h3>Teleport destination</h3>
-              <label className="limeets-gather-field">
-                <span>Room</span>
-                <select
-                  onChange={(event) => setTeleportDraft((draft) => ({ ...draft, roomId: event.target.value }))}
-                  value={teleportDraft.roomId}
+            <section className="limeets-gather-section limeets-gather-section-first limeets-gather-area-editor">
+              <div className="limeets-gather-area-intro">
+                <h3>{selectedArea ? "Area Properties" : "Draw an Area"}</h3>
+                <p className="limeets-gather-muted">
+                  {selectedArea
+                    ? "Click a property to add or remove it from the selected region."
+                    : "Drag directly on the map to create a region, or click an existing region to edit it."}
+                </p>
+                <button
+                  className="limeets-gather-inline-toggle"
+                  onClick={() => setShowGizmos((visible) => !visible)}
+                  type="button"
                 >
-                  {world.rooms.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="limeets-gather-two-cols">
-                <label className="limeets-gather-field">
-                  <span>X</span>
-                  <input
-                    max={world.columns - 1}
-                    min={0}
-                    onChange={(event) => setTeleportDraft((draft) => ({ ...draft, x: event.target.value }))}
-                    type="number"
-                    value={teleportDraft.x}
-                  />
-                </label>
-                <label className="limeets-gather-field">
-                  <span>Y</span>
-                  <input
-                    max={world.rows - 1}
-                    min={0}
-                    onChange={(event) => setTeleportDraft((draft) => ({ ...draft, y: event.target.value }))}
-                    type="number"
-                    value={teleportDraft.y}
-                  />
-                </label>
+                  {showGizmos ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showGizmos ? "Hide Special Layers" : "Show Special Layers"}
+                </button>
               </div>
+
+              {selectedArea ? (
+                <>
+                  <label className="limeets-gather-field">
+                    <span>Area name</span>
+                    <input
+                      onChange={(event) =>
+                        updateSelectedArea(
+                          (area) => ({ ...area, name: event.target.value, label: event.target.value }),
+                          { snapshot: false },
+                        )
+                      }
+                      placeholder="e.g. Nautical Huddle"
+                      value={selectedArea.name || selectedArea.label || ""}
+                    />
+                  </label>
+
+                  <div className="limeets-gather-area-property-palette" aria-label="Area Properties">
+                    {AREA_PROPERTY_OPTIONS.map((option) => {
+                      const Icon = option.icon;
+                      const propertyId = option.id as keyof typeof DEFAULT_AREA_EFFECTS;
+                      const active = Boolean(selectedAreaEffects[propertyId]);
+                      return (
+                        <button
+                          className={active ? "active" : ""}
+                          key={option.id}
+                          onClick={() => toggleSelectedAreaProperty(propertyId)}
+                          type="button"
+                        >
+                          <Icon size={18} />
+                          <span>
+                            <strong>{option.title}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="limeets-gather-area-details">
+                    {selectedAreaEffects.meeting ? (
+                      <article className="limeets-gather-area-property-card">
+                        <Grid2X2 size={17} />
+                        <div>
+                          <strong>Meeting Area</strong>
+                          <span>Members entering this region will join the Limeets voice/video session.</span>
+                        </div>
+                      </article>
+                    ) : null}
+
+                    {selectedAreaEffects.entryExit ? (
+                      <article className="limeets-gather-area-property-card stacked">
+                        <div>
+                          <strong>Navigate</strong>
+                          <span>Choose the tab members open when they stop moving in this area.</span>
+                        </div>
+                        <FieldSelectMenu
+                          label="Destination"
+                          onChange={(value) =>
+                            updateSelectedArea((area) => ({
+                              ...area,
+                              tabId: value,
+                            }))
+                          }
+                          options={navigationOptions}
+                          value={getAreaNavigationTarget(selectedArea)}
+                        />
+                      </article>
+                    ) : null}
+
+                    {selectedAreaEffects.openLink ? (
+                      <article className="limeets-gather-area-property-card stacked">
+                        <div>
+                          <strong>Open Link</strong>
+                          <span>Attach a URL interaction to this region.</span>
+                        </div>
+                        <label className="limeets-gather-field">
+                          <span>URL</span>
+                          <input
+                            onChange={(event) =>
+                              updateSelectedArea(
+                                (area) => ({ ...area, linkUrl: event.target.value }),
+                                { snapshot: false },
+                              )
+                            }
+                            placeholder="https://..."
+                            value={selectedArea.linkUrl || ""}
+                          />
+                        </label>
+                      </article>
+                    ) : null}
+
+                    {selectedAreaEffects.teleport ? (
+                      <article className="limeets-gather-area-property-card stacked">
+                        <div>
+                          <strong>Teleport</strong>
+                          <span>Send members to another zone tile when they enter this region.</span>
+                        </div>
+                        <FieldSelectMenu
+                          label="Zone"
+                          onChange={(value) =>
+                            updateSelectedArea((area) => ({
+                              ...area,
+                              destination: {
+                                ...getAreaDestination(area, world.activeRoomId),
+                                roomId: value,
+                              },
+                            }))
+                          }
+                          options={zoneOptions}
+                          value={getAreaDestination(selectedArea, world.activeRoomId).roomId}
+                        />
+                        <div className="limeets-gather-two-cols">
+                          <label className="limeets-gather-field">
+                            <span>X</span>
+                            <input
+                              max={world.columns - 1}
+                              min={0}
+                              onChange={(event) =>
+                                updateSelectedArea((area) => ({
+                                  ...area,
+                                  destination: {
+                                    ...getAreaDestination(area, world.activeRoomId),
+                                    x: Number(event.target.value) || 0,
+                                  },
+                                }))
+                              }
+                              type="number"
+                              value={getAreaDestination(selectedArea, world.activeRoomId).x}
+                            />
+                          </label>
+                          <label className="limeets-gather-field">
+                            <span>Y</span>
+                            <input
+                              max={world.rows - 1}
+                              min={0}
+                              onChange={(event) =>
+                                updateSelectedArea((area) => ({
+                                  ...area,
+                                  destination: {
+                                    ...getAreaDestination(area, world.activeRoomId),
+                                    y: Number(event.target.value) || 0,
+                                  },
+                                }))
+                              }
+                              type="number"
+                              value={getAreaDestination(selectedArea, world.activeRoomId).y}
+                            />
+                          </label>
+                        </div>
+                      </article>
+                    ) : null}
+
+                    {selectedAreaEffects.impassable ? (
+                      <article className="limeets-gather-area-property-card">
+                        <Lock size={17} />
+                        <div>
+                          <strong>Block Movement</strong>
+                          <span>Members cannot walk through this selected region.</span>
+                        </div>
+                      </article>
+                    ) : null}
+                  </div>
+
+                  <button className="limeets-gather-danger" onClick={deleteSelectedArea} type="button">
+                    <Trash2 size={16} />
+                    Delete Area
+                  </button>
+                </>
+              ) : (
+                <div className="limeets-gather-area-list">
+                  {worldAreas.map((area) => (
+                    <button key={area.id} onClick={() => setSelectedAreaId(area.id)} type="button">
+                      <Grid2X2 size={17} />
+                      <span>
+                        <strong>{area.name || area.label || "Area"}</strong>
+                        <small>
+                          {getAreaTiles(area, world).length} tiles - {buildAreaProperties(area).length || "No"} properties
+                        </small>
+                      </span>
+                      <ChevronRight size={16} />
+                    </button>
+                  ))}
+                  {!worldAreas.length ? (
+                    <p className="limeets-gather-empty">No Areas Yet. Drag on the map to create one.</p>
+                  ) : null}
+                </div>
+              )}
             </section>
           ) : null}
 
@@ -2321,12 +3406,12 @@ export function VirtualStudySpace({
             <section className="limeets-gather-section limeets-gather-section-first">
               <h3>
                 {selectedPlacementInfo
-                  ? "Selected asset"
+                  ? "Selected Asset"
                   : selectedTileKeys.length > 1
-                    ? `${selectedTileKeys.length} tiles selected`
+                    ? `${selectedTileKeys.length} Tiles Selected`
                     : selectedTileKey
-                      ? "Selected tile"
-                      : "No selection"}
+                      ? "Selected Tile"
+                      : "No Selection"}
               </h3>
               <p className="limeets-gather-muted">
                 {selectedPlacementInfo?.origin
@@ -2357,7 +3442,7 @@ export function VirtualStudySpace({
                       onClick={() => reorderSelectedPlacement("back")}
                       type="button"
                     >
-                      To back
+                      To Back
                     </button>
                     <button
                       disabled={!isStackLayer(selectedPlacementInfo.layer) || selectedPlacementInfo.index <= 0}
@@ -2384,7 +3469,7 @@ export function VirtualStudySpace({
                       onClick={() => reorderSelectedPlacement("front")}
                       type="button"
                     >
-                      To front
+                      To Front
                     </button>
                   </div>
                   <button
@@ -2393,14 +3478,14 @@ export function VirtualStudySpace({
                     type="button"
                   >
                     <Trash2 size={16} />
-                    Delete selected asset
+                    Delete Selected Asset
                   </button>
                 </>
               ) : null}
 
               {selectedTilePlacements.length > 1 ? (
                 <div className="limeets-gather-stack-list">
-                  <strong>Tile stack</strong>
+                  <strong>Tile Stack</strong>
                   {selectedTilePlacements.map((placement) => (
                     <button
                       className={
@@ -2436,7 +3521,7 @@ export function VirtualStudySpace({
                   type="button"
                 >
                   <Trash2 size={16} />
-                  Clear selected tiles
+                  Clear Selected Tiles
                 </button>
               ) : null}
 
@@ -2457,7 +3542,7 @@ export function VirtualStudySpace({
                     type="button"
                   >
                     <Trash2 size={16} />
-                    Clear tile
+                    Clear Tile
                   </button>
                 </>
               ) : null}
@@ -2475,7 +3560,7 @@ export function VirtualStudySpace({
 
           {editorPanel === "hand" ? (
             <section className="limeets-gather-section limeets-gather-section-first">
-              <h3>Hand tool</h3>
+              <h3>Hand Tool</h3>
               <p className="limeets-gather-muted">
                 Drag the world to pan around without placing tiles or moving your avatar.
               </p>
@@ -2484,77 +3569,101 @@ export function VirtualStudySpace({
 
           {editorPanel === "rooms" ? (
             <section className="limeets-gather-section limeets-gather-section-first">
-            <label className="limeets-gather-field">
-              <span>Current room</span>
-              <select
-                onChange={(event) =>
-                  applyWorldUpdate((current) => ({ ...current, activeRoomId: event.target.value }), {
+              <FieldSelectMenu
+                label="Current Zone"
+                onChange={(value) =>
+                  applyWorldUpdate((current) => ({ ...current, activeRoomId: value }), {
                     snapshot: false,
                   })
                 }
+                options={zoneOptions}
                 value={world.activeRoomId}
-              >
-                {world.rooms.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="limeets-gather-field">
-              <span>Room name</span>
-              <input onChange={(event) => renameActiveWorldRoom(event.target.value)} value={worldRoom.name} />
-            </label>
-            <div className="limeets-gather-button-row">
-              <button onClick={createWorldRoom} type="button">
-                <Plus size={16} />
-                New room
-              </button>
-              <button disabled={world.rooms.length <= 1} onClick={deleteActiveWorldRoom} type="button">
-                <Trash2 size={16} />
-                Delete
-              </button>
-            </div>
-          </section>
-          ) : null}
+              />
+              <label className="limeets-gather-field">
+                <span>Zone Name</span>
+                <input
+                  onChange={(event) => renameActiveWorldRoom(event.target.value)}
+                  placeholder={getZoneFallbackName(
+                    Math.max(0, world.rooms.findIndex((candidate) => candidate.id === worldRoom.id)),
+                  )}
+                  value={worldRoom.name}
+                />
+              </label>
+              <div className="limeets-gather-button-row">
+                <button onClick={createWorldRoom} type="button">
+                  <Plus size={16} />
+                  New Zone
+                </button>
+                <button disabled={world.rooms.length <= 1} onClick={deleteActiveWorldRoom} type="button">
+                  <Trash2 size={16} />
+                  Delete Zone
+                </button>
+              </div>
 
-          {editorPanel === "setup" ? (
-          <section className="limeets-gather-section limeets-gather-section-first">
-            <div className="limeets-gather-two-cols">
-              <label className="limeets-gather-field">
-                <span>Columns</span>
-                <input
-                  max={256}
-                  min={12}
-                  onChange={(event) => changeWorldSize("columns", event.target.value)}
-                  type="number"
-                  value={world.columns}
-                />
+              <article className="limeets-gather-area-property-card stacked">
+                <div>
+                  <strong>Spawn Tile</strong>
+                  <span>
+                    Current: {world.spawnpoint?.roomId === worldRoom.id ? `${world.spawnpoint.x},${world.spawnpoint.y}` : "another zone"}
+                  </span>
+                </div>
+                <div className="limeets-gather-button-row single">
+                  <button
+                    className={selectedSpecial === "spawn" && activeTool === "paint" ? "active" : ""}
+                    onClick={() => {
+                      setActiveTool("paint");
+                      setEditorPanel("rooms");
+                      setPaintMode("single");
+                      setSelectedAsset(null);
+                      setSelectedSpecial("spawn");
+                      setSelectedCategoryPath("");
+                    }}
+                    type="button"
+                  >
+                    <MapPin size={16} />
+                    Set Spawn Tile
+                  </button>
+                </div>
+              </article>
+              <div className="limeets-gather-two-cols">
+                <label className="limeets-gather-field">
+                  <span>Columns</span>
+                  <input
+                    inputMode="numeric"
+                    onBlur={() => commitWorldSizeDraft("columns")}
+                    onChange={(event) => updateWorldSizeDraft("columns", event.target.value)}
+                    onKeyDown={(event) => handleWorldSizeKeyDown(event, "columns")}
+                    placeholder="Columns"
+                    type="text"
+                    value={worldSizeDraft.columns}
+                  />
+                </label>
+                <label className="limeets-gather-field">
+                  <span>Rows</span>
+                  <input
+                    inputMode="numeric"
+                    onBlur={() => commitWorldSizeDraft("rows")}
+                    onChange={(event) => updateWorldSizeDraft("rows", event.target.value)}
+                    onKeyDown={(event) => handleWorldSizeKeyDown(event, "rows")}
+                    placeholder="Rows"
+                    type="text"
+                    value={worldSizeDraft.rows}
+                  />
+                </label>
+              </div>
+              <label className="limeets-gather-file">
+                <ImageIcon size={18} />
+                Choose Background Image
+                <input accept="image/*" onChange={(event) => applyBackgroundFile(event.target.files?.[0])} type="file" />
               </label>
-              <label className="limeets-gather-field">
-                <span>Rows</span>
-                <input
-                  max={256}
-                  min={10}
-                  onChange={(event) => changeWorldSize("rows", event.target.value)}
-                  type="number"
-                  value={world.rows}
-                />
-              </label>
-            </div>
-            <label className="limeets-gather-file">
-              <ImageIcon size={18} />
-              Choose background image
-              <input accept="image/*" onChange={(event) => applyBackgroundFile(event.target.files?.[0])} type="file" />
-            </label>
-          </section>
+            </section>
           ) : null}
         </div>
 
         </div>
 
         <footer className="limeets-gather-savebar">
-          <span>{worldSaved ? "Saved" : "Unsaved world changes"}</span>
+          <span>{worldSaved ? "Saved" : "Unsaved World Changes"}</span>
           <button disabled={saveState === "saving"} onClick={saveWorld} type="button">
             <Save size={16} />
             {saveState === "saving" ? "Saving" : "Save World"}
@@ -2624,13 +3733,37 @@ export function VirtualStudySpace({
       activeTool === "paint" &&
       canAssetUseLayer(selectedAsset, selectedLayer) &&
       selectedLayer !== "object";
-    const specialSupportsRectangle =
-      selectedSpecial === "impassable" || selectedSpecial === "private";
+    const specialSupportsRectangle = selectedSpecial === "impassable";
+    const showAreaMode = activeTool === "area" && editorPanel === "special";
 
-    if (!selectedAsset && !selectedSpecialTile && activeTool !== "erase" && !showSelectMode) return null;
+    if (!selectedAsset && !selectedSpecialTile && activeTool !== "erase" && !showSelectMode && !showAreaMode) return null;
 
     return (
       <div className="limeets-gather-current-action" aria-live="polite">
+        {showAreaMode ? (
+          <>
+            <Grid2X2 className="limeets-gather-current-icon" size={22} />
+            <div className="limeets-gather-current-copy">
+              <strong>{selectedArea ? selectedArea.name || selectedArea.label || "Selected Area" : "Area Editor"}</strong>
+              <span>
+                {selectedArea
+                  ? "Add properties from the right panel, or drag a new region."
+                  : "Drag to create an area, or click an existing one to edit it."}
+              </span>
+            </div>
+            {selectedArea ? (
+              <button
+                className="limeets-gather-current-close"
+                onClick={() => setSelectedAreaId("")}
+                title="Deselect area"
+                type="button"
+              >
+                <X size={16} />
+              </button>
+            ) : null}
+          </>
+        ) : null}
+
         {showSelectMode ? (
           <>
             <MousePointer className="limeets-gather-current-icon" size={22} />
@@ -2638,7 +3771,7 @@ export function VirtualStudySpace({
               <strong>Select</strong>
               <span>{paintMode === "rectangle" ? "Drag to select tiles." : "Click to inspect a tile or asset."}</span>
             </div>
-            {renderPaintModeControls("Select mode")}
+            {renderPaintModeControls("Select Mode")}
           </>
         ) : null}
 
@@ -2658,15 +3791,15 @@ export function VirtualStudySpace({
                 setSelectedAsset(null);
                 setSelectedSpecial("");
               }}
-              title="Clear selected asset"
+                title="Clear Selected Asset"
               type="button"
             >
               <X size={16} />
             </button>
             {renderLayerTargetControls()}
-            {assetSupportsRectangle ? renderPaintModeControls("Placement mode") : null}
+            {assetSupportsRectangle ? renderPaintModeControls("Placement Mode") : null}
             {selectedColorOptions.length > 1 ? (
-              <div className="limeets-gather-option-row" aria-label="Asset colours">
+              <div className="limeets-gather-option-row" aria-label="Asset Colours">
                 {selectedColorOptions.map((option) => (
                   <button
                     aria-label={option.variantName || option.variantHex || "Variant"}
@@ -2690,7 +3823,7 @@ export function VirtualStudySpace({
               </div>
             ) : null}
             {selectedDirectionOptions.length > 1 ? (
-              <div className="limeets-gather-direction-row" aria-label="Asset direction">
+              <div className="limeets-gather-direction-row" aria-label="Asset Direction">
                 {selectedDirectionOptions.map((option) => (
                   <button
                     className={option.direction === selectedAsset.direction ? "selected" : ""}
@@ -2698,7 +3831,7 @@ export function VirtualStudySpace({
                     onClick={() => handleSelectAsset(option)}
                     type="button"
                   >
-                    {option.direction || "default"}
+                    {option.direction || "Default"}
                   </button>
                 ))}
               </div>
@@ -2721,11 +3854,11 @@ export function VirtualStudySpace({
             >
               <X size={16} />
             </button>
-            {specialSupportsRectangle ? renderPaintModeControls("Special tile mode") : null}
+            {specialSupportsRectangle ? renderPaintModeControls("Special Tile Mode") : null}
           </>
         ) : null}
 
-        {!selectedAsset && !selectedSpecialTile && activeTool === "erase" ? (
+        {activeTool === "erase" ? (
           <>
             <EraserTargetIcon className="limeets-gather-current-icon" size={22} />
             <div className="limeets-gather-current-copy">
@@ -2743,7 +3876,7 @@ export function VirtualStudySpace({
             >
               <X size={16} />
             </button>
-            {renderPaintModeControls("Erase mode")}
+            {renderPaintModeControls("Erase Mode")}
             <div className="limeets-gather-eraser-targets compact" aria-label="Erase target">
               {ERASER_TARGETS.map((target) => {
                 const Icon = target.icon;
@@ -2770,6 +3903,7 @@ export function VirtualStudySpace({
     <div className={`limeets-gather-root ${editorOpen && isOwner ? "editor-open" : ""}`}>
       <div
         className="limeets-gather-viewport"
+        onContextMenu={handleViewportContextMenu}
         onDoubleClick={handleViewportDoubleClick}
         onPointerDown={handleViewportPointerDown}
         onPointerLeave={() => setHoveredTile(null)}
@@ -2795,7 +3929,7 @@ export function VirtualStudySpace({
           {renderTileLayer("floor")}
           {renderTileLayer("above_floor")}
           {renderTileLayer("object")}
-          {renderSpecialTiles()}
+          {editorOpen && isOwner ? renderSpecialTiles() : null}
           {renderGhost()}
           {renderSelectionLayer()}
 
@@ -2817,15 +3951,20 @@ export function VirtualStudySpace({
               <Avatar
                 className="remote"
                 key={getPresenceKey(member)}
+                avatarPreset={member.user?.avatarPreset}
                 name={getDisplayName(member.user)}
                 player={member.position}
-                spriteUrl={avatarSprite}
-                status="Online"
+                status={member.profileStatus || "online"}
               />
             ))}
 
           {player ? (
-            <Avatar name={currentUserName} player={player} spriteUrl={avatarSprite} status="You" />
+            <Avatar
+              avatarPreset={avatarPreset}
+              name={currentUserName}
+              player={player}
+              status={currentProfileStatus}
+            />
           ) : null}
         </div>
 
@@ -2897,6 +4036,8 @@ export function VirtualStudySpace({
                 onClick={() => {
                   setEditorPanel("erase");
                   setActiveTool("erase");
+                  setSelectedAsset(null);
+                  setSelectedSpecial("");
                   setSelectedCategoryPath("");
                 }}
               >
@@ -2906,43 +4047,27 @@ export function VirtualStudySpace({
 
             <div className="limeets-gather-tool-group">
               <ToolButton
-                active={editorPanel === "special"}
-                label="Special tiles"
+                active={editorPanel === "special" && activeTool === "area"}
+                label="Area Editor"
                 onClick={() => {
                   setEditorPanel("special");
-                  setActiveTool("paint");
+                  setActiveTool("area");
                   setSelectedAsset(null);
+                  setSelectedSpecial("");
                   setSelectedCategoryPath("");
                 }}
               >
-                <MapPin size={20} />
+                <Grid2X2 size={20} />
               </ToolButton>
               <ToolButton
                 active={editorPanel === "rooms"}
-                label="Rooms"
+                label="World Setup & Zones"
                 onClick={() => {
                   setEditorPanel("rooms");
                   setSelectedCategoryPath("");
                 }}
               >
                 <DoorOpen size={20} />
-              </ToolButton>
-              <ToolButton
-                active={editorPanel === "setup"}
-                label="Setup"
-                onClick={() => {
-                  setEditorPanel("setup");
-                  setSelectedCategoryPath("");
-                }}
-              >
-                <Settings2 size={20} />
-              </ToolButton>
-              <ToolButton
-                active={showGizmos}
-                label={showGizmos ? "Hide special tiles" : "Show special tiles"}
-                onClick={() => setShowGizmos((visible) => !visible)}
-              >
-                {showGizmos ? <Eye size={20} /> : <EyeOff size={20} />}
               </ToolButton>
             </div>
 
@@ -2986,20 +4111,21 @@ export function VirtualStudySpace({
             <Minus size={18} />
           </button>
           <button
-            aria-label="Fit world"
+            aria-label="Fit zone"
             onClick={() => {
               if (Math.abs(cameraRef.current.scale - fitScale) < 0.01 && playerRef.current) {
                 centerCameraOn(playerRef.current, Math.min(1.5, CAMERA_MAX_SCALE));
               } else {
+                const visibleViewport = getVisibleViewportSize(viewportSize, editorOpen, isOwner);
                 const nextCamera = {
                   scale: fitScale,
-                  x: (viewportSize.width - world.width * fitScale) / 2,
+                  x: (visibleViewport.width - world.width * fitScale) / 2,
                   y: (viewportSize.height - world.height * fitScale) / 2,
                 };
                 setCameraState(nextCamera);
               }
             }}
-            title="Fit world"
+            title="Fit zone"
             type="button"
           >
             {Math.abs(camera.scale - fitScale) < 0.01 ? <Minimize2 size={18} /> : <Maximize2 size={18} />}

@@ -91,7 +91,80 @@ function publicUser(user) {
     id: user.id,
     name: user.name,
     email: user.email,
+    avatarPreset: user.avatarPreset || null,
+    avatarUrl: user.avatarUrl || "",
   };
+}
+
+function normalizeAvatarUrl(value) {
+  const avatarUrl = String(value || "").trim();
+  if (!avatarUrl) return "";
+  if (avatarUrl.length > 2_100_000) {
+    const error = new Error("Profile picture is too large.") as Error & { status?: number };
+    error.status = 413;
+    throw error;
+  }
+
+  if (!/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(avatarUrl)) {
+    const error = new Error("Profile picture must be a PNG, JPG, WebP, or GIF image.") as Error & {
+      status?: number;
+    };
+    error.status = 400;
+    throw error;
+  }
+
+  return avatarUrl;
+}
+
+function normalizeAvatarPreset(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const id = String(value.id || "").trim().slice(0, 80);
+  const label = String(value.label || "Avatar").trim().slice(0, 80);
+  const category = ["base", "clothing", "accessories", "special"].includes(value.category)
+    ? value.category
+    : "base";
+  const layers = (Array.isArray(value.layers) ? value.layers : [])
+    .map((layer) => {
+      if (!layer || typeof layer !== "object" || Array.isArray(layer)) return null;
+      const src = String(layer.src || "").trim();
+      if (!src.startsWith("/assets/limeets/avatars/gather/")) return null;
+      return {
+        backSrc: String(layer.backSrc || "").startsWith("/assets/limeets/avatars/gather/")
+          ? String(layer.backSrc || "").trim().slice(0, 500)
+          : "",
+        label: String(layer.label || "Layer").trim().slice(0, 80),
+        slot: String(layer.slot || "layer").trim().slice(0, 40),
+        src: src.slice(0, 500),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+
+  if (!id || !layers.length) return null;
+
+  const selections =
+    value.selections && typeof value.selections === "object" && !Array.isArray(value.selections)
+      ? Object.fromEntries(
+          Object.entries(value.selections)
+            .map(([slotId, selection]) => {
+              if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
+                return [String(slotId).slice(0, 40), null];
+              }
+              return [
+                String(slotId).slice(0, 40),
+                {
+                  itemId: String(selection.itemId || "").slice(0, 120),
+                  variantId: String(selection.variantId || "").slice(0, 80),
+                },
+              ];
+            })
+            .filter(([slotId]) => Boolean(slotId))
+            .slice(0, 16),
+        )
+      : {};
+
+  return { id, label, category, layers, selections, version: 1 };
 }
 
 function getBuddyProviderStatus() {
@@ -188,7 +261,16 @@ const SPACE_MAX_TILE_COL = 255;
 const SPACE_MAX_TILE_ROW = 255;
 const SPACE_MAP_IDS = new Set(["office-main", "office-socials", "custom-world"]);
 const SPACE_DIRECTIONS = new Set(["down", "left", "right", "up"]);
-const ROOM_ACTIVITY_TABS = new Set(["focus", "chat", "buddy", "resources", "space", "calendar"]);
+const ROOM_ACTIVITY_TABS = new Set([
+  "focus",
+  "chat",
+  "buddy",
+  "resources",
+  "space",
+  "meetings",
+  "calendar",
+]);
+const PROFILE_STATUSES = new Set(["online", "away", "dnd", "invisible"]);
 const WORLD_NAVIGATION_TABS = new Set(["focus", "chat", "buddy", "resources", "space", "calendar"]);
 const WORLD_CONFIG_DEFAULT = {
   enabled: true,
@@ -270,6 +352,11 @@ function normalizeRoomActivityTab(value) {
   return ROOM_ACTIVITY_TABS.has(tabId) ? tabId : null;
 }
 
+function normalizeProfileStatus(value) {
+  const status = String(value || "").trim();
+  return PROFILE_STATUSES.has(status) ? status : "online";
+}
+
 function getSpaceRoomKey(roomId) {
   // Keep live avatar broadcasts separate from the room chat Socket.IO room.
   return `space:${roomId}`;
@@ -302,9 +389,19 @@ function getMeetingAreaPresence(roomId, areaId) {
 }
 
 function serializeMeetingPresence(roomId, areaId) {
-  return Array.from(meetingPresenceByRoom.get(roomId)?.get(areaId)?.values() || []).map(
-    ({ socketId: _socketId, ...presence }) => presence,
-  );
+  return Array.from(meetingPresenceByRoom.get(roomId)?.get(areaId)?.values() || [])
+    .filter((presence) => presence.profileStatus !== "invisible")
+    .map(({ socketId: _socketId, ...presence }) => presence);
+}
+
+function serializeMeetingSummary(roomId) {
+  return Array.from(meetingPresenceByRoom.get(roomId)?.entries() || [])
+    .map(([areaId]) => ({
+      roomId,
+      areaId,
+      users: serializeMeetingPresence(roomId, areaId),
+    }))
+    .filter((summary) => summary.users.length);
 }
 
 function normalizeMeetingMedia(value) {
@@ -313,6 +410,7 @@ function normalizeMeetingMedia(value) {
     cameraOff: Boolean(media.cameraOff),
     deafened: Boolean(media.deafened),
     muted: Boolean(media.muted),
+    screenSharing: Boolean(media.screenSharing),
   };
 }
 
@@ -361,9 +459,9 @@ function getSpacePresence(roomId) {
 }
 
 function serializeSpacePresence(roomId) {
-  return Array.from(spacePresenceByRoom.get(roomId)?.values() || []).map(
-    ({ socketId: _socketId, ...presence }) => presence,
-  );
+  return Array.from(spacePresenceByRoom.get(roomId)?.values() || [])
+    .filter((presence) => presence.profileStatus !== "invisible")
+    .map(({ socketId: _socketId, ...presence }) => presence);
 }
 
 function getRoomActivity(roomId) {
@@ -375,9 +473,9 @@ function getRoomActivity(roomId) {
 }
 
 function serializeRoomActivity(roomId) {
-  return Array.from(roomActivityByRoom.get(roomId)?.values() || []).map(
-    ({ socketId: _socketId, ...activity }) => activity,
-  );
+  return Array.from(roomActivityByRoom.get(roomId)?.values() || [])
+    .filter((activity) => activity.profileStatus !== "invisible")
+    .map(({ socketId: _socketId, ...activity }) => activity);
 }
 
 function emitRoomActivityState(roomId) {
@@ -387,11 +485,52 @@ function emitRoomActivityState(roomId) {
   });
 }
 
+function updateSocketSpaceProfileStatus(socket, roomId, profileStatus) {
+  const roomPresence = spacePresenceByRoom.get(roomId);
+  const presence = roomPresence?.get(socket.id);
+  if (!presence || presence.socketId !== socket.id) return;
+
+  roomPresence.set(socket.id, {
+    ...presence,
+    profileStatus,
+    updatedAt: new Date().toISOString(),
+  });
+  io.to(getSpaceRoomKey(roomId)).emit("space:state", {
+    roomId,
+    users: serializeSpacePresence(roomId),
+  });
+}
+
+function updateSocketMeetingProfileStatus(socket, roomId, profileStatus) {
+  const roomPresence = meetingPresenceByRoom.get(roomId);
+  if (!roomPresence) return;
+
+  for (const [areaId, areaPresence] of roomPresence.entries()) {
+    const presence = areaPresence.get(socket.user?.id);
+    if (!presence || presence.socketId !== socket.id) continue;
+
+    areaPresence.set(socket.user.id, {
+      ...presence,
+      profileStatus,
+      updatedAt: new Date().toISOString(),
+    });
+    emitMeetingState(roomId, areaId);
+    emitMeetingSummary(roomId);
+  }
+}
+
 function emitMeetingState(roomId, areaId) {
   io.to(getMeetingRoomKey(roomId, areaId)).emit("meeting:state", {
     roomId,
     areaId,
     users: serializeMeetingPresence(roomId, areaId),
+  });
+}
+
+function emitMeetingSummary(roomId, target = io.to(`room:${roomId}`)) {
+  target.emit("meeting:summary", {
+    roomId,
+    areas: serializeMeetingSummary(roomId),
   });
 }
 
@@ -467,10 +606,13 @@ function removeSocketMeetingPresence(socket, targetRoomId = null, targetAreaId =
       } else {
         roomPresence.delete(areaId);
       }
+
+      emitMeetingSummary(roomId);
     }
 
     if (!roomPresence.size) {
       meetingPresenceByRoom.delete(roomId);
+      emitMeetingSummary(roomId);
     }
   }
 }
@@ -734,7 +876,7 @@ function normalizeWorldZone(value, index, columns, rows) {
   const tabId = WORLD_NAVIGATION_TABS.has(String(value.tabId || "").trim())
     ? String(value.tabId).trim()
     : "space";
-  const fallbackLabel = tabId === "space" ? "Limeets" : tabId;
+  const fallbackLabel = tabId === "space" ? "World" : tabId;
   const label = String(value.label || fallbackLabel).trim().slice(0, 72) || fallbackLabel;
 
   return {
@@ -788,12 +930,50 @@ function normalizeWorldPrivateArea(value, index, columns, rows) {
   const row = clampInteger(bounds.row ?? bounds.y, 0, rows - 1, 0);
   const width = clampInteger(bounds.width ?? bounds.w, 1, columns - col, 1);
   const height = clampInteger(bounds.height ?? bounds.h, 1, rows - row, 1);
+  const effects = value.effects && typeof value.effects === "object" && !Array.isArray(value.effects)
+    ? value.effects
+    : {};
+  const properties = Array.isArray(value.properties)
+    ? value.properties
+        .map((property) => {
+          if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+          const type = String(property.type || "").trim().slice(0, 48);
+          if (!type) return null;
+          return { ...property, type };
+        })
+        .filter(Boolean)
+        .slice(0, 24)
+    : [];
+  const label =
+    String(value.name || value.label || "Area")
+      .trim()
+      .slice(0, 72) || "Area";
+  const roomId = String(value.roomId || value.mapId || "custom-world").trim().slice(0, 64) || "custom-world";
+  const destination = normalizeWorldTeleporter(value.destination || value.teleporter, columns, rows, roomId);
 
   return {
-    id: String(value.id || `private-${index + 1}`).trim().slice(0, 64) || `private-${index + 1}`,
-    label: String(value.label || "Meeting Area").trim().slice(0, 72) || "Meeting Area",
+    id: String(value.id || `area-${index + 1}`).trim().slice(0, 64) || `area-${index + 1}`,
+    label,
+    name: label,
+    roomId,
     bounds: { col, row, width, height },
+    effects: {
+      entryExit: effects.entryExit === true,
+      impassable: effects.impassable === true,
+      meeting: effects.meeting === true,
+      openLink: effects.openLink === true,
+      teleport: effects.teleport === true,
+    },
+    properties,
+    linkUrl: String(value.linkUrl || value.url || "").trim().slice(0, 500),
+    tabId: normalizeWorldAreaTabId(value.tabId || value.targetTabId || value.portal?.tabId),
+    destination: destination || { roomId, x: 0, y: 0 },
   };
+}
+
+function normalizeWorldAreaTabId(value) {
+  const tabId = String(value || "").trim();
+  return WORLD_NAVIGATION_TABS.has(tabId) && tabId !== "focus" ? tabId : "chat";
 }
 
 function normalizeWorldKey(value, columns, rows) {
@@ -811,6 +991,18 @@ function normalizeWorldKey(value, columns, rows) {
 
 function normalizeWorldLayerAsset(value) {
   return String(value || "").trim().slice(0, 96);
+}
+
+function normalizeWorldLayerStack(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeWorldLayerAsset(typeof item === "string" ? item : item?.assetId || item?.id))
+      .filter(Boolean)
+      .slice(0, 64);
+  }
+
+  const single = normalizeWorldLayerAsset(value);
+  return single ? [single] : [];
 }
 
 function normalizeWorldPortal(value) {
@@ -842,11 +1034,11 @@ function normalizeWorldTileEntry(value, columns, rows, roomId) {
 
   const entry = {};
   const floor = normalizeWorldLayerAsset(value.floor);
-  const aboveFloor = normalizeWorldLayerAsset(value.above_floor);
-  const object = normalizeWorldLayerAsset(value.object);
+  const aboveFloor = normalizeWorldLayerStack(value.above_floor);
+  const object = normalizeWorldLayerStack(value.object);
   if (floor) entry.floor = floor;
-  if (aboveFloor) entry.above_floor = aboveFloor;
-  if (object) entry.object = object;
+  if (aboveFloor.length) entry.above_floor = aboveFloor;
+  if (object.length) entry.object = object;
   if (value.impassable === true) entry.impassable = true;
 
   const privateAreaId = String(value.privateAreaId || "").trim().slice(0, 72);
@@ -857,6 +1049,11 @@ function normalizeWorldTileEntry(value, columns, rows, roomId) {
 
   const portal = normalizeWorldPortal(value.portal);
   if (portal) entry.portal = portal;
+
+  const openUrl = String(value.openUrl || value.linkUrl || "").trim().slice(0, 500);
+  if (openUrl) entry.openUrl = openUrl;
+
+  if (value.entryExit === true) entry.entryExit = true;
 
   return Object.keys(entry).length ? entry : null;
 }
@@ -1701,6 +1898,38 @@ const io = new Server(server, {
   },
 });
 
+function refreshLiveUserProfile(user) {
+  const profile = publicUser(user);
+
+  io.sockets.sockets.forEach((socket) => {
+    if (socket.user?.id === user.id) {
+      socket.user = { ...socket.user, ...user };
+    }
+  });
+
+  roomActivityByRoom.forEach((activityByUser) => {
+    const activity = activityByUser.get(user.id);
+    if (activity) activityByUser.set(user.id, { ...activity, user: profile });
+  });
+
+  spacePresenceByRoom.forEach((presenceBySocket) => {
+    presenceBySocket.forEach((presence, presenceKey) => {
+      if (presence.userId === user.id) {
+        presenceBySocket.set(presenceKey, { ...presence, user: profile });
+      }
+    });
+  });
+
+  meetingPresenceByRoom.forEach((presenceByArea) => {
+    presenceByArea.forEach((presenceByUser) => {
+      const presence = presenceByUser.get(user.id);
+      if (presence) presenceByUser.set(user.id, { ...presence, user: profile });
+    });
+  });
+
+  return profile;
+}
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "5mb" }));
 app.use("/uploads", express.static(uploadDir));
@@ -1730,6 +1959,8 @@ app.post("/api/auth/register", async (req, res) => {
     id: createId("usr"),
     name,
     email,
+    avatarPreset: null,
+    avatarUrl: "",
     passwordHash: await bcrypt.hash(password, 10),
     createdAt: now,
   };
@@ -1761,6 +1992,43 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+app.patch("/api/auth/me", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const name = String(req.body.name || "").trim();
+  if (!name || name.length > 80) {
+    return res.status(400).json({ message: "Display name must be 1 to 80 characters." });
+  }
+
+  try {
+    user.name = name;
+    user.avatarUrl = normalizeAvatarUrl(req.body.avatarUrl);
+    user.avatarPreset = normalizeAvatarPreset(req.body.avatarPreset);
+    await writeDb(db);
+
+    const profile = refreshLiveUserProfile(user);
+    db.rooms
+      .filter((room) => isMember(room, user.id))
+      .forEach((room) => {
+        io.to(`room:${room.id}`).emit("user:profile-updated", {
+          roomId: room.id,
+          user: profile,
+        });
+      });
+
+    res.json({ user: profile });
+  } catch (error) {
+    const profileError = error as Error & { status?: number };
+    res
+      .status(profileError.status || 400)
+      .json({ message: profileError.message || "Unable to update profile." });
+  }
 });
 
 app.get("/api/rooms", requireAuth, async (req, res) => {
@@ -2694,8 +2962,10 @@ io.on("connection", (socket) => {
         return;
       }
 
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
       const roomActivity = getRoomActivity(room.id);
       roomActivity.set(socket.user.id, {
+        profileStatus,
         roomId: room.id,
         userId: socket.user.id,
         user: publicUser(socket.user),
@@ -2705,12 +2975,15 @@ io.on("connection", (socket) => {
       });
 
       socket.join(`room:${room.id}`);
+      updateSocketSpaceProfileStatus(socket, room.id, profileStatus);
+      updateSocketMeetingProfileStatus(socket, room.id, profileStatus);
       const members = serializeRoomActivity(room.id);
       io.to(`room:${room.id}`).emit("room:activity:state", {
         roomId: room.id,
         members,
       });
-      ack?.({ ok: true, members });
+      emitMeetingSummary(room.id, socket);
+      ack?.({ ok: true, members, meetings: serializeMeetingSummary(room.id) });
     } catch {
       ack?.({ ok: false, message: "Unable to update room activity right now." });
     }
@@ -2727,9 +3000,11 @@ io.on("connection", (socket) => {
       }
 
       const position = normalizeSpacePosition(payload?.position, DEFAULT_SPACE_TILE);
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
       const roomPresence = getSpacePresence(room.id);
       const presence = {
         presenceId: socket.id,
+        profileStatus,
         roomId: room.id,
         userId: socket.user.id,
         user: publicUser(socket.user),
@@ -2746,7 +3021,7 @@ io.on("connection", (socket) => {
         roomId: room.id,
         users,
       });
-      ack?.({ ok: true, users });
+      ack?.({ ok: true, users, meetings: serializeMeetingSummary(room.id) });
     } catch {
       ack?.({ ok: false, message: "Unable to enter Limeets right now." });
     }
@@ -2774,21 +3049,31 @@ io.on("connection", (socket) => {
         ack?.({ ok: false, message: "Enter Limeets before moving." });
         return;
       }
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus ?? currentPresence.profileStatus);
 
       const presence = {
         ...currentPresence,
+        profileStatus,
         position,
         updatedAt: new Date().toISOString(),
       };
 
       roomPresence.set(socket.id, presence);
-      socket.to(getSpaceRoomKey(room.id)).emit("space:user-moved", {
-        presenceId: socket.id,
-        roomId: room.id,
-        userId: socket.user.id,
-        user: publicUser(socket.user),
-        position,
-      });
+      if (profileStatus === "invisible") {
+        io.to(getSpaceRoomKey(room.id)).emit("space:state", {
+          roomId: room.id,
+          users: serializeSpacePresence(room.id),
+        });
+      } else {
+        socket.to(getSpaceRoomKey(room.id)).emit("space:user-moved", {
+          presenceId: socket.id,
+          profileStatus,
+          roomId: room.id,
+          userId: socket.user.id,
+          user: publicUser(socket.user),
+          position,
+        });
+      }
       ack?.({ ok: true });
     } catch {
       ack?.({ ok: false, message: "Unable to move in Limeets right now." });
@@ -2828,12 +3113,14 @@ io.on("connection", (socket) => {
         return;
       }
 
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
       removeSocketMeetingPresence(socket, room.id);
 
       const areaPresence = getMeetingAreaPresence(room.id, areaId);
       const presence = {
         roomId: room.id,
         areaId,
+        profileStatus,
         userId: socket.user.id,
         user: publicUser(socket.user),
         media: normalizeMeetingMedia(payload?.media),
@@ -2846,10 +3133,13 @@ io.on("connection", (socket) => {
 
       const users = serializeMeetingPresence(room.id, areaId);
       const { socketId: _socketId, ...publicPresence } = presence;
-      socket.to(getMeetingRoomKey(room.id, areaId)).emit("meeting:user-joined", {
-        ...publicPresence,
-      });
+      if (profileStatus !== "invisible") {
+        socket.to(getMeetingRoomKey(room.id, areaId)).emit("meeting:user-joined", {
+          ...publicPresence,
+        });
+      }
       emitMeetingState(room.id, areaId);
+      emitMeetingSummary(room.id);
       ack?.({ ok: true, users });
     } catch {
       ack?.({ ok: false, message: "Unable to join the Meeting Area right now." });
@@ -2868,6 +3158,7 @@ io.on("connection", (socket) => {
       }
 
       removeSocketMeetingPresence(socket, room.id, areaId);
+      emitMeetingSummary(room.id);
       ack?.({ ok: true });
     } catch {
       ack?.({ ok: false, message: "Unable to leave the Meeting Area right now." });
@@ -2904,6 +3195,7 @@ io.on("connection", (socket) => {
         userId: socket.user.id,
         media,
       });
+      emitMeetingSummary(room.id);
       ack?.({ ok: true });
     } catch {
       ack?.({ ok: false, message: "Unable to update media state right now." });
