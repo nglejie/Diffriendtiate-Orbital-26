@@ -9,7 +9,7 @@ import {
   normalizeChannelName,
   removeChannelFromLayout,
   renameChannelInLayout,
-} from "../../client/src/features/room/chat/chatLayout.ts";
+} from "../../apps/client/src/features/room/chat/chatLayout.ts";
 
 describe("chat layout helpers", () => {
   // Protects the saved chat sidebar layout from stale local/server data. The

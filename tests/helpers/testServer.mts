@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -8,15 +9,17 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../..",
+  "../..",
 );
-const npmCli = path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
+const npmCli =
+  process.env.npm_execpath ||
+  path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
 
 export function getRepoRoot() {
   return repoRoot;
 }
 
-export async function getFreePort() {
+export async function getFreePort(): Promise<number> {
   // Ask the OS for an available local port so parallel or repeated test runs do
   // not fight over a hardcoded server port.
   return new Promise((resolve, reject) => {
@@ -24,7 +27,7 @@ export async function getFreePort() {
     server.unref();
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
+      const address = server.address() as AddressInfo;
       server.close(() => resolve(address.port));
     });
   });
@@ -89,11 +92,11 @@ export async function startMockChatbot() {
       calls.embeds.push(body);
       sendJson(response, 200, {
         result: true,
-        success: Array.isArray(body?.urls)
-          ? body.urls.map((item) => item.name || item.file_name || item.url || "resource")
+      success: Array.isArray((body as any)?.urls)
+          ? (body as any).urls.map((item) => item.name || item.file_name || item.url || "resource")
           : [],
         failed: [],
-        total_chunks: Array.isArray(body?.urls) ? body.urls.length : 0,
+        total_chunks: Array.isArray((body as any)?.urls) ? (body as any).urls.length : 0,
       });
       return;
     }
@@ -124,7 +127,9 @@ export async function startMockChatbot() {
     sendJson(response, 404, { message: `Unhandled mock chatbot route: ${request.method} ${url.pathname}` });
   });
 
-  await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
 
   return {
     calls,
@@ -135,7 +140,12 @@ export async function startMockChatbot() {
   };
 }
 
-async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
+function formatChildLogs(logs) {
+  const output = logs.join("").trim();
+  return output ? `\n\nServer output:\n${output.slice(-4000)}` : "";
+}
+
+async function waitForHealth(baseUrl, child, logs, timeoutMs = 20_000) {
   // Poll the app health endpoint until the spawned server is ready. If the child
   // exits early or never becomes healthy, fail fast with useful diagnostics.
   const startedAt = Date.now();
@@ -143,7 +153,9 @@ async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
 
   while (Date.now() - startedAt < timeoutMs) {
     if (child.exitCode !== null) {
-      throw new Error(`Server exited before health check passed with code ${child.exitCode}.`);
+      throw new Error(
+        `Server exited before health check passed with code ${child.exitCode}.${formatChildLogs(logs)}`,
+      );
     }
 
     try {
@@ -156,10 +168,12 @@ async function waitForHealth(baseUrl, child, timeoutMs = 20_000) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
 
-  throw new Error(`Timed out waiting for ${baseUrl}/api/health: ${lastError?.message || "unknown error"}`);
+  throw new Error(
+    `Timed out waiting for ${baseUrl}/api/health: ${lastError?.message || "unknown error"}${formatChildLogs(logs)}`,
+  );
 }
 
-export async function startTestApp(options = {}) {
+export async function startTestApp(options: any = {}) {
   // Launches the real app API in a child process with isolated JSON storage and
   // test-only secrets. This gives integration, AI, performance, and security
   // tests realistic behavior without touching local development data.
@@ -177,6 +191,7 @@ export async function startTestApp(options = {}) {
       CHATBOT_BASE_URL: options.chatbotUrl || "http://127.0.0.1:59999",
       DATABASE_URL: "",
       DIFFRIENDTIATE_DATA_DIR: dataDir,
+      INTELLIGRATE_GPU_ENABLED: "true",
       JWT_SECRET: "diffriendtiate-test-secret",
       NODE_ENV: "test",
       PORT: String(port),
@@ -187,7 +202,7 @@ export async function startTestApp(options = {}) {
   child.stdout.on("data", (chunk) => logs.push(chunk.toString("utf8")));
   child.stderr.on("data", (chunk) => logs.push(chunk.toString("utf8")));
 
-  await waitForHealth(baseUrl, child);
+  await waitForHealth(baseUrl, child, logs);
 
   return {
     baseUrl,

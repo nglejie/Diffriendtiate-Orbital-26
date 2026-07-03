@@ -8,7 +8,7 @@ import {
   inferResourceType,
   inferResourceVersion,
   normalizeResourceName,
-} from "../../client/src/features/room/resourceWorkspace.ts";
+} from "../../apps/client/src/features/room/resourceWorkspace.ts";
 
 const room = { academicTerm: "2026/2027 S1", moduleCode: "CS2040S" };
 

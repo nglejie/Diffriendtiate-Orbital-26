@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const timestamp = new Date()
   .toISOString()
   .replace(/[-:]/g, "")
@@ -512,7 +512,7 @@ async function screenshotHtml(html, screenshotPath, viewport = { width: 1400, he
   await browser.close();
 }
 
-function runCommand(entry) {
+function runCommand(entry): Promise<any> {
   // Runs a QA category, streams its output to the current terminal, and captures
   // the same output for logs, HTML reports, and proof screenshots.
   return new Promise((resolve) => {
@@ -551,7 +551,7 @@ function runCommand(entry) {
 await fs.mkdir(logsDir, { recursive: true });
 await fs.mkdir(screenshotsDir, { recursive: true });
 
-const results = [];
+const results: any[] = [];
 for (const command of commands) {
   const result = await runCommand(command);
   const metrics = extractMetrics(result.output);

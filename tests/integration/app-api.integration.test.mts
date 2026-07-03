@@ -65,6 +65,56 @@ describe("app API integration", () => {
     expect(list.payload.rooms.some((item) => item.id === room.id)).toBe(true);
   });
 
+  // Covers common malformed auth and room-creation edge cases that otherwise
+  // tend to regress silently: duplicate accounts, weak passwords, missing room
+  // identifiers, and private rooms without passwords should all fail cleanly.
+  it("rejects duplicate accounts, weak passwords, and invalid room creation payloads", async () => {
+    const weakPassword = await apiRequest(app.baseUrl, "/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Weak Password",
+        email: "weak-password@example.test",
+        password: "123",
+      },
+    });
+    expect(weakPassword.status).toBe(400);
+    expect(weakPassword.payload.message).toMatch(/password/i);
+
+    const duplicate = await apiRequest(app.baseUrl, "/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Owner Fleming Again",
+        email: owner.email,
+        password: owner.password,
+      },
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.payload.message).toMatch(/already exists/i);
+
+    const missingModule = await apiRequest(app.baseUrl, "/api/rooms", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        name: "Incomplete Room",
+        moduleCode: "",
+      },
+    });
+    expect(missingModule.status).toBe(400);
+    expect(missingModule.payload.message).toMatch(/room name and module code/i);
+
+    const privateWithoutPassword = await apiRequest(app.baseUrl, "/api/rooms", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        name: "Private Missing Password",
+        moduleCode: "CS2105",
+        visibility: "private",
+      },
+    });
+    expect(privateWithoutPassword.status).toBe(400);
+    expect(privateWithoutPassword.payload.message).toMatch(/password/i);
+  });
+
   // Protects Room Settings permissions. A normal member should be blocked from
   // changing room profile fields, while the owner can save profile edits and
   // receives the updated room payload.
@@ -236,5 +286,33 @@ describe("app API integration", () => {
       token: owner.token,
     });
     await expectStatus(permanent, 204, "permanent delete resource");
+  });
+
+  // Verifies a joined member cannot delete another user's resource. This
+  // protects against a subtle but damaging collaboration bug: membership should
+  // allow reading shared resources, but destructive actions belong to the owner
+  // or original uploader.
+  it("prevents members from deleting resources they did not upload", async () => {
+    const upload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "Owner Only Resource.txt",
+      "Only the owner or uploader should delete this",
+      "Reference",
+    );
+
+    const memberDelete = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
+      method: "DELETE",
+      token: member.token,
+    });
+    expect(memberDelete.status).toBe(403);
+    expect(memberDelete.payload.message).toMatch(/cannot delete/i);
+
+    const stillVisible = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources`, {
+      token: owner.token,
+    });
+    expect(stillVisible.status).toBe(200);
+    expect(stillVisible.payload.resources.map((item) => item.id)).toContain(upload.resource.id);
   });
 });

@@ -14,7 +14,7 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
-function readBody(request) {
+function readBody(request): Promise<any> {
   // Parse JSON request bodies from the app API so the mock can echo realistic
   // embed success data back to the caller.
   return new Promise((resolve) => {

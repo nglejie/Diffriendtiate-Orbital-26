@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 
+type ApiRequestOptions = Omit<RequestInit, "body" | "headers"> & {
+  body?: any;
+  headers?: Record<string, string>;
+  token?: string;
+};
+
 export function uniqueId(prefix = "qa") {
   // Keep generated users/resources unique across repeated local runs so tests
   // do not collide with earlier temporary data or parallel workers.
@@ -17,12 +23,12 @@ export function makeUser(prefix = "qa") {
   };
 }
 
-export async function apiRequest(baseUrl, path, options = {}) {
+export async function apiRequest(baseUrl, path, options: ApiRequestOptions = {}) {
   // Small fetch wrapper shared by integration-style tests. It handles bearer
   // tokens, JSON bodies, FormData uploads, and returns both status and parsed
   // payload so assertions can inspect success and failure responses.
-  const headers = { ...(options.headers || {}) };
-  const init = {
+  const headers: Record<string, string> = { ...(options.headers || {}) };
+  const init: RequestInit = {
     method: options.method || "GET",
     headers,
   };

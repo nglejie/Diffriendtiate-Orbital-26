@@ -1,0 +1,72 @@
+name: App QA Test Suite
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/qa-tests.yml"
+      - "render.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/qa-tests.yml"
+      - "render.yaml"
+
+jobs:
+  app-qa:
+    name: Build, Test, and Browser UAT
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Build and reproducibility checks
+        run: npm run test:build
+
+      - name: Unit and component tests
+        run: npm run test:unit
+
+      - name: API and integration tests
+        run: npm run test:integration
+
+      - name: AI and reliability tests
+        run: npm run test:ai
+
+      - name: Performance smoke tests
+        run: npm run test:performance
+
+      - name: Security checks
+        run: npm run test:security
+
+      - name: End-to-end UAT tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report
+          path: tests/.tmp/playwright-report
+          if-no-files-found: ignore

@@ -1,8 +1,10 @@
+type AnyRecord = Record<string, any>;
+
 /**
  * Creates the client-side shape used for Intelligrate chats before or after they are
  * persisted by the API.
  */
-export function createBuddyThread(title = "New Chat", id, options = {}) {
+export function createBuddyThread(title = "New Chat", id?: any, options: AnyRecord = {}) {
   return {
     id: id || `buddy-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     title,
@@ -21,7 +23,7 @@ export function createBuddyThread(title = "New Chat", id, options = {}) {
  * Normalises an Intelligrate chat returned by the backend so the UI can treat local
  * draft chats and saved chats the same way.
  */
-export function normalizeBuddyThread(thread, user) {
+export function normalizeBuddyThread(thread: any, user?: any) {
   return createBuddyThread(thread.title || "New Chat", thread.id, {
     visibility: thread.visibility === "public" ? "public" : "private",
     ownerId: thread.ownerId || thread.owner?.id || user?.id || "",
@@ -179,7 +181,7 @@ export function getBuddyDisplayText(value) {
 /**
  * Creates one visible progress item for Intelligrate's streamed thought/tool timeline.
  */
-export function createBuddyThoughtItem(type, text, options = {}) {
+export function createBuddyThoughtItem(type: any, text: any, options: AnyRecord = {}) {
   const cleanedText = getBuddyDisplayText(text);
 
   return {
@@ -196,7 +198,7 @@ export function createBuddyThoughtItem(type, text, options = {}) {
  * Converts older string-based progress rows and newer object-based rows into
  * the same timeline item shape.
  */
-export function normalizeBuddyThoughtItem(step) {
+export function normalizeBuddyThoughtItem(step: any) {
   if (step && typeof step === "object") {
     return createBuddyThoughtItem(step.type || "thought", getBuddyDisplayText(step), step);
   }
@@ -377,7 +379,7 @@ function getToolDisplayName(name) {
     : "Tool";
 }
 
-function getEventDisplayLabel(event, fallback) {
+function getEventDisplayLabel(event: AnyRecord, fallback: string) {
   return (
     getBuddyDisplayText(event.display) ||
     getBuddyDisplayText(event.label) ||
@@ -387,7 +389,7 @@ function getEventDisplayLabel(event, fallback) {
   );
 }
 
-function firstAvailableAttachmentName(options = {}) {
+function firstAvailableAttachmentName(options: AnyRecord = {}) {
   const attachment = Array.isArray(options.attachments) ? options.attachments[0] : null;
   return attachment?.title || attachment?.name || attachment?.originalName || "";
 }
@@ -418,7 +420,7 @@ function compactToolQuery(value) {
  * its own wording so the UI does not blur separate events such as searching the
  * room corpus and reading an uploaded file.
  */
-export function formatBuddyToolEvent(rawEvent, options = {}) {
+export function formatBuddyToolEvent(rawEvent: any, options: AnyRecord = {}) {
   try {
     const wrapper =
       rawEvent && typeof rawEvent === "object" && rawEvent.payload !== undefined
@@ -540,7 +542,7 @@ export function formatBuddyToolEvent(rawEvent, options = {}) {
 /**
  * Builds the one-line summary shown when an Intelligrate progress chain is collapsed.
  */
-export function getBuddyThoughtSummary(message) {
+export function getBuddyThoughtSummary(message: any) {
   const steps = uniqueBuddySteps(message.thinkingSteps || []);
   const firstThought = steps.find((step) => step.type === "thought" && step.text);
   const lastThought = [...steps].reverse().find((step) => step.type === "thought" && step.text);
@@ -607,7 +609,7 @@ export function normalizeSourceKey(value) {
  * Indexes room resources by every stable name the chatbot might return as a
  * source citation.
  */
-export function buildSourceResourceMap(resources = []) {
+export function buildSourceResourceMap(resources: any[] = []) {
   const map = new Map();
 
   resources.forEach((resource) => {

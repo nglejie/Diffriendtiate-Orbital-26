@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import TopBar from "../../client/src/features/dashboard/TopBar.tsx";
-import { THEME_MODES } from "../../client/src/theme.ts";
+import TopBar from "../../apps/client/src/features/dashboard/TopBar.tsx";
+import { THEME_MODES } from "../../apps/client/src/theme.ts";
 
 describe("TopBar", () => {
   // Exercises the Account popup path used by logged-in users. The test opens

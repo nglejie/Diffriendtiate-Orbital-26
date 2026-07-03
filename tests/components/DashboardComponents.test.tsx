@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { RoomTile } from "../../client/src/features/dashboard/DashboardComponents.tsx";
+import { RoomTile } from "../../apps/client/src/features/dashboard/DashboardComponents.tsx";
 
 const room = {
   id: "room-1",

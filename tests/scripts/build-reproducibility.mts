@@ -43,7 +43,7 @@ const commands = [
 function commandSpec(command, args) {
   // On Windows, invoking npm through the current Node executable is more
   // reliable than relying on shell-specific npm shims.
-  if (command !== "npm") return { command, args };
+  if (command !== "npm" || process.platform !== "win32") return { command, args };
 
   return {
     command: process.execPath,

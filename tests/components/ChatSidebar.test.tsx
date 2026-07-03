@@ -1,8 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ChatSidebar } from "../../client/src/features/room/chat/ChatSidebar.tsx";
-import { DEFAULT_CATEGORY_ID } from "../../client/src/features/room/chat/chatLayout.ts";
+import { ChatSidebar } from "../../apps/client/src/features/room/chat/ChatSidebar.tsx";
+import { DEFAULT_CATEGORY_ID } from "../../apps/client/src/features/room/chat/chatLayout.ts";
 
 const layout = [
   { id: DEFAULT_CATEGORY_ID, name: "Text Channels", channels: ["general", "lectures"] },
@@ -84,7 +84,7 @@ describe("ChatSidebar", () => {
 
     await user.click(document.body);
     const lectureRow = screen.getByRole("button", { name: /^lectures$/i }).closest(".chat-channel-row");
-    await user.click(within(lectureRow).getByRole("button", { name: /lectures options/i }));
+    await user.click(within(lectureRow as HTMLElement).getByRole("button", { name: /lectures options/i }));
     await user.click(screen.getByRole("button", { name: /delete channel/i }));
 
     expect(onRequestDeleteChannel).toHaveBeenCalledWith("lectures");
