@@ -5,6 +5,7 @@ import {
   CalendarPlus,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Edit3,
@@ -58,6 +59,7 @@ import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.ts";
 import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.tsx";
 import { ChatPanel as DiscordChatPanel } from "./chat/ChatPanel.tsx";
 import { ChatSidebar } from "./chat/ChatSidebar.tsx";
+import { CoordinatePanel } from "./coordinate/CoordinatePanel.tsx";
 import {
   MeetingDisplayStage,
   MeetingDockPreview,
@@ -75,6 +77,7 @@ import {
   useResourceDriveController,
 } from "./resources/ResourceFileManager.tsx";
 import { VirtualStudySpace } from "./space/VirtualStudySpace.tsx";
+import { CUSTOM_WORLD_MAP_ID } from "./space/worldConfig.ts";
 import {
   DEFAULT_CATEGORY_ID,
   addChannelToCategory,
@@ -133,7 +136,7 @@ const BASE_ROOM_TABS = [
   { id: "chat", label: "Convolution", icon: MessageCircle },
   { id: "buddy", label: "Intelligrate", icon: Bot },
   { id: "resources", label: "Infilenite", icon: FolderOpen },
-  { id: "calendar", label: "Coordidate", icon: CalendarDays, disabled: true },
+  { id: "calendar", label: "Coordidate", icon: CalendarDays },
 ];
 
 function getRoomTabs(meetingActive) {
@@ -143,6 +146,11 @@ function getRoomTabs(meetingActive) {
         { id: "meetings", label: "Limeets", icon: Video },
       ]
     : BASE_ROOM_TABS;
+}
+
+function getRoomActivityLabel(tabId) {
+  const tab = getRoomTabs(true).find((candidate) => candidate.id === tabId);
+  return tab?.label || "World";
 }
 
 const DEFAULT_BUDDY_AVAILABILITY = {
@@ -190,6 +198,77 @@ function getRoomChannels(room) {
   return channels.length ? channels : ["general"];
 }
 
+const DEADLINE_SOON_WINDOW_MS = 60 * 60 * 1000;
+
+function parseSessionTime(value) {
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : time;
+}
+
+function getSessionEndTime(session) {
+  const start = parseSessionTime(session?.startsAt);
+  if (start == null) return null;
+
+  const explicitEnd = parseSessionTime(session?.endsAt);
+  if (explicitEnd != null && explicitEnd > start) return explicitEnd;
+  if (session?.kind === "deadline") return start;
+  if (session?.metadata?.allDay) return start + 24 * 60 * 60 * 1000;
+  return start + 60 * 60 * 1000;
+}
+
+function isSessionOngoing(session, now = Date.now()) {
+  if (session?.kind === "deadline") return false;
+  const start = parseSessionTime(session?.startsAt);
+  const end = getSessionEndTime(session);
+  return start != null && end != null && start <= now && now < end;
+}
+
+function isDeadlineDueSoon(session, now = Date.now()) {
+  if (session?.kind !== "deadline") return false;
+  const start = parseSessionTime(session?.startsAt);
+  return start != null && start >= now && start - now <= DEADLINE_SOON_WINDOW_MS;
+}
+
+function normalizeAreaLookup(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function getRoomMeetingAreas(room) {
+  return asArray(room?.worldConfig?.privateAreas).filter((area) => area?.effects?.meeting);
+}
+
+function findSessionWorldMeetingArea(session, room) {
+  if (session?.kind !== "meeting") return null;
+  const location = normalizeAreaLookup(session?.location);
+  if (!location) return null;
+
+  return (
+    getRoomMeetingAreas(room).find((area) =>
+      [area?.id, area?.name, area?.label].some((candidate) => normalizeAreaLookup(candidate) === location),
+    ) || null
+  );
+}
+
+function getAreaTeleportTarget(area, room) {
+  const bounds = area?.bounds || area;
+  const col = Number(bounds?.col ?? bounds?.x);
+  const row = Number(bounds?.row ?? bounds?.y);
+  const width = Number(bounds?.width ?? bounds?.w);
+  const height = Number(bounds?.height ?? bounds?.h);
+  if (![col, row, width, height].every(Number.isFinite)) return null;
+
+  return {
+    areaId: area?.id || "",
+    areaName: area?.name || area?.label || "Meeting Area",
+    worldRoomId: String(area?.roomId || area?.mapId || room?.worldConfig?.activeRoomId || CUSTOM_WORLD_MAP_ID),
+    x: Math.floor(col + width / 2),
+    y: Math.floor(row + height / 2),
+  };
+}
+
 function mergeUserProfile(currentUser, nextUser) {
   if (!currentUser || !nextUser || currentUser.id !== nextUser.id) return currentUser;
   return { ...currentUser, ...nextUser };
@@ -202,6 +281,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const [customResourceFolders, setCustomResourceFolders] = useState([]);
   const [resourceFoldersLoadedRoomId, setResourceFoldersLoadedRoomId] = useState("");
   const [sessions, setSessions] = useState([]);
+  const [coordinate, setCoordinate] = useState({ poll: null, polls: [], responses: [] });
   const [activeTab, setActiveTab] = useState("space");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -232,6 +312,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const [profileStatus, setProfileStatus] = useState(getStoredProfileStatus);
   const [activeMeetingArea, setActiveMeetingArea] = useState(null);
   const [spaceReturnToSpawnSignal, setSpaceReturnToSpawnSignal] = useState(0);
+  const [spaceTeleportTarget, setSpaceTeleportTarget] = useState(null);
   const [worldHasUnsavedChanges, setWorldHasUnsavedChanges] = useState(false);
   const [importantMessages, setImportantMessages] = useState([]);
   const [resourceThreads, setResourceThreads] = useState({});
@@ -588,12 +669,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           messagePayload,
           resourcePayload,
           sessionPayload,
+          coordinatePayload,
           buddyPayload,
           buddyHealthPayload,
         ] = await Promise.all([
           api.getMessages(loadedRoom.id),
           api.getResources(loadedRoom.id, { includeDeleted: true }),
           api.getSessions(loadedRoom.id),
+          api.getCoordinate(loadedRoom.id),
           api.getBuddyThreads(loadedRoom.id),
           api.getBuddyHealth(loadedRoom.id).catch((err) => ({
             ok: false,
@@ -608,6 +691,11 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         setMessages(asArray(messagePayload.messages));
         setResources(asArray(resourcePayload.resources));
         setSessions(asArray(sessionPayload.sessions));
+        setCoordinate({
+          poll: coordinatePayload.poll || null,
+          polls: asArray(coordinatePayload.polls),
+          responses: asArray(coordinatePayload.responses),
+        });
         setBuddyAvailability({
           ...DEFAULT_BUDDY_AVAILABILITY,
           ...buddyHealthPayload,
@@ -635,6 +723,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         setMessages([]);
         setResources([]);
         setSessions([]);
+        setCoordinate({ poll: null, polls: [], responses: [] });
         setBuddyThreads([]);
         setActiveBuddyThreadId("");
         setDraftBuddyThread(null);
@@ -1129,6 +1218,21 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setContextOpen(true);
   }
 
+  function joinWorldMeetingFromCalendar(session) {
+    const area = findSessionWorldMeetingArea(session, room);
+    const target = getAreaTeleportTarget(area, room);
+    if (!target) {
+      setNotice("That meeting is not linked to a World area.");
+      return;
+    }
+
+    setSpaceTeleportTarget({
+      ...target,
+      requestedAt: Date.now(),
+    });
+    selectRoomTab("space");
+  }
+
   const handleExitRoom = useCallback(() => {
     if (
       room?.isOwner &&
@@ -1458,7 +1562,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const spaceContext = {
     activeBuddyThreadTitle: activeBuddyThread?.title || "",
     activeChatChannel,
-    calendarAvailable: false,
+    calendarAvailable: true,
     intelligrateAvailable: Boolean(buddyAvailability.available),
     intelligrateProviderLabel: buddyAvailability.providerLabel || "",
     resourceCount: visibleResourceCount,
@@ -1560,6 +1664,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
               setDraftBuddyThread(null);
               setActiveBuddyThreadId(threadId);
             }}
+            onJoinWorldMeeting={joinWorldMeetingFromCalendar}
             room={room}
             resourceDrive={resourceDrive}
             roomActivityMembers={roomActivityMembers}
@@ -1573,6 +1678,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       {room.isMember && !settingsOpen ? (
         <div className="room-sidebar-dock">
           <RoomVoiceDock
+            activityLabel={getRoomActivityLabel(activeTab)}
             meeting={limeetsMeeting}
             onExitRoom={handleExitRoom}
             onLeaveMeetingArea={handleLeaveMeetingArea}
@@ -1692,6 +1798,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
               roomActivityMembers={roomActivityMembers}
               socket={roomSocket}
               spaceContext={spaceContext}
+              teleportTarget={spaceTeleportTarget}
               user={user}
             />
           </section>
@@ -1708,12 +1815,15 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         ) : null}
 
         {room.isMember && activeTab === "calendar" ? (
-          <section className="room-content-panel">
-            <SessionPanel
+          <section className="room-content-panel coordinate-content-panel">
+            <CoordinatePanel
+              coordinate={coordinate}
               onChanged={() => loadRoomBundle(room.id)}
+              onCoordinateChanged={setCoordinate}
               onError={showError}
               room={room}
               sessions={safeSessions}
+              user={user}
             />
           </section>
         ) : null}
@@ -1727,6 +1837,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
             }}
             onClose={() => setSettingsOpen(false)}
             onError={showError}
+            onCalendarChanged={() => loadRoomBundle(room.id)}
             room={room}
           />
         ) : null}
@@ -1840,6 +1951,41 @@ function IntelligrateUnavailable({ availability, isOwner, onRefresh }) {
   );
 }
 
+function MiniSessionCard({ joinable = false, now = Date.now(), onJoinWorldMeeting, session, stateLabel = "" }) {
+  const content = (
+    <>
+      <strong>{session.title}</strong>
+      <span>{formatDateTime(session.startsAt)}</span>
+      {session.location ? <small>{session.location}</small> : null}
+      {stateLabel ? <small className="mini-session-state">{stateLabel}</small> : null}
+    </>
+  );
+  const className = [
+    "mini-session-card",
+    session.kind === "deadline" ? "deadline" : "",
+    isSessionOngoing(session, now) ? "ongoing" : "",
+    isDeadlineDueSoon(session, now) ? "soon" : "",
+    joinable ? "joinable" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (joinable) {
+    return (
+      <button
+        aria-label={`Open ${session.title} In World`}
+        className={className}
+        onClick={() => onJoinWorldMeeting?.(session)}
+        type="button"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <article className={className}>{content}</article>;
+}
+
 /** Sidebar content that changes based on the active room tool. */
 function RoomContextPanel({
   activeTab,
@@ -1862,6 +2008,7 @@ function RoomContextPanel({
   onDeleteChannel,
   onMoveChannel,
   onNewBuddyThread,
+  onJoinWorldMeeting,
   onRenameChannel,
   onRequestRenameBuddyThread,
   onRequestDeleteBuddyThread,
@@ -1881,6 +2028,11 @@ function RoomContextPanel({
   const [channelRenameTarget, setChannelRenameTarget] = useState(null);
   const [channelDeleteTarget, setChannelDeleteTarget] = useState(null);
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState(null);
+  const [calendarSectionsOpen, setCalendarSectionsOpen] = useState({
+    deadlines: true,
+    meetings: true,
+  });
+  const [calendarNow, setCalendarNow] = useState(() => Date.now());
   const safeBuddyThreads = asArray(buddyThreads);
   const safeChannelLayout = asArray(channelLayout);
   const safeChatDrafts = asObjectRecord(chatDrafts);
@@ -1893,6 +2045,20 @@ function RoomContextPanel({
       .includes(buddySearch.trim().toLowerCase()),
   );
   const buddyMenuTarget = safeBuddyThreads.find((thread) => thread.id === buddyMenuTargetId);
+
+  function toggleCalendarSection(sectionId) {
+    setCalendarSectionsOpen((current) => ({
+      ...current,
+      [sectionId]: !current[sectionId],
+    }));
+  }
+
+  useEffect(() => {
+    if (activeTab !== "calendar") return undefined;
+    setCalendarNow(Date.now());
+    const intervalId = window.setInterval(() => setCalendarNow(Date.now()), 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeTab]);
 
   // Chat option menus should behave like native popovers: click elsewhere to close.
   useEffect(() => {
@@ -2152,24 +2318,81 @@ function RoomContextPanel({
   }
 
   if (activeTab === "calendar") {
+    const upcomingSessions = safeSessions
+      .filter((session) => {
+        const start = parseSessionTime(session?.startsAt);
+        if (start == null) return false;
+        const end = getSessionEndTime(session);
+        if (session?.kind === "deadline") return start >= calendarNow;
+        return end != null && end >= calendarNow;
+      })
+      .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+    const upcomingDeadlines = upcomingSessions.filter((session) => session.kind === "deadline");
+    const upcomingMeetings = upcomingSessions.filter((session) => session.kind !== "deadline");
+
     return (
       <>
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Coordidate" />
         <PanelDivider />
-        <section className="context-section roomy">
-          <h3>Scheduled</h3>
-          <div className="mini-session-list">
-            {safeSessions.length ? (
-              safeSessions.map((session) => (
-                <article key={session.id}>
-                  <strong>{session.title}</strong>
-                  <span>{formatDateTime(session.startsAt)}</span>
-                </article>
-              ))
-            ) : (
-              <p>No meetings yet.</p>
-            )}
-          </div>
+        <section className="context-section roomy calendar-sidebar-section">
+          <button
+            aria-expanded={calendarSectionsOpen.meetings}
+            className="calendar-sidebar-heading"
+            onClick={() => toggleCalendarSection("meetings")}
+            type="button"
+          >
+            <h3>Scheduled Meetings</h3>
+            <ChevronDown size={16} />
+          </button>
+          {calendarSectionsOpen.meetings ? (
+            <div className="mini-session-list">
+              {upcomingMeetings.length ? (
+                upcomingMeetings.slice(0, 6).map((session) => {
+                  const ongoing = isSessionOngoing(session, calendarNow);
+                  const joinable = ongoing && Boolean(findSessionWorldMeetingArea(session, room));
+                  return (
+                    <MiniSessionCard
+                      joinable={joinable}
+                      key={session.id}
+                      now={calendarNow}
+                      onJoinWorldMeeting={onJoinWorldMeeting}
+                      session={session}
+                      stateLabel={joinable ? "Ongoing | Join In World" : ongoing ? "Ongoing" : ""}
+                    />
+                  );
+                })
+              ) : (
+                <p>No Meetings Yet.</p>
+              )}
+            </div>
+          ) : null}
+        </section>
+        <section className="context-section roomy calendar-sidebar-section">
+          <button
+            aria-expanded={calendarSectionsOpen.deadlines}
+            className="calendar-sidebar-heading"
+            onClick={() => toggleCalendarSection("deadlines")}
+            type="button"
+          >
+            <h3>Upcoming Deadlines</h3>
+            <ChevronDown size={16} />
+          </button>
+          {calendarSectionsOpen.deadlines ? (
+            <div className="mini-session-list">
+              {upcomingDeadlines.length ? (
+                upcomingDeadlines.slice(0, 6).map((session) => (
+                  <MiniSessionCard
+                    key={session.id}
+                    now={calendarNow}
+                    session={session}
+                    stateLabel={isDeadlineDueSoon(session, calendarNow) ? "Due Soon" : ""}
+                  />
+                ))
+              ) : (
+                <p>No Imported Deadlines Yet.</p>
+              )}
+            </div>
+          ) : null}
         </section>
       </>
     );
@@ -2237,6 +2460,7 @@ function HomePanel({ room }) {
 
 /** Persistent Discord-like room voice/video dock shown across room tabs. */
 function RoomVoiceDock({
+  activityLabel = "World",
   meeting,
   meetingAreaName = "Meeting Area",
   onExitRoom,
@@ -2254,7 +2478,7 @@ function RoomVoiceDock({
   const displayName = meeting?.displayName || user?.name || user?.email || "You";
   const muted = meeting?.muted ?? true;
   const screenSharing = Boolean(meeting?.screenSharing);
-  const statusText = active ? `In ${meetingAreaName}` : "In World";
+  const statusText = active ? `In ${meetingAreaName}` : `In ${activityLabel}`;
 
   return (
     <section className="room-voice-dock" aria-label="Room voice and video controls">
@@ -3354,8 +3578,198 @@ function createRoomSettingsForm(room) {
   };
 }
 
+function CanvasIntegrationSettings({ onCalendarChanged, onError, onRoomChanged, room }) {
+  const canvasConnection = room.integrations?.canvas || null;
+  const tokenStorageKey = `diffriendtiate:room:${room.id}:canvasAccessToken`;
+  const [host, setHost] = useState(canvasConnection?.host || "canvas.nus.edu.sg");
+  const [accessToken, setAccessToken] = useState(() => {
+    try {
+      return window.localStorage.getItem(tokenStorageKey) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [courses, setCourses] = useState(() =>
+    canvasConnection?.courseId
+      ? [
+          {
+            id: canvasConnection.courseId,
+            name: canvasConnection.courseName || "Connected module",
+            courseCode: canvasConnection.courseCode || "",
+          },
+        ]
+      : [],
+  );
+  const [selectedCourseId, setSelectedCourseId] = useState(canvasConnection?.courseId || "");
+  const [connecting, setConnecting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [status, setStatus] = useState("");
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId);
+
+  useEffect(() => {
+    setHost(canvasConnection?.host || "canvas.nus.edu.sg");
+    setSelectedCourseId(canvasConnection?.courseId || "");
+    setCourses(
+      canvasConnection?.courseId
+        ? [
+            {
+              id: canvasConnection.courseId,
+              name: canvasConnection.courseName || "Connected module",
+              courseCode: canvasConnection.courseCode || "",
+            },
+          ]
+        : [],
+    );
+  }, [canvasConnection?.courseId, canvasConnection?.courseName, canvasConnection?.courseCode, canvasConnection?.host]);
+
+  function rememberCanvasToken() {
+    try {
+      if (accessToken.trim()) {
+        window.localStorage.setItem(tokenStorageKey, accessToken.trim());
+      }
+    } catch {
+      // Browser storage is a convenience only; the server never relies on it.
+    }
+  }
+
+  async function connectCanvas(event) {
+    event.preventDefault();
+    setConnecting(true);
+    setStatus("");
+
+    try {
+      const payload = await api.getCanvasCourses(room.id, { host, accessToken });
+      const loadedCourses = asArray(payload.courses);
+      const moduleCode = String(room.moduleCode || "").toLowerCase();
+      const bestMatch =
+        loadedCourses.find((course) =>
+          `${course.courseCode || ""} ${course.name || ""}`.toLowerCase().includes(moduleCode),
+        ) || loadedCourses[0];
+
+      setCourses(loadedCourses);
+      setSelectedCourseId(bestMatch?.id || "");
+      rememberCanvasToken();
+      setStatus(loadedCourses.length ? "Canvas connected. Choose one module for this World." : "Canvas connected, but no active courses were returned.");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function importDeadlines() {
+    if (!selectedCourse) {
+      onError("Select a Canvas module before importing deadlines.");
+      return;
+    }
+
+    setImporting(true);
+    setStatus("");
+
+    try {
+      const payload = await api.importCanvasDeadlines(room.id, {
+        host,
+        accessToken,
+        courseId: selectedCourse.id,
+        courseName: selectedCourse.name,
+        courseCode: selectedCourse.courseCode,
+      });
+      rememberCanvasToken();
+      if (payload.room) onRoomChanged?.(payload.room);
+      setStatus(`Synced ${selectedCourse.name}. Imported ${payload.imported || 0} new deadline${payload.imported === 1 ? "" : "s"}.`);
+      onCalendarChanged?.();
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <section className="room-settings-integrations">
+      <header className="room-settings-header">
+        <h1>Integrations</h1>
+        <p>Connect one module source for this World so room tools can share the same academic context.</p>
+      </header>
+
+      <section className="room-settings-section integration-card">
+        <div className="settings-section-heading">
+          <h2>Canvas Integration</h2>
+          <p>Use an access token to choose the single Canvas module tied to this World.</p>
+        </div>
+
+        {canvasConnection?.connected ? (
+          <div className="integration-connected-summary">
+            <CheckCircle2 size={18} />
+            <div>
+              <strong>{canvasConnection.courseName || "Canvas module connected"}</strong>
+              <span>
+                {[canvasConnection.courseCode, canvasConnection.lastSyncedAt ? `Last synced ${formatDateTime(canvasConnection.lastSyncedAt)}` : ""]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        <form className="integration-connect-form" onSubmit={connectCanvas}>
+          <label className="field">
+            <span>Host</span>
+            <input
+              autoComplete="off"
+              onChange={(event) => setHost(event.target.value)}
+              placeholder="canvas.nus.edu.sg"
+              value={host}
+            />
+          </label>
+          <label className="field">
+            <span>Access Token</span>
+            <input
+              autoComplete="off"
+              onChange={(event) => setAccessToken(event.target.value)}
+              placeholder={canvasConnection?.connected ? "Token saved in this browser" : "Canvas token"}
+              type="password"
+              value={accessToken}
+            />
+          </label>
+          <button className="primary-button compact" disabled={connecting || !accessToken.trim()} type="submit">
+            <LinkIcon size={16} />
+            {connecting ? "Connecting" : "Connect"}
+          </button>
+        </form>
+
+        {courses.length ? (
+          <div className="integration-course-picker">
+            <label className="field">
+              <span>Module / Class</span>
+              <select onChange={(event) => setSelectedCourseId(event.target.value)} value={selectedCourseId}>
+                {courses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {[course.courseCode, course.name].filter(Boolean).join(" - ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="secondary-button compact"
+              disabled={importing || !selectedCourseId || !accessToken.trim()}
+              onClick={importDeadlines}
+              type="button"
+            >
+              <CalendarPlus size={16} />
+              {importing ? "Syncing" : canvasConnection?.connected ? "Sync Module" : "Save & Sync"}
+            </button>
+          </div>
+        ) : null}
+
+        {status ? <p className="integration-status">{status}</p> : null}
+      </section>
+    </section>
+  );
+}
+
 /** Full-screen owner settings surface modelled after the create-room flow. */
-function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
+function RoomSettingsScreen({ onBack, onChanged, onClose, onError, onCalendarChanged, room }) {
   const academicTermOptions = useMemo(() => createAcademicTermOptions(), []);
   const [activePage, setActivePage] = useState("profile");
   const [form, setForm] = useState(() => createRoomSettingsForm(room));
@@ -3552,6 +3966,14 @@ function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
           >
             <Edit3 size={16} />
             Room Profile
+          </button>
+          <button
+            className={activePage === "integrations" ? "active" : ""}
+            onClick={() => setActivePage("integrations")}
+            type="button"
+          >
+            <LinkIcon size={16} />
+            Integrations
           </button>
           <button
             className={activePage === "delete" ? "active danger" : "danger"}
@@ -3817,6 +4239,15 @@ function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
               </button>
             </footer>
           </form>
+        ) : null}
+
+        {activePage === "integrations" ? (
+          <CanvasIntegrationSettings
+            onCalendarChanged={onCalendarChanged}
+            onError={onError}
+            onRoomChanged={onChanged}
+            room={room}
+          />
         ) : null}
 
         {activePage === "delete" ? (

@@ -15,6 +15,8 @@ const initialDb = {
   messages: [],
   resources: [],
   sessions: [],
+  coordinatePolls: [],
+  coordinateResponses: [],
   buddyThreads: [],
 };
 
@@ -56,6 +58,10 @@ function normalizeDb(db) {
         room.worldConfig && typeof room.worldConfig === "object" && !Array.isArray(room.worldConfig)
           ? room.worldConfig
           : {},
+      integrations:
+        room.integrations && typeof room.integrations === "object" && !Array.isArray(room.integrations)
+          ? room.integrations
+          : {},
       resourceSyncFingerprint: room.resourceSyncFingerprint || "",
       resourceSyncUpdatedAt: room.resourceSyncUpdatedAt || "",
       channels: Array.isArray(room.channels) && room.channels.length
@@ -77,7 +83,34 @@ function normalizeDb(db) {
           ? resource.metadata
           : {},
     })),
-    sessions: db.sessions || [],
+    sessions: (db.sessions || []).map((session) => ({
+      ...session,
+      agenda: session.agenda || "",
+      endsAt: session.endsAt || "",
+      kind: ["meeting", "event", "deadline"].includes(session.kind) ? session.kind : "meeting",
+      visibility: session.visibility === "private" ? "private" : "room",
+      location: session.location || "",
+      source: session.source || "manual",
+      sourceId: session.sourceId || "",
+      metadata:
+        session.metadata && typeof session.metadata === "object" && !Array.isArray(session.metadata)
+          ? session.metadata
+          : {},
+    })),
+    coordinatePolls: (db.coordinatePolls || []).map((poll) => ({
+      ...poll,
+      title: poll.title || "Group availability",
+      slotMinutes: Number.isFinite(Number(poll.slotMinutes)) ? Number(poll.slotMinutes) : 60,
+      dayStartMinutes: Number.isFinite(Number(poll.dayStartMinutes)) ? Number(poll.dayStartMinutes) : 9 * 60,
+      dayEndMinutes: Number.isFinite(Number(poll.dayEndMinutes)) ? Number(poll.dayEndMinutes) : 17 * 60,
+      selectedDates: Array.isArray(poll.selectedDates) ? poll.selectedDates : [],
+      timezone: poll.timezone || "Asia/Singapore",
+      scheduledSessionId: poll.scheduledSessionId || "",
+    })),
+    coordinateResponses: (db.coordinateResponses || []).map((response) => ({
+      ...response,
+      slots: Array.isArray(response.slots) ? response.slots : [],
+    })),
     buddyThreads: (db.buddyThreads || []).map((thread) => ({
       ...thread,
       visibility: thread.visibility === "public" ? "public" : "private",
@@ -135,6 +168,7 @@ async function initPostgres() {
       theme TEXT NOT NULL DEFAULT 'twilight',
       background TEXT NOT NULL DEFAULT 'aurora',
       world_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      integrations JSONB NOT NULL DEFAULT '{}'::jsonb,
       channels TEXT[] NOT NULL DEFAULT '{general}',
       password_hash TEXT,
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -187,7 +221,41 @@ async function initPostgres() {
       title TEXT NOT NULL,
       agenda TEXT NOT NULL DEFAULT '',
       starts_at TIMESTAMPTZ NOT NULL,
+      ends_at TIMESTAMPTZ,
+      kind TEXT NOT NULL DEFAULT 'meeting',
+      visibility TEXT NOT NULL DEFAULT 'room',
+      location TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'manual',
+      source_id TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS coordinate_polls (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      range_start TIMESTAMPTZ NOT NULL,
+      range_end TIMESTAMPTZ NOT NULL,
+      slot_minutes INTEGER NOT NULL DEFAULT 60,
+      day_start_minutes INTEGER NOT NULL DEFAULT 540,
+      day_end_minutes INTEGER NOT NULL DEFAULT 1020,
+      selected_dates JSONB NOT NULL DEFAULT '[]'::jsonb,
+      timezone TEXT NOT NULL DEFAULT 'Asia/Singapore',
+      scheduled_session_id TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS coordinate_responses (
+      id TEXT PRIMARY KEY,
+      poll_id TEXT NOT NULL REFERENCES coordinate_polls(id) ON DELETE CASCADE,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      slots JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL,
+      UNIQUE (poll_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS buddy_threads (
@@ -207,6 +275,8 @@ async function initPostgres() {
     CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_resources_room_created ON resources(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_room_starts ON sessions(room_id, starts_at);
+    CREATE INDEX IF NOT EXISTS idx_coordinate_polls_room_updated ON coordinate_polls(room_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_coordinate_responses_poll ON coordinate_responses(poll_id);
     CREATE INDEX IF NOT EXISTS idx_buddy_threads_room_updated ON buddy_threads(room_id, updated_at);
   `);
 
@@ -218,6 +288,11 @@ async function initPostgres() {
   await pool.query(`
     ALTER TABLE rooms
       ADD COLUMN IF NOT EXISTS world_config JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS integrations JSONB NOT NULL DEFAULT '{}'::jsonb
   `);
 
   await pool.query(`
@@ -258,6 +333,24 @@ async function initPostgres() {
   await pool.query(`
     ALTER TABLE messages
       ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
+
+  await pool.query(`
+    ALTER TABLE sessions
+      ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'meeting',
+      ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'room',
+      ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual',
+      ADD COLUMN IF NOT EXISTS source_id TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await pool.query(`
+    ALTER TABLE coordinate_polls
+      ADD COLUMN IF NOT EXISTS day_start_minutes INTEGER NOT NULL DEFAULT 540,
+      ADD COLUMN IF NOT EXISTS day_end_minutes INTEGER NOT NULL DEFAULT 1020,
+      ADD COLUMN IF NOT EXISTS selected_dates JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
 
   await pool.query(`
@@ -307,6 +400,8 @@ async function seedPostgresFromJsonIfEmpty() {
     db.messages.length ||
     db.resources.length ||
     db.sessions.length ||
+    db.coordinatePolls.length ||
+    db.coordinateResponses.length ||
     db.buddyThreads.length
   ) {
     await writePostgresDb(db);
@@ -334,7 +429,7 @@ export async function initDb() {
 export async function readDb() {
   if (!pool) return readJsonDb();
 
-  const [users, rooms, messages, resources, sessions, buddyThreads] = await Promise.all([
+  const [users, rooms, messages, resources, sessions, coordinatePolls, coordinateResponses, buddyThreads] = await Promise.all([
     pool.query(`
       SELECT
         id,
@@ -360,6 +455,7 @@ export async function readDb() {
         r.theme,
         r.background,
         r.world_config AS "worldConfig",
+        r.integrations,
         r.channels,
         r.password_hash AS "passwordHash",
         r.owner_id AS "ownerId",
@@ -418,9 +514,46 @@ export async function readDb() {
         title,
         agenda,
         starts_at AS "startsAt",
+        ends_at AS "endsAt",
+        kind,
+        visibility,
+        location,
+        source,
+        source_id AS "sourceId",
+        metadata,
         created_at AS "createdAt"
       FROM sessions
       ORDER BY starts_at ASC
+    `),
+    pool.query(`
+      SELECT
+        id,
+        room_id AS "roomId",
+        created_by AS "createdBy",
+        title,
+        range_start AS "rangeStart",
+        range_end AS "rangeEnd",
+        slot_minutes AS "slotMinutes",
+        day_start_minutes AS "dayStartMinutes",
+        day_end_minutes AS "dayEndMinutes",
+        selected_dates AS "selectedDates",
+        timezone,
+        scheduled_session_id AS "scheduledSessionId",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM coordinate_polls
+      ORDER BY updated_at DESC
+    `),
+    pool.query(`
+      SELECT
+        id,
+        poll_id AS "pollId",
+        room_id AS "roomId",
+        user_id AS "userId",
+        slots,
+        updated_at AS "updatedAt"
+      FROM coordinate_responses
+      ORDER BY updated_at DESC
     `),
     pool.query(`
       SELECT
@@ -462,7 +595,20 @@ export async function readDb() {
     sessions: sessions.rows.map((session) => ({
       ...session,
       startsAt: toIso(session.startsAt),
+      endsAt: toIso(session.endsAt),
       createdAt: toIso(session.createdAt),
+    })),
+    coordinatePolls: coordinatePolls.rows.map((poll) => ({
+      ...poll,
+      rangeStart: toIso(poll.rangeStart),
+      rangeEnd: toIso(poll.rangeEnd),
+      createdAt: toIso(poll.createdAt),
+      updatedAt: toIso(poll.updatedAt),
+    })),
+    coordinateResponses: coordinateResponses.rows.map((response) => ({
+      ...response,
+      slots: Array.isArray(response.slots) ? response.slots : [],
+      updatedAt: toIso(response.updatedAt),
     })),
     buddyThreads: buddyThreads.rows.map((thread) => ({
       ...thread,
@@ -495,6 +641,8 @@ async function writePostgresDb(db) {
 
     // Keep writes atomic while the route layer works with the normalized app snapshot.
     await client.query("DELETE FROM buddy_threads");
+    await client.query("DELETE FROM coordinate_responses");
+    await client.query("DELETE FROM coordinate_polls");
     await client.query("DELETE FROM sessions");
     await client.query("DELETE FROM resources");
     await client.query("DELETE FROM messages");
@@ -525,12 +673,13 @@ async function writePostgresDb(db) {
         `
           INSERT INTO rooms (
             id, name, module_code, academic_term, room_logo, description, visibility, tags, theme,
-            background, world_config, channels, password_hash, owner_id, invite_code, created_at, updated_at,
+          background, world_config, channels, password_hash, owner_id, invite_code, created_at, updated_at,
+            integrations,
             resource_sync_fingerprint, resource_sync_updated_at
           )
           VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17, $18, $19
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
           )
         `,
         [
@@ -551,6 +700,7 @@ async function writePostgresDb(db) {
           room.inviteCode,
           room.createdAt,
           room.updatedAt,
+          JSON.stringify(room.integrations || {}),
           room.resourceSyncFingerprint || "",
           room.resourceSyncUpdatedAt || null,
         ],
@@ -619,9 +769,10 @@ async function writePostgresDb(db) {
       await client.query(
         `
           INSERT INTO sessions (
-            id, room_id, created_by, title, agenda, starts_at, created_at
+            id, room_id, created_by, title, agenda, starts_at, ends_at, kind,
+            visibility, location, source, source_id, metadata, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         `,
         [
           session.id,
@@ -630,7 +781,65 @@ async function writePostgresDb(db) {
           session.title,
           session.agenda || "",
           session.startsAt,
+          session.endsAt || null,
+          session.kind || "meeting",
+          session.visibility === "private" ? "private" : "room",
+          session.location || "",
+          session.source || "manual",
+          session.sourceId || "",
+          JSON.stringify(session.metadata || {}),
           session.createdAt,
+        ],
+      );
+    }
+
+    for (const poll of db.coordinatePolls || []) {
+      await client.query(
+        `
+          INSERT INTO coordinate_polls (
+            id, room_id, created_by, title, range_start, range_end, slot_minutes,
+            day_start_minutes, day_end_minutes, selected_dates, timezone,
+            scheduled_session_id, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        `,
+        [
+          poll.id,
+          poll.roomId,
+          poll.createdBy,
+          poll.title || "Group availability",
+          poll.rangeStart,
+          poll.rangeEnd,
+          poll.slotMinutes || 60,
+          poll.dayStartMinutes || 9 * 60,
+          poll.dayEndMinutes || 17 * 60,
+          JSON.stringify(Array.isArray(poll.selectedDates) ? poll.selectedDates : []),
+          poll.timezone || "Asia/Singapore",
+          poll.scheduledSessionId || "",
+          poll.createdAt,
+          poll.updatedAt,
+        ],
+      );
+    }
+
+    for (const response of db.coordinateResponses || []) {
+      await client.query(
+        `
+          INSERT INTO coordinate_responses (
+            id, poll_id, room_id, user_id, slots, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (poll_id, user_id) DO UPDATE SET
+            slots = EXCLUDED.slots,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          response.id,
+          response.pollId,
+          response.roomId,
+          response.userId,
+          JSON.stringify(Array.isArray(response.slots) ? response.slots : []),
+          response.updatedAt,
         ],
       );
     }

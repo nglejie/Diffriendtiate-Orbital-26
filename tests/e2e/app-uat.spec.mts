@@ -61,7 +61,7 @@ async function createRoomViaApi(request, token, overrides = {}) {
 
 // Full owner walkthrough: sign up through the UI, switch theme, create a room
 // with custom logo/background uploads, then verify the renamed World shell tabs
-// are usable and Coordidate remains disabled while it is intentionally rebuilt.
+// are usable and Coordidate opens its scheduler surface.
 test("UAT: user registers, toggles theme, creates a custom room, and navigates core tabs", async ({ page }) => {
   const email = uniqueEmail("uat-owner");
   await registerThroughUi(page, "UAT Owner", email);
@@ -108,7 +108,8 @@ test("UAT: user registers, toggles theme, creates a custom room, and navigates c
   await page.getByRole("button", { name: /^intelligrate$/i }).click();
   await expect(page.getByText(/intelligrate/i).first()).toBeVisible();
 
-  await expect(page.getByRole("button", { name: /^coordidate$/i })).toBeDisabled();
+  await page.getByRole("button", { name: /^coordidate$/i }).click();
+  await expect(page.getByRole("region", { name: "Coordidate" })).toBeVisible();
 });
 
 // Permission UAT: create an owner/member pair, join the member to the room, and

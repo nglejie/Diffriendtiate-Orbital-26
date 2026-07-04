@@ -62,8 +62,8 @@
   --theme-warning: var(--rose-pine-gold);
   --theme-warning-text: var(--rose-pine-gold);
   --theme-danger: var(--rose-pine-love);
-  --theme-on-accent: var(--rose-pine-base);
-  --theme-on-danger: var(--rose-pine-base);
+  --theme-on-accent: var(--rose-pine-text);
+  --theme-on-danger: var(--rose-pine-text);
   --theme-on-warning: var(--rose-pine-base);
   --shadow-color: var(--rose-pine-base);
   --app-bg: var(--theme-base);
@@ -142,8 +142,8 @@
   --accent-secondary-hover: var(--theme-secondary-soft);
   --accent-link: var(--theme-link);
   --button-primary-fg: var(--theme-on-accent);
-  --button-primary-bg: var(--accent-primary);
-  --button-primary-bg-hover: var(--accent-primary-hover);
+  --button-primary-bg: color-mix(in srgb, var(--accent-primary) 72%, var(--theme-surface-strong));
+  --button-primary-bg-hover: color-mix(in srgb, var(--accent-primary) 82%, var(--theme-surface-strong));
   --button-secondary-fg: var(--theme-text);
   --button-secondary-bg: color-mix(in srgb, var(--theme-accent) 11%, transparent);
   --button-secondary-bg-hover: color-mix(in srgb, var(--theme-accent) 18%, transparent);
@@ -9877,6 +9877,2907 @@ button.attachment-preview-card {
   opacity: 0.8;
 }
 
+.coordinate-content-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  background: var(--room-tab-bg);
+  backdrop-filter: blur(16px) saturate(1.05);
+}
+
+.coordinate-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+}
+
+.coordinate-topbar,
+.coordinate-calendar-toolbar,
+.coordinate-availability-toolbar,
+.coordinate-panel-heading,
+.coordinate-calendar-event > div {
+  display: flex;
+  align-items: center;
+}
+
+.coordinate-topbar {
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 62px;
+  padding: 18px 20px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 92%, var(--theme-base));
+  border: 1px solid var(--midnight-border);
+  border-radius: 14px;
+}
+
+.coordinate-topbar h2 {
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.coordinate-view-tabs,
+.coordinate-mode-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-radius: 12px;
+}
+
+.coordinate-view-tabs button,
+.coordinate-mode-group button,
+.coordinate-panel-heading button,
+.coordinate-best-list button,
+.integration-course-picker button,
+.coordinate-meeting-area-picks button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  color: color-mix(in srgb, var(--text-primary) 72%, transparent);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.coordinate-view-tabs button:hover,
+.coordinate-view-tabs button.active,
+.coordinate-mode-group button:hover,
+.coordinate-mode-group button.active,
+.coordinate-panel-heading button:hover,
+.coordinate-best-list button:hover,
+.coordinate-meeting-area-picks button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.coordinate-availability-layout,
+.coordinate-calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.coordinate-control-panel,
+.coordinate-heatmap-panel,
+.coordinate-calendar-panel {
+  min-height: 0;
+  background: color-mix(in srgb, var(--midnight-card-strong) 92%, var(--theme-base));
+  border: 1px solid var(--midnight-border);
+  border-radius: 14px;
+}
+
+.coordinate-control-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.coordinate-range-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: color-mix(in srgb, var(--midnight-card) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 12px;
+}
+
+.coordinate-range-card p {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  line-height: 1.45;
+}
+
+.coordinate-panel-heading {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.coordinate-panel-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.96rem;
+  font-weight: 700;
+}
+
+.coordinate-panel-heading span,
+.coordinate-best-list small,
+.coordinate-upcoming-list small {
+  color: color-mix(in srgb, var(--text-primary) 56%, transparent);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.coordinate-date-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.coordinate-shell .field input,
+.coordinate-shell .field select,
+.room-settings-screen .field select {
+  min-height: 40px;
+  width: 100%;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 84%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 10px;
+  outline: none;
+}
+
+.coordinate-shell .field select option,
+.room-settings-screen .field select option {
+  color: #f7f3f7;
+  background: #191724;
+}
+
+.coordinate-member-filter,
+.coordinate-best-list,
+.coordinate-upcoming-list {
+  display: grid;
+  gap: 8px;
+}
+
+.coordinate-member-filter button {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 9px;
+  color: color-mix(in srgb, var(--text-primary) 70%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+.coordinate-member-filter button span:nth-child(2) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-member-filter button:hover,
+.coordinate-member-filter button.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.coordinate-heatmap-panel,
+.coordinate-calendar-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  padding: 12px;
+}
+
+.coordinate-availability-toolbar,
+.coordinate-calendar-toolbar {
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding-bottom: 10px;
+}
+
+.coordinate-day-board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(148px, 1fr);
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+
+.coordinate-day-column {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.coordinate-day-column header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  gap: 2px;
+  min-height: 48px;
+  padding: 9px 10px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-day-column header span {
+  color: color-mix(in srgb, var(--text-primary) 56%, transparent);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.coordinate-day-column header strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coordinate-slot {
+  display: grid;
+  gap: 4px;
+  min-height: 76px;
+  padding: 10px;
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--shadow-color) 12%, transparent);
+  cursor: pointer;
+  text-align: left;
+}
+
+.coordinate-slot:hover {
+  border-color: color-mix(in srgb, var(--fantasy-gold) 50%, var(--midnight-border));
+}
+
+.coordinate-slot.own-available {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--fantasy-gold) 78%, transparent);
+}
+
+.coordinate-slot.own-ifNeeded {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--fantasy-rose-soft) 78%, transparent);
+}
+
+.coordinate-slot span,
+.coordinate-slot small {
+  color: color-mix(in srgb, var(--text-primary) 66%, transparent);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.coordinate-slot strong {
+  font-size: 0.98rem;
+}
+
+.coordinate-slot small {
+  min-height: 1.1em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-best-list article,
+.coordinate-upcoming-list article,
+.mini-session-list .mini-session-card {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+}
+
+.mini-session-list button.mini-session-card {
+  width: 100%;
+  cursor: pointer;
+}
+
+.mini-session-list button.mini-session-card:hover {
+  border-color: color-mix(in srgb, var(--coordinate-heat-color, #3aa875) 46%, var(--midnight-border));
+  background: color-mix(in srgb, var(--coordinate-heat-color, #3aa875) 15%, transparent);
+}
+
+.coordinate-best-list article {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.coordinate-best-list article > div,
+.coordinate-upcoming-list article {
+  min-width: 0;
+}
+
+.coordinate-best-list strong,
+.coordinate-upcoming-list strong,
+.mini-session-list strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coordinate-best-list span,
+.coordinate-upcoming-list span,
+.mini-session-list span,
+.mini-session-list small {
+  color: color-mix(in srgb, var(--text-primary) 60%, transparent);
+  font-size: 0.78rem;
+}
+
+.coordinate-upcoming-list article.deadline,
+.mini-session-list .mini-session-card.deadline {
+  border-color: color-mix(in srgb, var(--fantasy-gold) 26%, var(--midnight-border));
+}
+
+.mini-session-list .mini-session-card.ongoing {
+  background: color-mix(in srgb, var(--coordinate-heat-color, #3aa875) 18%, var(--text-primary) 5%);
+  border-color: color-mix(in srgb, var(--coordinate-heat-color, #3aa875) 54%, var(--midnight-border));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--coordinate-heat-color, #3aa875) 86%, transparent);
+}
+
+.mini-session-list .mini-session-card.deadline.soon {
+  background: color-mix(in srgb, var(--fantasy-gold) 16%, var(--text-primary) 5%);
+  border-color: color-mix(in srgb, var(--fantasy-gold) 52%, var(--midnight-border));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--fantasy-gold) 82%, transparent);
+}
+
+.mini-session-list .mini-session-state {
+  color: color-mix(in srgb, var(--text-primary) 76%, transparent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.coordinate-calendar-toolbar div {
+  display: flex;
+  gap: 8px;
+}
+
+.coordinate-calendar-toolbar button:not(.primary-button) {
+  display: grid;
+  min-width: 38px;
+  min-height: 34px;
+  place-items: center;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+  font-weight: 800;
+}
+
+.coordinate-week-grid {
+  display: grid;
+  grid-template-columns: 68px repeat(7, minmax(118px, 1fr));
+  grid-auto-rows: minmax(62px, auto);
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 12px;
+}
+
+.coordinate-calendar-event {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  padding: 8px 28px 8px 9px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 36%, var(--midnight-card));
+  border: 1px solid color-mix(in srgb, var(--fantasy-rose) 30%, var(--midnight-border));
+  border-radius: 9px;
+}
+
+.coordinate-calendar-event.event {
+  background: color-mix(in srgb, var(--fantasy-orchid) 28%, var(--midnight-card));
+}
+
+.coordinate-calendar-event.deadline {
+  background: color-mix(in srgb, var(--fantasy-gold) 28%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--fantasy-gold) 34%, var(--midnight-border));
+}
+
+.coordinate-calendar-event > div {
+  gap: 5px;
+  color: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.coordinate-calendar-event strong {
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.2;
+}
+
+.coordinate-calendar-event small {
+  color: color-mix(in srgb, var(--text-primary) 72%, transparent);
+  font-size: 0.72rem;
+}
+
+.coordinate-calendar-event > button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  width: 22px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--shadow-color) 18%, transparent);
+  border: 0;
+  border-radius: 50%;
+}
+
+.coordinate-empty-state {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+  justify-items: center;
+  min-height: 320px;
+  color: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  text-align: center;
+}
+
+.coordinate-empty-state strong {
+  color: var(--text-primary);
+}
+
+.coordinate-event-dialog .field select {
+  min-height: 40px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 84%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 10px;
+}
+
+.coordinate-location-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: color-mix(in srgb, var(--midnight-card) 84%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 10px;
+}
+
+.coordinate-location-input input {
+  min-height: 40px;
+  padding: 0;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.coordinate-meeting-area-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.coordinate-meeting-area-picks button {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.room-settings-integrations {
+  display: grid;
+  gap: 28px;
+  width: min(860px, 100%);
+}
+
+.integration-card {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.integration-connect-form,
+.integration-course-picker {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.integration-course-picker {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.integration-status {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-primary) 66%, transparent);
+  font-weight: 700;
+}
+
+@media (max-width: 1100px) {
+  .coordinate-availability-layout,
+  .coordinate-calendar-layout {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .coordinate-control-panel {
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    overflow: visible;
+  }
+
+  .coordinate-calendar-panel,
+  .coordinate-heatmap-panel {
+    min-height: 620px;
+  }
+
+  .integration-connect-form,
+  .integration-course-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .coordinate-topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .coordinate-view-tabs,
+  .coordinate-mode-group {
+    width: 100%;
+  }
+
+  .coordinate-view-tabs button,
+  .coordinate-mode-group button {
+    flex: 1 1 auto;
+  }
+
+  .coordinate-control-panel,
+  .coordinate-date-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .coordinate-day-board {
+    grid-auto-columns: minmax(170px, 78vw);
+  }
+}
+
+.coordinate-calendar-product {
+  --coordinate-shell: color-mix(in srgb, var(--midnight-card-strong) 86%, transparent);
+  --coordinate-panel: color-mix(in srgb, var(--midnight-card) 72%, transparent);
+  --coordinate-panel-strong: color-mix(in srgb, var(--midnight-card-strong) 92%, var(--theme-base));
+  --coordinate-line: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --coordinate-line-strong: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  --coordinate-muted: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  --coordinate-heat-empty: color-mix(in srgb, var(--midnight-card) 90%, transparent);
+  --coordinate-heat-color: #38a86f;
+  --coordinate-if-needed: var(--fantasy-gold);
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+}
+
+.coordinate-product-toolbar {
+  display: grid;
+  grid-template-columns: minmax(270px, auto) minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 58px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: var(--coordinate-shell);
+  border: 1px solid var(--midnight-border);
+  border-radius: 12px;
+  box-shadow: 0 18px 46px color-mix(in srgb, var(--shadow-color) 18%, transparent);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.coordinate-date-controls,
+.coordinate-toolbar-actions,
+.coordinate-view-switch,
+.coordinate-paint-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.coordinate-date-controls button,
+.coordinate-view-switch button,
+.coordinate-paint-toggle button,
+.coordinate-inspector-heading,
+.coordinate-text-button,
+.coordinate-best-times button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+  color: color-mix(in srgb, var(--text-primary) 74%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.coordinate-date-controls button:hover,
+.coordinate-view-switch button:hover,
+.coordinate-view-switch button.active,
+.coordinate-paint-toggle button:hover,
+.coordinate-paint-toggle button.active,
+.coordinate-inspector-heading:hover,
+.coordinate-text-button:hover,
+.coordinate-best-times button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+.coordinate-paint-toggle button.available.active {
+  color: #d9f7e6;
+  border-color: color-mix(in srgb, var(--coordinate-heat-color) 70%, transparent);
+  background: color-mix(in srgb, var(--coordinate-heat-color) 24%, transparent);
+}
+
+.coordinate-paint-toggle button.if-needed.active {
+  color: var(--theme-warning-text);
+  border-color: color-mix(in srgb, var(--coordinate-if-needed) 62%, transparent);
+  background: color-mix(in srgb, var(--coordinate-if-needed) 18%, transparent);
+}
+
+.coordinate-date-controls input,
+.coordinate-window-form input,
+.coordinate-window-form select {
+  min-height: 34px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 78%, var(--theme-base));
+  border: 1px solid var(--midnight-border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.84rem;
+  outline: 0;
+}
+
+.coordinate-toolbar-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-toolbar-actions {
+  justify-content: flex-end;
+}
+
+.coordinate-view-switch {
+  padding: 3px;
+  background: color-mix(in srgb, var(--shadow-color) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-view-switch button {
+  min-height: 30px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.coordinate-view-switch button.active {
+  background: color-mix(in srgb, var(--fantasy-rose) 20%, transparent);
+  border-color: color-mix(in srgb, var(--fantasy-rose) 28%, transparent);
+}
+
+.coordinate-scheduler-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.coordinate-scheduler-main,
+.coordinate-calendar-grid-surface,
+.coordinate-month-surface,
+.coordinate-inspector {
+  min-height: 0;
+  color: var(--text-primary);
+  background: var(--coordinate-shell);
+  border: 1px solid var(--midnight-border);
+  border-radius: 12px;
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.coordinate-scheduler-main,
+.coordinate-calendar-grid-surface,
+.coordinate-month-surface {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.coordinate-scheduler-main {
+  padding: 10px;
+}
+
+.coordinate-edit-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 0 10px;
+}
+
+.coordinate-paint-toggle {
+  flex-wrap: wrap;
+}
+
+.coordinate-heatmap-grid {
+  display: grid;
+  grid-template-columns: 64px repeat(var(--coordinate-day-count), minmax(112px, 1fr));
+  grid-template-rows: 54px;
+  grid-auto-rows: 28px;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--coordinate-line);
+  border-radius: 10px;
+}
+
+.coordinate-heatmap-grid.polished {
+  grid-auto-rows: 26px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 88%, transparent);
+}
+
+.coordinate-grid-row {
+  display: contents;
+}
+
+.coordinate-grid-corner,
+.coordinate-grid-day {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 54px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
+  border-bottom: 1px solid var(--coordinate-line-strong);
+}
+
+.coordinate-grid-corner {
+  left: 0;
+  z-index: 3;
+  border-right: 1px solid var(--coordinate-line-strong);
+}
+
+.coordinate-grid-day {
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  align-content: center;
+  color: var(--coordinate-muted);
+  border-right: 1px solid var(--coordinate-line);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.coordinate-grid-day strong {
+  color: var(--text-primary);
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+.coordinate-grid-time {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: grid;
+  place-items: start end;
+  min-height: 28px;
+  padding: 4px 9px 0 0;
+  color: var(--coordinate-muted);
+  background: color-mix(in srgb, var(--midnight-card-strong) 96%, var(--theme-base));
+  border-right: 1px solid var(--coordinate-line-strong);
+  border-bottom: 1px dashed color-mix(in srgb, var(--text-primary) 8%, transparent);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.coordinate-heat-slot,
+.coordinate-calendar-slot,
+.coordinate-grid-gap {
+  min-height: 28px;
+  border: 0;
+  border-right: 1px solid var(--coordinate-line);
+  border-bottom: 1px dashed color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.coordinate-heat-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-primary);
+  background:
+    color-mix(in srgb, var(--coordinate-heat-color) var(--heat), var(--coordinate-heat-empty));
+  cursor: crosshair;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1;
+  user-select: none;
+}
+
+.coordinate-heat-slot:hover {
+  outline: 2px solid color-mix(in srgb, var(--text-primary) 34%, transparent);
+  outline-offset: -2px;
+}
+
+.coordinate-heat-slot.best::after {
+  position: absolute;
+  inset: 2px;
+  content: "";
+  border: 1px solid color-mix(in srgb, var(--fantasy-gold) 72%, transparent);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.coordinate-heat-slot.own-available.best::after {
+  border-color: color-mix(in srgb, var(--coordinate-heat-color) 90%, #fff 8%);
+}
+
+.coordinate-heat-slot.own-available::before,
+.coordinate-heat-slot.own-ifNeeded::before {
+  position: absolute;
+  inset: 3px;
+  content: "";
+  border: 2px solid color-mix(in srgb, var(--text-primary) 72%, transparent);
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+.coordinate-heat-slot.own-ifNeeded::before {
+  border-color: color-mix(in srgb, var(--coordinate-if-needed) 82%, transparent);
+}
+
+.coordinate-heat-slot small {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  color: var(--theme-warning-text);
+  font-size: 0.6rem;
+}
+
+.coordinate-calendar-grid-surface {
+  padding: 10px;
+}
+
+.coordinate-heatmap-grid.calendar-mode {
+  grid-auto-rows: 34px;
+}
+
+.coordinate-calendar-slot {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--midnight-card) 74%, transparent);
+  cursor: pointer;
+}
+
+.coordinate-calendar-slot:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.coordinate-event-block {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-height: 46px;
+  padding: 6px 24px 6px 7px;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 32%, var(--midnight-card));
+  border: 1px solid color-mix(in srgb, var(--fantasy-rose) 32%, var(--midnight-border));
+  border-radius: 7px;
+  text-align: left;
+}
+
+.coordinate-event-block.event {
+  background: color-mix(in srgb, var(--fantasy-orchid) 24%, var(--midnight-card));
+}
+
+.coordinate-event-block.deadline {
+  background: color-mix(in srgb, var(--fantasy-gold) 24%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--fantasy-gold) 36%, var(--midnight-border));
+}
+
+.coordinate-event-block > div {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: color-mix(in srgb, var(--text-primary) 64%, transparent);
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.coordinate-event-block strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.77rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-event-block small {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-event-block button,
+.coordinate-month-grid article span[role="button"] {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  width: 20px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--shadow-color) 22%, transparent);
+  border: 0;
+  border-radius: 50%;
+}
+
+.coordinate-month-surface {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+  padding: 10px;
+}
+
+.coordinate-month-weekdays,
+.coordinate-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(104px, 1fr));
+}
+
+.coordinate-month-weekdays {
+  min-height: 36px;
+  align-items: center;
+  color: var(--coordinate-muted);
+  border: 1px solid var(--coordinate-line);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: color-mix(in srgb, var(--midnight-card-strong) 94%, transparent);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.coordinate-month-grid {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: repeat(6, minmax(112px, 1fr));
+  overflow: auto;
+  border: 1px solid var(--coordinate-line);
+  border-radius: 0 0 10px 10px;
+}
+
+.coordinate-month-grid > [role="button"] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 70%, transparent);
+  border: 0;
+  border-right: 1px solid var(--coordinate-line);
+  border-bottom: 1px solid var(--coordinate-line);
+  cursor: pointer;
+  text-align: left;
+}
+
+.coordinate-month-grid > [role="button"]:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.coordinate-month-grid > [role="button"].muted {
+  color: color-mix(in srgb, var(--text-primary) 38%, transparent);
+  background: color-mix(in srgb, var(--midnight-card) 44%, transparent);
+}
+
+.coordinate-month-grid > [role="button"].today > span:first-child {
+  display: grid;
+  width: 28px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: var(--fantasy-rose);
+  border-radius: 50%;
+}
+
+.coordinate-month-grid > [role="button"] > div {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.coordinate-month-more-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 20px;
+  padding: 1px 8px;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border: 0;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.coordinate-month-more-button:hover,
+.coordinate-month-more-button:focus-visible {
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  outline: 0;
+}
+
+.coordinate-month-more-popover {
+  position: absolute;
+  z-index: 80;
+  display: grid;
+  width: min(280px, calc(100% - 20px));
+  max-height: min(320px, calc(100% - 56px));
+  overflow: hidden;
+  background: color-mix(in srgb, var(--midnight-card-strong) 98%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: 18px;
+  box-shadow: 0 22px 48px color-mix(in srgb, var(--shadow-color) 42%, transparent);
+}
+
+.coordinate-month-more-popover header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 14px 16px 8px;
+}
+
+.coordinate-month-more-popover header span {
+  color: var(--coordinate-muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.coordinate-month-more-popover header strong {
+  display: grid;
+  width: 38px;
+  aspect-ratio: 1;
+  grid-column: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 72%, var(--midnight-card));
+  border-radius: 50%;
+  font-size: 1.04rem;
+}
+
+.coordinate-month-more-popover header button {
+  display: grid;
+  width: 30px;
+  aspect-ratio: 1;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  place-items: center;
+  padding: 0;
+  color: var(--coordinate-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.coordinate-month-more-popover header button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.coordinate-month-more-list {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 10px 12px;
+}
+
+.coordinate-month-more-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 24px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 26%, transparent);
+  border: 1px solid color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 28%, transparent);
+  border-radius: 6px;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.coordinate-month-more-list article.timed {
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.coordinate-month-more-list article.timed span {
+  width: 8px;
+  aspect-ratio: 1;
+  background: var(--event-color, var(--fantasy-rose));
+  border-radius: 50%;
+}
+
+.coordinate-month-more-list article strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coordinate-month-grid article {
+  position: relative;
+  display: grid;
+  min-height: 20px;
+  padding: 2px 20px 2px 6px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 24%, transparent);
+  border-radius: 5px;
+  font-size: 0.7rem;
+}
+
+.coordinate-month-grid article.deadline {
+  background: color-mix(in srgb, var(--fantasy-gold) 24%, transparent);
+}
+
+.coordinate-month-grid article strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-month-grid article span[role="button"] {
+  top: 2px;
+  right: 2px;
+  width: 17px;
+}
+
+.coordinate-inspector {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.coordinate-inspector-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--midnight-card) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-inspector-heading,
+.coordinate-inspector-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.coordinate-inspector-heading {
+  padding-inline: 0;
+  background: transparent;
+  border: 0;
+}
+
+.coordinate-inspector-heading span,
+.coordinate-inspector-title strong {
+  color: var(--text-primary);
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+.coordinate-inspector-title span,
+.coordinate-hover-summary span,
+.coordinate-hover-summary small {
+  color: var(--coordinate-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.coordinate-window-form {
+  display: grid;
+  gap: 10px;
+}
+
+.coordinate-date-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.coordinate-respondent-list,
+.coordinate-best-times {
+  display: grid;
+  gap: 6px;
+}
+
+.coordinate-respondent-list button {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px;
+  color: color-mix(in srgb, var(--text-primary) 70%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.coordinate-respondent-list button:hover,
+.coordinate-respondent-list button.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.coordinate-respondent-list button > span:nth-child(2) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-text-button {
+  justify-self: start;
+  min-height: 30px;
+  padding-inline: 0;
+  color: var(--fantasy-rose-soft);
+  background: transparent;
+  border: 0;
+}
+
+.coordinate-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.coordinate-toggle-row input {
+  width: 38px;
+  height: 20px;
+  accent-color: var(--coordinate-heat-color);
+}
+
+.coordinate-hover-summary {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border-radius: 8px;
+}
+
+.coordinate-hover-summary strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-best-times button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: 100%;
+  min-height: 36px;
+  text-align: left;
+}
+
+.coordinate-best-times button span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-best-times button strong {
+  color: var(--text-primary);
+}
+
+.coordinate-empty-state.refined {
+  align-self: center;
+  justify-self: center;
+  min-height: 0;
+  padding: 28px;
+}
+
+.integration-connected-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--coordinate-heat-color, #38a86f) 14%, var(--midnight-card));
+  border: 1px solid color-mix(in srgb, var(--coordinate-heat-color, #38a86f) 36%, var(--midnight-border));
+  border-radius: 12px;
+}
+
+.integration-connected-summary > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.integration-connected-summary strong,
+.integration-connected-summary span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.integration-connected-summary span {
+  color: color-mix(in srgb, var(--text-primary) 62%, transparent);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 1180px) {
+  .coordinate-product-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .coordinate-toolbar-title {
+    text-align: left;
+  }
+
+  .coordinate-toolbar-actions {
+    justify-content: space-between;
+  }
+
+  .coordinate-scheduler-layout {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .coordinate-inspector {
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+    overflow: visible;
+  }
+}
+
+@media (max-width: 760px) {
+  .coordinate-product-toolbar,
+  .coordinate-date-controls,
+  .coordinate-toolbar-actions,
+  .coordinate-view-switch {
+    align-items: stretch;
+  }
+
+  .coordinate-date-controls,
+  .coordinate-toolbar-actions,
+  .coordinate-view-switch,
+  .coordinate-inspector {
+    flex-wrap: wrap;
+    grid-template-columns: 1fr;
+  }
+
+  .coordinate-date-controls input,
+  .coordinate-date-controls button,
+  .coordinate-view-switch button,
+  .coordinate-toolbar-actions > .primary-button {
+    flex: 1 1 auto;
+  }
+
+  .coordinate-heatmap-grid {
+    grid-template-columns: 58px repeat(var(--coordinate-day-count), minmax(96px, 1fr));
+  }
+
+  .coordinate-month-weekdays,
+  .coordinate-month-grid {
+    grid-template-columns: repeat(7, minmax(86px, 1fr));
+  }
+}
+
+.coordinate-content-panel {
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--theme-surface) 46%, transparent),
+      color-mix(in srgb, var(--theme-base) 30%, transparent)
+    );
+  border-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent);
+  backdrop-filter: blur(22px) saturate(1.12);
+}
+
+.coordinate-calendar-product {
+  --coordinate-shell: color-mix(in srgb, var(--midnight-card-strong) 70%, transparent);
+  --coordinate-panel: color-mix(in srgb, var(--midnight-card) 58%, transparent);
+  --coordinate-panel-strong: color-mix(in srgb, var(--midnight-card-strong) 76%, transparent);
+  --coordinate-line: color-mix(in srgb, var(--text-primary) 11%, transparent);
+  --coordinate-line-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  --coordinate-muted: color-mix(in srgb, var(--text-primary) 62%, transparent);
+  --coordinate-heat-empty: color-mix(in srgb, var(--midnight-card) 46%, transparent);
+  --coordinate-heat-color: #3aa875;
+  min-height: 0;
+}
+
+.coordinate-product-toolbar,
+.coordinate-scheduler-main,
+.coordinate-calendar-grid-surface,
+.coordinate-month-surface,
+.coordinate-inspector {
+  background:
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--midnight-card-strong) 70%, transparent),
+      color-mix(in srgb, var(--midnight-card) 48%, transparent)
+    );
+  border-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent),
+    0 18px 46px color-mix(in srgb, var(--shadow-color) 18%, transparent);
+}
+
+.coordinate-product-toolbar {
+  grid-template-columns: max-content minmax(110px, 1fr) max-content;
+}
+
+.coordinate-date-picker-root {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.coordinate-date-button {
+  gap: 8px;
+  min-width: 134px;
+}
+
+.coordinate-date-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 292px;
+  padding: 12px;
+  color: var(--text-primary);
+  background: var(--midnight-card-strong);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px color-mix(in srgb, var(--shadow-color) 32%, transparent);
+  backdrop-filter: none;
+}
+
+.coordinate-date-popover header,
+.coordinate-date-popover footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.coordinate-date-popover header span {
+  display: flex;
+  gap: 6px;
+}
+
+.coordinate-date-popover button {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.coordinate-date-popover button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.coordinate-date-weekdays,
+.coordinate-date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.coordinate-date-weekdays {
+  margin: 12px 0 6px;
+  color: var(--coordinate-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.coordinate-date-grid button {
+  display: grid;
+  min-height: 32px;
+  place-items: center;
+  padding: 0;
+}
+
+.coordinate-date-grid button.muted {
+  color: color-mix(in srgb, var(--text-primary) 38%, transparent);
+}
+
+.coordinate-date-grid button.today {
+  border-color: color-mix(in srgb, var(--fantasy-gold) 42%, transparent);
+}
+
+.coordinate-date-grid button.selected {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 42%, transparent);
+  border-color: color-mix(in srgb, var(--fantasy-rose) 60%, transparent);
+}
+
+.coordinate-date-grid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.32;
+}
+
+.coordinate-date-popover footer {
+  margin-top: 10px;
+}
+
+.coordinate-view-switch {
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.coordinate-view-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 3px 4px;
+  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
+}
+
+.coordinate-view-switch button.availability {
+  margin-left: 0;
+}
+
+.coordinate-view-switch button,
+.coordinate-toolbar-actions > .primary-button.compact {
+  white-space: nowrap;
+}
+
+.coordinate-toolbar-actions > .primary-button.compact {
+  flex: 0 0 auto;
+  min-height: 34px;
+  min-width: 124px;
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+.coordinate-scheduler-main.availability-mode {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.coordinate-scheduler-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+}
+
+.coordinate-availability-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-availability-header > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.coordinate-availability-header strong,
+.coordinate-availability-header small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-availability-header small {
+  color: var(--coordinate-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.coordinate-availability-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.coordinate-window-status {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  color: color-mix(in srgb, var(--fantasy-gold) 88%, var(--text-primary));
+  background: color-mix(in srgb, var(--fantasy-gold) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fantasy-gold) 28%, transparent);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.coordinate-window-status.scheduled {
+  color: #d9f7e6;
+  background: color-mix(in srgb, var(--coordinate-heat-color) 20%, transparent);
+  border-color: color-mix(in srgb, var(--coordinate-heat-color) 38%, transparent);
+}
+
+.coordinate-scheduler-main.availability-mode .coordinate-heatmap-grid {
+  height: 100%;
+  grid-auto-rows: minmax(28px, 1fr);
+}
+
+.coordinate-heatmap-grid {
+  background: color-mix(in srgb, var(--midnight-card-strong) 54%, transparent);
+  scrollbar-color: color-mix(in srgb, var(--text-primary) 22%, transparent) transparent;
+}
+
+.coordinate-heatmap-grid.polished {
+  background: color-mix(in srgb, var(--midnight-card-strong) 50%, transparent);
+}
+
+.coordinate-grid-corner,
+.coordinate-grid-day,
+.coordinate-grid-time {
+  background: color-mix(in srgb, var(--midnight-card-strong) 78%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.coordinate-grid-time {
+  min-width: 72px;
+  padding-right: 10px;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.coordinate-heatmap-grid {
+  grid-template-columns: 72px repeat(var(--coordinate-day-count), minmax(118px, 1fr));
+}
+
+.coordinate-heat-slot {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--coordinate-heat-color) var(--heat), transparent),
+      color-mix(in srgb, var(--coordinate-heat-color) calc(var(--heat) * 0.74), var(--coordinate-heat-empty))
+    );
+}
+
+.coordinate-calendar-slot {
+  min-height: 34px;
+  background: color-mix(in srgb, var(--midnight-card) 42%, transparent);
+}
+
+.coordinate-calendar-slot.all-day {
+  min-height: 46px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--fantasy-gold) 5%, transparent);
+}
+
+.coordinate-calendar-grid-surface,
+.coordinate-month-surface {
+  height: 100%;
+}
+
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode {
+  height: 100%;
+}
+
+.coordinate-event-block {
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.coordinate-event-block:hover {
+  border-color: color-mix(in srgb, var(--text-primary) 24%, transparent);
+}
+
+.coordinate-event-block:focus-visible,
+.coordinate-month-grid article:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--fantasy-gold) 72%, transparent);
+  outline-offset: 2px;
+}
+
+.coordinate-month-grid > [role="button"].today > span:first-child {
+  color: var(--theme-base);
+  background: color-mix(in srgb, var(--fantasy-gold) 88%, var(--text-primary));
+  font-weight: 900;
+}
+
+.coordinate-month-grid article {
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.coordinate-inspector {
+  grid-auto-rows: max-content;
+}
+
+.coordinate-inspector-section {
+  background: color-mix(in srgb, var(--midnight-card) 48%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.coordinate-icon-text-button,
+.coordinate-form-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.coordinate-icon-text-button {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--fantasy-rose-soft);
+  background: color-mix(in srgb, var(--fantasy-rose) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fantasy-rose) 16%, transparent);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.coordinate-window-list {
+  display: grid;
+  gap: 7px;
+}
+
+.coordinate-window-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  min-height: 72px;
+  padding: 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.coordinate-window-list button:hover,
+.coordinate-window-list button.active {
+  background: color-mix(in srgb, var(--fantasy-rose) 12%, transparent);
+  border-color: color-mix(in srgb, var(--fantasy-rose) 26%, transparent);
+}
+
+.coordinate-window-list button strong,
+.coordinate-window-list button small,
+.coordinate-window-list button em {
+  overflow: hidden;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-window-list button strong,
+.coordinate-window-list button small {
+  grid-column: 1 / -1;
+}
+
+.coordinate-window-list button em {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  color: var(--coordinate-muted);
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.coordinate-window-list .coordinate-window-status {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.coordinate-muted-copy {
+  margin: 0;
+  color: var(--coordinate-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.coordinate-segmented-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.coordinate-segmented-options button {
+  min-height: 34px;
+  padding: 0 10px;
+  color: color-mix(in srgb, var(--text-primary) 76%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.coordinate-segmented-options button:hover,
+.coordinate-segmented-options button.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 18%, transparent);
+  border-color: color-mix(in srgb, var(--fantasy-rose) 30%, transparent);
+}
+
+.coordinate-form-actions {
+  flex-wrap: wrap;
+}
+
+.coordinate-respondent-list button {
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  min-height: 46px;
+  padding: 6px 8px;
+}
+
+.coordinate-respondent-list button.active {
+  background: color-mix(in srgb, var(--fantasy-rose) 14%, transparent);
+  border-color: color-mix(in srgb, var(--fantasy-rose) 28%, transparent);
+}
+
+.coordinate-respondent-list button > span:nth-child(2) {
+  display: grid;
+  gap: 2px;
+}
+
+.coordinate-respondent-list button > span:nth-child(2) strong,
+.coordinate-respondent-list button > span:nth-child(2) small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-respondent-list button > span:nth-child(2) small {
+  color: var(--coordinate-muted);
+  font-size: 0.68rem;
+}
+
+.coordinate-member-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 18%, var(--midnight-card));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: 50%;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+img.coordinate-member-avatar {
+  object-fit: cover;
+}
+
+.coordinate-member-avatar.rendered {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
+.coordinate-member-avatar .limeets-avatar-stack {
+  transform: translateY(2px) scale(0.86);
+}
+
+.coordinate-toggle-row input {
+  width: 18px;
+  height: 18px;
+}
+
+.coordinate-event-kind {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--fantasy-rose) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fantasy-rose) 36%, transparent);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.coordinate-event-kind.deadline {
+  color: var(--theme-base);
+  background: color-mix(in srgb, var(--fantasy-gold) 82%, var(--text-primary));
+}
+
+.coordinate-event-details header > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.coordinate-event-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+  gap: 10px 14px;
+}
+
+.coordinate-event-detail-grid span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--coordinate-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.coordinate-event-detail-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.coordinate-event-notes {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-event-notes p {
+  margin: 0;
+  color: var(--coordinate-muted);
+}
+
+.secondary-button.compact.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+}
+
+.calendar-sidebar-section {
+  gap: 8px;
+}
+
+.calendar-sidebar-heading {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.calendar-sidebar-heading h3 {
+  margin: 0;
+}
+
+.calendar-sidebar-heading svg {
+  transition: transform 160ms ease;
+}
+
+.calendar-sidebar-heading[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+
+@media (max-width: 1180px) {
+  .coordinate-availability-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .coordinate-availability-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 1360px) {
+  .coordinate-product-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .coordinate-toolbar-title {
+    text-align: left;
+  }
+
+  .coordinate-toolbar-actions {
+    justify-content: space-between;
+  }
+
+  .coordinate-heatmap-grid {
+    grid-template-columns: 66px repeat(var(--coordinate-day-count), minmax(74px, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .coordinate-date-button {
+    width: 100%;
+  }
+
+  .coordinate-date-popover {
+    width: min(292px, calc(100vw - 28px));
+  }
+
+  .coordinate-heatmap-grid {
+    grid-template-columns: 66px repeat(var(--coordinate-day-count), minmax(100px, 1fr));
+  }
+}
+
+.coordinate-calendar-product {
+  overflow: visible;
+}
+
+.coordinate-product-toolbar {
+  position: relative;
+  z-index: 120;
+  overflow: visible;
+}
+
+.coordinate-date-popover {
+  z-index: 5000;
+}
+
+.coordinate-window-dialog,
+.coordinate-event-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(88vh, 760px);
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.coordinate-window-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(96vh, 900px);
+  gap: 12px;
+  padding: 20px;
+}
+
+.coordinate-window-dialog-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.coordinate-window-dialog-section h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.94rem;
+  font-weight: 750;
+}
+
+.coordinate-window-dialog-section.compact {
+  gap: 8px;
+}
+
+.coordinate-time-range-fields,
+.coordinate-event-dialog .form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.room-form-modal.coordinate-window-dialog .field input,
+.room-form-modal.coordinate-window-dialog .field select,
+.room-form-modal.coordinate-event-dialog .field input,
+.room-form-modal.coordinate-event-dialog .field select,
+.room-form-modal.coordinate-event-dialog .field textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.coordinate-date-select-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--coordinate-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.coordinate-date-select-copy button {
+  padding: 0;
+  color: var(--fantasy-rose-soft);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.coordinate-date-selection-calendar {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--midnight-card) 56%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 12px;
+}
+
+.coordinate-date-selection-calendar header {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.coordinate-date-selection-calendar header button {
+  display: grid;
+  width: 30px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.coordinate-date-selection-calendar header button:hover {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.coordinate-window-dialog .coordinate-date-weekdays {
+  margin: 6px 0 2px;
+}
+
+.coordinate-window-dialog .coordinate-date-grid {
+  gap: 3px;
+}
+
+.coordinate-window-dialog .coordinate-date-grid button {
+  min-height: 26px;
+}
+
+.coordinate-date-grid.selectable button {
+  border-radius: 999px;
+  user-select: none;
+}
+
+.coordinate-date-grid.selectable button.selected {
+  color: #effaf3;
+  background: color-mix(in srgb, var(--coordinate-heat-color) 74%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--coordinate-heat-color) 88%, transparent);
+}
+
+.coordinate-window-modal-actions {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.coordinate-action-divider {
+  width: 1px;
+  height: 30px;
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+.coordinate-mini-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: var(--coordinate-muted);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.coordinate-mini-toggle input,
+.coordinate-toggle-row.compact input {
+  width: 16px;
+  height: 16px;
+}
+
+.coordinate-paint-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(78px, 1fr));
+  gap: 4px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--shadow-color) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-paint-toggle button,
+.coordinate-availability-actions .secondary-button.compact,
+.coordinate-availability-actions .primary-button.compact {
+  min-height: 34px;
+}
+
+.coordinate-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.coordinate-heat-slot {
+  cursor: default;
+}
+
+.coordinate-heatmap-grid.editing .coordinate-heat-slot {
+  cursor: crosshair;
+}
+
+.coordinate-heatmap-grid.editing.paint-available .coordinate-heat-slot:hover {
+  outline-color: color-mix(in srgb, var(--coordinate-heat-color) 78%, transparent);
+}
+
+.coordinate-heatmap-grid.editing.paint-ifNeeded .coordinate-heat-slot:hover {
+  outline-color: color-mix(in srgb, var(--coordinate-if-needed) 82%, transparent);
+}
+
+.coordinate-heatmap-grid.editing.paint-erase .coordinate-heat-slot:hover {
+  outline-color: color-mix(in srgb, var(--text-primary) 38%, transparent);
+}
+
+.coordinate-heat-slot.own-available::before,
+.coordinate-heat-slot.own-ifNeeded::before {
+  inset: 4px;
+}
+
+.coordinate-heat-slot small {
+  right: 7px;
+  bottom: 6px;
+  padding: 0 2px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 72%, transparent);
+  border-radius: 4px;
+  line-height: 1.1;
+}
+
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode {
+  position: relative;
+  grid-template-rows: 54px 42px;
+  grid-auto-rows: 38px;
+}
+
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode .coordinate-grid-corner,
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode .coordinate-grid-day {
+  z-index: 30;
+  overflow: visible;
+  background: var(--midnight-card-strong);
+  backdrop-filter: none;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--theme-base) 32%, transparent);
+}
+
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode .coordinate-grid-corner::before,
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode .coordinate-grid-day::before {
+  position: absolute;
+  inset: -32px -1px 0;
+  z-index: 0;
+  content: "";
+  pointer-events: none;
+  background: var(--midnight-card-strong);
+  border-bottom: 1px solid var(--coordinate-line-strong);
+}
+
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode .coordinate-grid-day > span,
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode .coordinate-grid-day > strong {
+  position: relative;
+  z-index: 1;
+}
+
+.coordinate-calendar-slot {
+  min-height: 38px;
+  padding: 0;
+}
+
+.coordinate-calendar-slot.all-day {
+  display: grid;
+  align-content: center;
+  min-height: 42px;
+  padding: 4px;
+}
+
+.coordinate-timed-event-layer {
+  position: relative;
+  z-index: 6;
+  min-height: 100%;
+  pointer-events: none;
+}
+
+.coordinate-timed-event-layer .coordinate-event-block {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.coordinate-event-block {
+  min-height: 24px;
+  padding: 4px 7px;
+  border-radius: 6px;
+}
+
+.coordinate-event-block.all-day {
+  min-height: 24px;
+  align-content: center;
+  padding: 2px 8px;
+}
+
+.coordinate-event-block.all-day small {
+  display: none;
+}
+
+.coordinate-event-block.timed {
+  align-content: start;
+  gap: 1px;
+  overflow: hidden;
+}
+
+.coordinate-event-block strong {
+  min-width: 0;
+}
+
+.coordinate-event-block button,
+.coordinate-month-grid article span[role="button"] {
+  display: none;
+}
+
+.coordinate-month-grid article {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 20px;
+  padding: 2px 7px;
+}
+
+.coordinate-month-grid article.timed {
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.coordinate-month-grid article.timed span {
+  width: 8px;
+  aspect-ratio: 1;
+  background: var(--fantasy-rose);
+  border-radius: 50%;
+}
+
+.coordinate-month-grid article.timed.event span {
+  background: var(--fantasy-orchid);
+}
+
+.coordinate-month-grid article.timed.deadline span {
+  background: var(--fantasy-gold);
+}
+
+.coordinate-month-grid article.all-day {
+  background: color-mix(in srgb, var(--coordinate-heat-color) 48%, transparent);
+  border-color: color-mix(in srgb, var(--coordinate-heat-color) 28%, transparent);
+}
+
+.coordinate-month-grid article strong {
+  min-width: 0;
+}
+
+.room-form-modal .coordinate-location-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.room-form-modal .coordinate-location-input input {
+  min-height: 42px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.coordinate-event-dialog .coordinate-segmented-options button {
+  flex: 0 1 auto;
+}
+
+.coordinate-calendar-grid-surface {
+  display: block;
+  align-content: start;
+  overflow: auto;
+  position: relative;
+}
+
+.coordinate-calendar-grid-surface .coordinate-heatmap-grid.calendar-mode {
+  min-height: calc(96px + var(--coordinate-time-grid-height, 1536px));
+  height: max-content;
+  align-content: start;
+  overflow: visible;
+  grid-template-rows: 54px 42px;
+  grid-auto-rows: var(--coordinate-hour-row-height, 64px);
+}
+
+.coordinate-heatmap-grid.calendar-mode .coordinate-grid-row:not(.all-day) .coordinate-grid-time,
+.coordinate-heatmap-grid.calendar-mode .coordinate-calendar-slot.hour {
+  min-height: var(--coordinate-hour-row-height, 64px);
+}
+
+.coordinate-heatmap-grid.calendar-mode .coordinate-grid-row:not(.all-day) .coordinate-grid-time,
+.coordinate-heatmap-grid.calendar-mode .coordinate-calendar-slot.hour {
+  border-bottom-style: solid;
+}
+
+.coordinate-heatmap-grid.calendar-mode .coordinate-grid-row:not(.all-day) .coordinate-grid-time {
+  align-items: start;
+  padding-top: 6px;
+}
+
+.coordinate-calendar-slot.hour {
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  align-content: stretch;
+  gap: 0;
+  min-height: var(--coordinate-hour-row-height, 64px);
+  padding: 0;
+  overflow: visible;
+  background: color-mix(in srgb, var(--midnight-card) 40%, transparent);
+  cursor: default;
+}
+
+.coordinate-calendar-slot-zone {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.coordinate-calendar-slot-zone:last-child {
+  border-bottom: 0;
+}
+
+.coordinate-calendar-slot-zone:hover,
+.coordinate-calendar-slot-zone:focus-visible {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  outline: 0;
+}
+
+.coordinate-calendar-slot.all-day {
+  min-height: 42px;
+  overflow: hidden;
+}
+
+.coordinate-timed-event-layer {
+  min-height: var(--coordinate-time-grid-height, 1536px);
+}
+
+.coordinate-current-time-line {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  z-index: 10;
+  height: 2px;
+  background: var(--danger);
+  pointer-events: none;
+}
+
+.coordinate-current-time-line::before {
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  width: 9px;
+  aspect-ratio: 1;
+  content: "";
+  background: var(--danger);
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.coordinate-event-block {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 3px;
+  min-height: 44px;
+  padding: 6px 8px;
+  color: #fff;
+  background: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 38%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 58%, var(--midnight-border));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+}
+
+.coordinate-event-block strong,
+.coordinate-event-block small {
+  color: #fff;
+}
+
+.coordinate-event-block strong {
+  font-size: 0.78rem;
+  line-height: 1.15;
+}
+
+.coordinate-event-block small {
+  opacity: 0.82;
+}
+
+.coordinate-event-block.timed {
+  gap: 3px;
+}
+
+.coordinate-event-block.timed.compact {
+  display: flex;
+  align-items: center;
+  align-content: center;
+  gap: 0;
+  min-height: 0;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.coordinate-event-block.timed.compact strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coordinate-event-block.timed.compact strong span {
+  font-weight: 700;
+  opacity: 0.82;
+}
+
+.coordinate-event-block.deadline {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  align-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--event-color, var(--fantasy-gold)) 78%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--event-color, var(--fantasy-gold)) 82%, var(--midnight-border));
+}
+
+.coordinate-event-block.deadline strong,
+.coordinate-event-block.deadline small {
+  color: var(--theme-base);
+}
+
+.coordinate-deadline-check {
+  width: 10px;
+  aspect-ratio: 1;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.coordinate-event-block.all-day {
+  min-height: 24px;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--event-color, var(--coordinate-heat-color)) 70%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--event-color, var(--coordinate-heat-color)) 70%, var(--midnight-border));
+}
+
+.coordinate-month-grid article {
+  background: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 24%, transparent);
+  border-color: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 26%, transparent);
+}
+
+.coordinate-month-grid article.timed span {
+  background: var(--event-color, var(--fantasy-rose));
+}
+
+.coordinate-month-grid article.all-day {
+  color: #fff;
+  background: color-mix(in srgb, var(--event-color, var(--coordinate-heat-color)) 66%, transparent);
+  border-color: color-mix(in srgb, var(--event-color, var(--coordinate-heat-color)) 46%, transparent);
+}
+
+.coordinate-heat-slot.own-available::before {
+  border-color: color-mix(in srgb, var(--coordinate-heat-color) 90%, #fff 8%);
+  background: color-mix(in srgb, var(--coordinate-heat-color) 18%, transparent);
+}
+
+.coordinate-heat-slot.own-ifNeeded::before {
+  border-color: color-mix(in srgb, var(--coordinate-if-needed) 84%, transparent);
+  background: color-mix(in srgb, var(--coordinate-if-needed) 14%, transparent);
+}
+
+.coordinate-window-list article {
+  position: relative;
+  min-height: 74px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 10px;
+}
+
+.coordinate-window-list article:hover,
+.coordinate-window-list article.active {
+  background: color-mix(in srgb, var(--fantasy-rose) 12%, transparent);
+  border-color: color-mix(in srgb, var(--fantasy-rose) 26%, transparent);
+}
+
+.coordinate-window-list .coordinate-window-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  width: 100%;
+  min-height: 74px;
+  padding: 11px 38px 11px 12px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font: inherit;
+  text-align: left;
+}
+
+.coordinate-window-list .coordinate-window-select:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.coordinate-window-select > span {
+  display: grid;
+  gap: 4px;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  min-width: 0;
+}
+
+.coordinate-window-list .coordinate-window-select strong,
+.coordinate-window-list .coordinate-window-select small,
+.coordinate-window-list .coordinate-window-select em {
+  overflow: hidden;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.coordinate-window-list .coordinate-window-select strong {
+  font-size: 0.94rem;
+}
+
+.coordinate-window-list .coordinate-window-select small,
+.coordinate-window-list .coordinate-window-select em {
+  grid-column: auto;
+  grid-row: auto;
+  color: var(--coordinate-muted);
+  font-size: 0.74rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.coordinate-window-list .coordinate-window-select em {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  padding-right: 2px;
+  font-size: 0.7rem;
+}
+
+.coordinate-window-list .coordinate-window-edit-button {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  display: grid;
+  width: 20px;
+  min-height: 20px;
+  aspect-ratio: 1;
+  place-items: center;
+  padding: 0;
+  color: var(--coordinate-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.coordinate-window-list .coordinate-window-edit-button:hover {
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.coordinate-select-all-toggle {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 9px;
+  color: var(--coordinate-muted);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.coordinate-select-all-toggle:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.coordinate-select-all-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+  margin: 0;
+}
+
+.coordinate-select-all-toggle span {
+  color: inherit;
+}
+
+.coordinate-color-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.coordinate-color-options button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.coordinate-color-options button:hover,
+.coordinate-color-options button.active {
+  background: color-mix(in srgb, var(--swatch-color) 20%, transparent);
+  border-color: color-mix(in srgb, var(--swatch-color) 58%, transparent);
+}
+
+.coordinate-color-options button > span {
+  width: 14px;
+  aspect-ratio: 1;
+  background: var(--swatch-color);
+  border: 1px solid color-mix(in srgb, #fff 30%, transparent);
+  border-radius: 50%;
+}
+
+.room-form-modal .coordinate-location-input:focus-within,
+.room-form-modal .coordinate-location-input input:focus {
+  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  box-shadow: none;
+}
+
+.coordinate-window-modal-actions.creating {
+  grid-template-columns: 1fr;
+}
+
+.coordinate-window-modal-actions.creating .primary-button {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .coordinate-time-range-fields,
+  .coordinate-event-dialog .form-grid,
+  .coordinate-window-modal-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .coordinate-window-modal-actions > span {
+    display: none;
+  }
+}
+
 .availability-panel {
   display: grid;
   align-content: start;
@@ -9900,12 +12801,23 @@ button.attachment-preview-card {
   gap: 8px;
 }
 
-.mini-session-list article {
+.mini-session-list .mini-session-card {
   display: grid;
   gap: 3px;
+  min-width: 0;
   padding: 10px;
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
   border-radius: 12px;
+}
+
+.mini-session-list button.mini-session-card {
+  width: 100%;
+  cursor: pointer;
 }
 
 .mini-session-list span {

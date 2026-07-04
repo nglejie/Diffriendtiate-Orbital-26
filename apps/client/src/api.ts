@@ -211,4 +211,15 @@ export const api = {
     request(`/api/rooms/${roomId}/sessions`, { method: "POST", body }),
   deleteSession: (sessionId) =>
     request(`/api/sessions/${sessionId}`, { method: "DELETE" }),
+  getCoordinate: (roomId) => request(`/api/rooms/${roomId}/coordinate`),
+  saveCoordinatePoll: (roomId, body) =>
+    request(`/api/rooms/${roomId}/coordinate/poll`, { method: "PUT", body }),
+  deleteCoordinatePoll: (roomId, pollId) =>
+    request(`/api/rooms/${roomId}/coordinate/poll/${pollId}`, { method: "DELETE" }),
+  saveCoordinateAvailability: (roomId, body) =>
+    request(`/api/rooms/${roomId}/coordinate/availability`, { method: "PUT", body }),
+  getCanvasCourses: (roomId, body) =>
+    request(`/api/rooms/${roomId}/integrations/canvas/courses`, { method: "POST", body }),
+  importCanvasDeadlines: (roomId, body) =>
+    request(`/api/rooms/${roomId}/integrations/canvas/import`, { method: "POST", body }),
 };
