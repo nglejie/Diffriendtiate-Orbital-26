@@ -441,6 +441,19 @@ export const emptyRoomForm = {
   theme: "twilight",
   background: "aurora",
   roomLogo: "",
+  worldConfig: {
+    enabled: true,
+    version: 1,
+    backgroundImage: "",
+    tileSize: 32,
+    columns: 64,
+    rows: 40,
+    spawn: { mapId: "custom-world", col: 6, row: 6 },
+    collisions: [],
+    objects: [],
+    privateAreas: [],
+    zones: [],
+  },
 };
 
 export function getTheme(themeId) {

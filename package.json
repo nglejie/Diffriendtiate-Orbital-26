@@ -16,7 +16,7 @@
     "test:build": "tsx tests/scripts/build-reproducibility.mts",
     "qa": "npm run check && npm test",
     "test": "npm run test:build && npm run test:unit && npm run test:integration && npm run test:ai && npm run test:performance && npm run test:security && npm run test:e2e",
-    "test:unit": "vitest run --config tests/vitest.config.mts tests/unit tests/components",
+    "test:unit": "vitest run --config tests/vitest.config.mts tests/unit tests/components && npm run test:run --workspace @diffriendtiate/client",
     "test:integration": "vitest run --config tests/vitest.node.config.mts tests/integration",
     "test:ai": "vitest run --config tests/vitest.node.config.mts tests/ai",
     "test:performance": "vitest run --config tests/vitest.node.config.mts tests/performance",

@@ -15,7 +15,7 @@ import { createPortal } from "react-dom";
 import { DRAFTS_VIEW_ID } from "./chatLayout.ts";
 
 /**
- * Chat-specific sidebar inspired by Discord/Gather.
+ * Convolution-specific sidebar inspired by Discord/Gather.
  *
  * It manages only presentation state: drafts, category grouping, and local
  * drag/drop order. Server-owned channel creation remains in RoomView.
@@ -39,7 +39,7 @@ export function ChatSidebar({
   const [tooltip, setTooltip] = useState(null);
 
   // Browser localStorage can keep older room UI state across refactors. Keep
-  // the sidebar tolerant of bad saved values so Chat cannot blank the room.
+  // the sidebar tolerant of bad saved values so Convolution cannot blank the room.
   const safeDrafts = drafts && typeof drafts === "object" && !Array.isArray(drafts) ? drafts : {};
   const safeChannelLayout = Array.isArray(channelLayout) ? channelLayout : [];
 
@@ -154,7 +154,7 @@ export function ChatSidebar({
     <div className="chat-sidebar" onContextMenu={(event) => openContextMenu(event)}>
       <label className="chat-search disabled" title="Search will be enabled later">
         <Search size={16} />
-        <input disabled placeholder="Search in chat" type="search" />
+        <input disabled placeholder="Search in Convolution" type="search" />
       </label>
 
       <section className="chat-sidebar-section">

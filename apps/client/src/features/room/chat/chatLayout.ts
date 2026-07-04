@@ -3,7 +3,7 @@ export const DRAFTS_VIEW_ID = "__drafts__";
 
 /**
  * Returns the server-backed channel list in a safe shape. Older local state or
- * partial API responses should never make the Chat tab fail to render.
+ * partial API responses should never make the Convolution tab fail to render.
  */
 function normalizeChannelList(channels) {
   if (!Array.isArray(channels)) return ["general"];

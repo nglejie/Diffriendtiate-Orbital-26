@@ -113,7 +113,80 @@ function publicUser(user) {
     id: user.id,
     name: user.name,
     email: user.email,
+    avatarPreset: user.avatarPreset || null,
+    avatarUrl: user.avatarUrl || "",
   };
+}
+
+function normalizeAvatarUrl(value) {
+  const avatarUrl = String(value || "").trim();
+  if (!avatarUrl) return "";
+  if (avatarUrl.length > 2_100_000) {
+    const error = new Error("Profile picture is too large.") as Error & { status?: number };
+    error.status = 413;
+    throw error;
+  }
+
+  if (!/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(avatarUrl)) {
+    const error = new Error("Profile picture must be a PNG, JPG, WebP, or GIF image.") as Error & {
+      status?: number;
+    };
+    error.status = 400;
+    throw error;
+  }
+
+  return avatarUrl;
+}
+
+function normalizeAvatarPreset(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const id = String(value.id || "").trim().slice(0, 80);
+  const label = String(value.label || "Avatar").trim().slice(0, 80);
+  const category = ["base", "clothing", "accessories", "special"].includes(value.category)
+    ? value.category
+    : "base";
+  const layers = (Array.isArray(value.layers) ? value.layers : [])
+    .map((layer) => {
+      if (!layer || typeof layer !== "object" || Array.isArray(layer)) return null;
+      const src = String(layer.src || "").trim();
+      if (!src.startsWith("/assets/limeets/avatars/gather/")) return null;
+      return {
+        backSrc: String(layer.backSrc || "").startsWith("/assets/limeets/avatars/gather/")
+          ? String(layer.backSrc || "").trim().slice(0, 500)
+          : "",
+        label: String(layer.label || "Layer").trim().slice(0, 80),
+        slot: String(layer.slot || "layer").trim().slice(0, 40),
+        src: src.slice(0, 500),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+
+  if (!id || !layers.length) return null;
+
+  const selections =
+    value.selections && typeof value.selections === "object" && !Array.isArray(value.selections)
+      ? Object.fromEntries(
+          Object.entries(value.selections)
+            .map(([slotId, selection]) => {
+              if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
+                return [String(slotId).slice(0, 40), null];
+              }
+              return [
+                String(slotId).slice(0, 40),
+                {
+                  itemId: String(selection.itemId || "").slice(0, 120),
+                  variantId: String(selection.variantId || "").slice(0, 80),
+                },
+              ];
+            })
+            .filter(([slotId]) => Boolean(slotId))
+            .slice(0, 16),
+        )
+      : {};
+
+  return { id, label, category, layers, selections, version: 1 };
 }
 
 function getBuddyProviderStatus() {
@@ -195,7 +268,375 @@ async function requireAuth(req, res, next) {
 }
 
 function isMember(room, userId) {
-  return room.ownerId === userId || room.memberIds.includes(userId);
+  return (
+    room?.ownerId === userId ||
+    (Array.isArray(room?.memberIds) && room.memberIds.includes(userId))
+  );
+}
+
+const DEFAULT_SPACE_POSITION = { x: 50, y: 62 };
+const SPACE_MIN_POSITION = 5;
+const SPACE_MAX_POSITION = 16384;
+const DEFAULT_SPACE_TILE = { mapId: "office-main", col: 18, row: 44 };
+const SPACE_MIN_TILE = 0;
+const SPACE_MAX_TILE_COL = 255;
+const SPACE_MAX_TILE_ROW = 255;
+const SPACE_MAP_IDS = new Set(["office-main", "office-socials", "custom-world"]);
+const SPACE_DIRECTIONS = new Set(["down", "left", "right", "up"]);
+const ROOM_ACTIVITY_TABS = new Set([
+  "focus",
+  "chat",
+  "buddy",
+  "resources",
+  "space",
+  "meetings",
+  "calendar",
+]);
+const PROFILE_STATUSES = new Set(["online", "away", "dnd", "invisible"]);
+const WORLD_NAVIGATION_TABS = new Set(["focus", "chat", "buddy", "resources", "space", "calendar"]);
+const WORLD_CONFIG_DEFAULT = {
+  enabled: true,
+  version: 2,
+  backgroundImage: "",
+  tileSize: 32,
+  columns: 64,
+  rows: 40,
+  activeRoomId: "custom-world",
+  spawnpoint: { roomId: "custom-world", x: 32, y: 20 },
+  spawn: { mapId: "custom-world", col: 6, row: 6 },
+  rooms: [{ id: "custom-world", name: "World", tilemap: {} }],
+  collisions: [],
+  objects: [],
+  privateAreas: [],
+  zones: [],
+};
+const WORLD_CONFIG_MAX_BACKGROUND_LENGTH = 3_500_000;
+const WORLD_CONFIG_MAX_COLLISIONS = 8_000;
+const WORLD_CONFIG_MAX_OBJECTS = 500;
+const WORLD_CONFIG_MAX_ZONES = 48;
+const WORLD_CONFIG_MAX_ROOMS = 24;
+const WORLD_CONFIG_MAX_TILES = 14_000;
+// Temporary live presence only: Limeets avatar positions and meeting sessions
+// are intentionally kept in memory, not durable room knowledge.
+const spacePresenceByRoom = new Map();
+const roomActivityByRoom = new Map();
+const meetingPresenceByRoom = new Map();
+
+function normalizeSpacePosition(value, fallback = null) {
+  if (!value || typeof value !== "object") return fallback;
+
+  const col = Number(value?.col);
+  const row = Number(value?.row);
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+  const fallbackMapId = fallback?.mapId || DEFAULT_SPACE_TILE.mapId;
+  const requestedMapId = typeof value?.mapId === "string" ? value.mapId.trim() : fallbackMapId;
+  const mapId = SPACE_MAP_IDS.has(requestedMapId) ? requestedMapId : fallbackMapId;
+  const worldRoomId = String(value?.worldRoomId || fallback?.worldRoomId || "custom-world")
+    .trim()
+    .slice(0, 64) || "custom-world";
+  const direction = SPACE_DIRECTIONS.has(String(value?.direction || ""))
+    ? String(value.direction)
+    : fallback?.direction || "down";
+  const moving = Boolean(value?.moving);
+
+  if (Number.isFinite(col) && Number.isFinite(row)) {
+    const position = {
+      mapId,
+      worldRoomId,
+      col: Math.min(SPACE_MAX_TILE_COL, Math.max(SPACE_MIN_TILE, Math.round(col))),
+      row: Math.min(SPACE_MAX_TILE_ROW, Math.max(SPACE_MIN_TILE, Math.round(row))),
+      direction,
+      moving,
+    };
+
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      position.x = Math.min(SPACE_MAX_POSITION, Math.max(SPACE_MIN_POSITION, x));
+      position.y = Math.min(SPACE_MAX_POSITION, Math.max(SPACE_MIN_POSITION, y));
+    }
+
+    return position;
+  }
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+
+  return {
+    x: Math.min(SPACE_MAX_POSITION, Math.max(SPACE_MIN_POSITION, x)),
+    y: Math.min(SPACE_MAX_POSITION, Math.max(SPACE_MIN_POSITION, y)),
+    worldRoomId,
+    direction,
+    moving,
+  };
+}
+
+function normalizeRoomActivityTab(value) {
+  const tabId = String(value || "").trim();
+  return ROOM_ACTIVITY_TABS.has(tabId) ? tabId : null;
+}
+
+function normalizeProfileStatus(value) {
+  const status = String(value || "").trim();
+  return PROFILE_STATUSES.has(status) ? status : "online";
+}
+
+function getSpaceRoomKey(roomId) {
+  // Keep live avatar broadcasts separate from the room chat Socket.IO room.
+  return `space:${roomId}`;
+}
+
+function normalizeMeetingAreaId(value) {
+  const areaId = String(value || "").trim().slice(0, 72);
+  return areaId || null;
+}
+
+function getMeetingRoomKey(roomId, areaId) {
+  return `meeting:${roomId}:${areaId}`;
+}
+
+function getMeetingRoomPresence(roomId) {
+  if (!meetingPresenceByRoom.has(roomId)) {
+    meetingPresenceByRoom.set(roomId, new Map());
+  }
+
+  return meetingPresenceByRoom.get(roomId);
+}
+
+function getMeetingAreaPresence(roomId, areaId) {
+  const roomPresence = getMeetingRoomPresence(roomId);
+  if (!roomPresence.has(areaId)) {
+    roomPresence.set(areaId, new Map());
+  }
+
+  return roomPresence.get(areaId);
+}
+
+function serializeMeetingPresence(roomId, areaId) {
+  return Array.from(meetingPresenceByRoom.get(roomId)?.get(areaId)?.values() || [])
+    .filter((presence) => presence.profileStatus !== "invisible")
+    .map(({ socketId: _socketId, ...presence }) => presence);
+}
+
+function serializeMeetingSummary(roomId) {
+  return Array.from(meetingPresenceByRoom.get(roomId)?.entries() || [])
+    .map(([areaId]) => ({
+      roomId,
+      areaId,
+      users: serializeMeetingPresence(roomId, areaId),
+    }))
+    .filter((summary) => summary.users.length);
+}
+
+function normalizeMeetingMedia(value) {
+  const media = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    cameraOff: Boolean(media.cameraOff),
+    deafened: Boolean(media.deafened),
+    muted: Boolean(media.muted),
+    screenSharing: Boolean(media.screenSharing),
+  };
+}
+
+function normalizeMeetingSignal(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const type = String(value.type || "").trim();
+  if (type === "offer" || type === "answer") {
+    const sdp = String(value.sdp || "");
+    if (!sdp || sdp.length > 200_000) return null;
+    return { type, sdp };
+  }
+
+  if (type === "ice") {
+    const rawCandidate =
+      value.candidate && typeof value.candidate === "object" && !Array.isArray(value.candidate)
+        ? value.candidate
+        : {};
+    const candidate = String(rawCandidate.candidate || "").slice(0, 5_000);
+    if (!candidate) return null;
+
+    return {
+      type,
+      candidate: {
+        candidate,
+        sdpMid:
+          rawCandidate.sdpMid === null || rawCandidate.sdpMid === undefined
+            ? null
+            : String(rawCandidate.sdpMid).slice(0, 64),
+        sdpMLineIndex: Number.isFinite(Number(rawCandidate.sdpMLineIndex))
+          ? Number(rawCandidate.sdpMLineIndex)
+          : null,
+      },
+    };
+  }
+
+  return null;
+}
+
+function getSpacePresence(roomId) {
+  if (!spacePresenceByRoom.has(roomId)) {
+    spacePresenceByRoom.set(roomId, new Map());
+  }
+
+  return spacePresenceByRoom.get(roomId);
+}
+
+function serializeSpacePresence(roomId) {
+  return Array.from(spacePresenceByRoom.get(roomId)?.values() || [])
+    .filter((presence) => presence.profileStatus !== "invisible")
+    .map(({ socketId: _socketId, ...presence }) => presence);
+}
+
+function getRoomActivity(roomId) {
+  if (!roomActivityByRoom.has(roomId)) {
+    roomActivityByRoom.set(roomId, new Map());
+  }
+
+  return roomActivityByRoom.get(roomId);
+}
+
+function serializeRoomActivity(roomId) {
+  return Array.from(roomActivityByRoom.get(roomId)?.values() || [])
+    .filter((activity) => activity.profileStatus !== "invisible")
+    .map(({ socketId: _socketId, ...activity }) => activity);
+}
+
+function emitRoomActivityState(roomId) {
+  io.to(`room:${roomId}`).emit("room:activity:state", {
+    roomId,
+    members: serializeRoomActivity(roomId),
+  });
+}
+
+function updateSocketSpaceProfileStatus(socket, roomId, profileStatus) {
+  const roomPresence = spacePresenceByRoom.get(roomId);
+  const presence = roomPresence?.get(socket.id);
+  if (!presence || presence.socketId !== socket.id) return;
+
+  roomPresence.set(socket.id, {
+    ...presence,
+    profileStatus,
+    updatedAt: new Date().toISOString(),
+  });
+  io.to(getSpaceRoomKey(roomId)).emit("space:state", {
+    roomId,
+    users: serializeSpacePresence(roomId),
+  });
+}
+
+function updateSocketMeetingProfileStatus(socket, roomId, profileStatus) {
+  const roomPresence = meetingPresenceByRoom.get(roomId);
+  if (!roomPresence) return;
+
+  for (const [areaId, areaPresence] of roomPresence.entries()) {
+    const presence = areaPresence.get(socket.user?.id);
+    if (!presence || presence.socketId !== socket.id) continue;
+
+    areaPresence.set(socket.user.id, {
+      ...presence,
+      profileStatus,
+      updatedAt: new Date().toISOString(),
+    });
+    emitMeetingState(roomId, areaId);
+    emitMeetingSummary(roomId);
+  }
+}
+
+function emitMeetingState(roomId, areaId) {
+  io.to(getMeetingRoomKey(roomId, areaId)).emit("meeting:state", {
+    roomId,
+    areaId,
+    users: serializeMeetingPresence(roomId, areaId),
+  });
+}
+
+function emitMeetingSummary(roomId, target = io.to(`room:${roomId}`)) {
+  target.emit("meeting:summary", {
+    roomId,
+    areas: serializeMeetingSummary(roomId),
+  });
+}
+
+function removeSocketSpacePresence(socket, targetRoomId = null) {
+  for (const [roomId, roomPresence] of Array.from(spacePresenceByRoom.entries())) {
+    if (targetRoomId && roomId !== targetRoomId) continue;
+
+    const presence = roomPresence.get(socket.id);
+    if (!presence || presence.socketId !== socket.id) continue;
+
+    roomPresence.delete(socket.id);
+    socket.leave(getSpaceRoomKey(roomId));
+
+    if (roomPresence.size) {
+      io.to(getSpaceRoomKey(roomId)).emit("space:user-left", {
+        presenceId: presence.presenceId,
+        roomId,
+        userId: presence.userId,
+      });
+    } else {
+      spacePresenceByRoom.delete(roomId);
+    }
+  }
+}
+
+function removeSocketRoomActivity(socket, targetRoomId = null) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  for (const [roomId, roomActivity] of Array.from(roomActivityByRoom.entries())) {
+    if (targetRoomId && roomId !== targetRoomId) continue;
+
+    const activity = roomActivity.get(userId);
+    if (!activity || activity.socketId !== socket.id) continue;
+
+    roomActivity.delete(userId);
+
+    if (roomActivity.size) {
+      emitRoomActivityState(roomId);
+    } else {
+      roomActivityByRoom.delete(roomId);
+      io.to(`room:${roomId}`).emit("room:activity:state", {
+        roomId,
+        members: [],
+      });
+    }
+  }
+}
+
+function removeSocketMeetingPresence(socket, targetRoomId = null, targetAreaId = null) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  for (const [roomId, roomPresence] of Array.from(meetingPresenceByRoom.entries())) {
+    if (targetRoomId && roomId !== targetRoomId) continue;
+
+    for (const [areaId, areaPresence] of Array.from(roomPresence.entries())) {
+      if (targetAreaId && areaId !== targetAreaId) continue;
+
+      const presence = areaPresence.get(userId);
+      if (!presence || presence.socketId !== socket.id) continue;
+
+      areaPresence.delete(userId);
+      socket.leave(getMeetingRoomKey(roomId, areaId));
+
+      if (areaPresence.size) {
+        io.to(getMeetingRoomKey(roomId, areaId)).emit("meeting:user-left", {
+          roomId,
+          areaId,
+          userId,
+        });
+        emitMeetingState(roomId, areaId);
+      } else {
+        roomPresence.delete(areaId);
+      }
+
+      emitMeetingSummary(roomId);
+    }
+
+    if (!roomPresence.size) {
+      meetingPresenceByRoom.delete(roomId);
+      emitMeetingSummary(roomId);
+    }
+  }
 }
 
 function canViewRoom(room, userId) {
@@ -225,6 +666,7 @@ function roomDto(db, room, userId) {
     tags: room.tags || [],
     theme: room.theme,
     background: room.background || "aurora",
+    worldConfig: normalizeWorldConfig(room.worldConfig),
     inviteCode: isMember(room, userId) ? room.inviteCode : null,
     channels: normalizeChannels(room.channels),
     owner: publicUser(owner),
@@ -395,6 +837,407 @@ function normalizeTags(value) {
     .map((tag) => tag.trim())
     .filter(Boolean)
     .slice(0, 3);
+}
+
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+function normalizeWorldImage(value) {
+  const image = String(value || "").trim();
+  if (!image) return "";
+  if (!image.startsWith("data:image/")) return "";
+  if (image.length > WORLD_CONFIG_MAX_BACKGROUND_LENGTH) return "";
+  return image;
+}
+
+function normalizeWorldTile(value, columns, rows, fallback) {
+  const fallbackTile = fallback || WORLD_CONFIG_DEFAULT.spawn;
+  return {
+    mapId: "custom-world",
+    col: clampInteger(value?.col ?? value?.x, 0, columns - 1, fallbackTile.col),
+    row: clampInteger(value?.row ?? value?.y, 0, rows - 1, fallbackTile.row),
+  };
+}
+
+function normalizeWorldCollision(value, columns, rows) {
+  const parts =
+    typeof value === "string"
+      ? value.split(",")
+      : [value?.col ?? value?.x, value?.row ?? value?.y];
+  const col = Number(parts[0]);
+  const row = Number(parts[1]);
+
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+
+  const normalizedCol = Math.round(col);
+  const normalizedRow = Math.round(row);
+
+  if (
+    normalizedCol < 0 ||
+    normalizedCol >= columns ||
+    normalizedRow < 0 ||
+    normalizedRow >= rows
+  ) {
+    return null;
+  }
+
+  return `${normalizedCol},${normalizedRow}`;
+}
+
+function normalizeWorldZone(value, index, columns, rows) {
+  if (!value || typeof value !== "object") return null;
+
+  const bounds = value.bounds && typeof value.bounds === "object" ? value.bounds : value;
+  const col = clampInteger(bounds.col ?? bounds.x, 0, columns - 1, 0);
+  const row = clampInteger(bounds.row ?? bounds.y, 0, rows - 1, 0);
+  const width = clampInteger(bounds.width ?? bounds.w, 1, columns - col, 1);
+  const height = clampInteger(bounds.height ?? bounds.h, 1, rows - row, 1);
+  const tabId = WORLD_NAVIGATION_TABS.has(String(value.tabId || "").trim())
+    ? String(value.tabId).trim()
+    : "space";
+  const fallbackLabel = tabId === "space" ? "World" : tabId;
+  const label = String(value.label || fallbackLabel).trim().slice(0, 72) || fallbackLabel;
+
+  return {
+    id: String(value.id || `zone-${index + 1}`).trim().slice(0, 64) || `zone-${index + 1}`,
+    label,
+    tabId,
+    description: String(value.description || "").trim().slice(0, 160),
+    bounds: {
+      col,
+      row,
+      width,
+      height,
+    },
+  };
+}
+
+function normalizeWorldObject(value, index, columns, rows) {
+  if (!value || typeof value !== "object") return null;
+
+  const assetId = String(value.assetId || "").trim().slice(0, 80);
+  const src = String(value.src || "").trim();
+  if (!assetId || !src.startsWith("/assets/limeets/")) return null;
+
+  const col = clampInteger(value.col ?? value.x, 0, columns - 1, 0);
+  const row = clampInteger(value.row ?? value.y, 0, rows - 1, 0);
+  const width = clampInteger(value.width, 1, 12, 1);
+  const height = clampInteger(value.height, 1, 12, 1);
+  const interactionType = value.interactionType === "link" ? "link" : "none";
+  const interactionValue = String(value.interactionValue || "").trim().slice(0, 500);
+
+  return {
+    id: String(value.id || `${assetId}-${index + 1}`).trim().slice(0, 96) || `${assetId}-${index + 1}`,
+    assetId,
+    label: String(value.label || assetId).trim().slice(0, 72) || assetId,
+    src: src.slice(0, 220),
+    col,
+    row,
+    width: Math.min(width, columns - col),
+    height: Math.min(height, rows - row),
+    blocks: value.blocks !== false,
+    interactionType,
+    interactionValue: interactionType === "link" ? interactionValue : "",
+  };
+}
+
+function normalizeWorldPrivateArea(value, index, columns, rows) {
+  if (!value || typeof value !== "object") return null;
+
+  const bounds = value.bounds && typeof value.bounds === "object" ? value.bounds : value;
+  const col = clampInteger(bounds.col ?? bounds.x, 0, columns - 1, 0);
+  const row = clampInteger(bounds.row ?? bounds.y, 0, rows - 1, 0);
+  const width = clampInteger(bounds.width ?? bounds.w, 1, columns - col, 1);
+  const height = clampInteger(bounds.height ?? bounds.h, 1, rows - row, 1);
+  const effects = value.effects && typeof value.effects === "object" && !Array.isArray(value.effects)
+    ? value.effects
+    : {};
+  const properties = Array.isArray(value.properties)
+    ? value.properties
+        .map((property) => {
+          if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+          const type = String(property.type || "").trim().slice(0, 48);
+          if (!type) return null;
+          return { ...property, type };
+        })
+        .filter(Boolean)
+        .slice(0, 24)
+    : [];
+  const label =
+    String(value.name || value.label || "Area")
+      .trim()
+      .slice(0, 72) || "Area";
+  const roomId = String(value.roomId || value.mapId || "custom-world").trim().slice(0, 64) || "custom-world";
+  const destination = normalizeWorldTeleporter(value.destination || value.teleporter, columns, rows, roomId);
+
+  return {
+    id: String(value.id || `area-${index + 1}`).trim().slice(0, 64) || `area-${index + 1}`,
+    label,
+    name: label,
+    roomId,
+    bounds: { col, row, width, height },
+    effects: {
+      entryExit: effects.entryExit === true,
+      impassable: effects.impassable === true,
+      meeting: effects.meeting === true,
+      openLink: effects.openLink === true,
+      teleport: effects.teleport === true,
+    },
+    properties,
+    linkUrl: String(value.linkUrl || value.url || "").trim().slice(0, 500),
+    tabId: normalizeWorldAreaTabId(value.tabId || value.targetTabId || value.portal?.tabId),
+    destination: destination || { roomId, x: 0, y: 0 },
+  };
+}
+
+function normalizeWorldAreaTabId(value) {
+  const tabId = String(value || "").trim();
+  return WORLD_NAVIGATION_TABS.has(tabId) && tabId !== "focus" ? tabId : "chat";
+}
+
+function normalizeWorldKey(value, columns, rows) {
+  const parts = String(value || "").replace(/\s+/g, "").split(",");
+  const col = Number(parts[0]);
+  const row = Number(parts[1]);
+
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+
+  const x = Math.round(col);
+  const y = Math.round(row);
+  if (x < 0 || x >= columns || y < 0 || y >= rows) return null;
+  return { x, y, key: `${x},${y}` };
+}
+
+function normalizeWorldLayerAsset(value) {
+  return String(value || "").trim().slice(0, 96);
+}
+
+function normalizeWorldLayerStack(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeWorldLayerAsset(typeof item === "string" ? item : item?.assetId || item?.id))
+      .filter(Boolean)
+      .slice(0, 64);
+  }
+
+  const single = normalizeWorldLayerAsset(value);
+  return single ? [single] : [];
+}
+
+function normalizeWorldPortal(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const tabId = WORLD_NAVIGATION_TABS.has(String(value.tabId || "").trim())
+    ? String(value.tabId).trim()
+    : "";
+  if (!tabId) return null;
+
+  return {
+    tabId,
+    label: String(value.label || tabId).trim().slice(0, 72) || tabId,
+  };
+}
+
+function normalizeWorldTeleporter(value, columns, rows, fallbackRoomId) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    roomId: String(value.roomId || value.mapId || fallbackRoomId)
+      .trim()
+      .slice(0, 64) || fallbackRoomId,
+    x: clampInteger(value.x ?? value.col, 0, columns - 1, 0),
+    y: clampInteger(value.y ?? value.row, 0, rows - 1, 0),
+  };
+}
+
+function normalizeWorldTileEntry(value, columns, rows, roomId) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const entry = {};
+  const floor = normalizeWorldLayerAsset(value.floor);
+  const aboveFloor = normalizeWorldLayerStack(value.above_floor);
+  const object = normalizeWorldLayerStack(value.object);
+  if (floor) entry.floor = floor;
+  if (aboveFloor.length) entry.above_floor = aboveFloor;
+  if (object.length) entry.object = object;
+  if (value.impassable === true) entry.impassable = true;
+
+  const privateAreaId = String(value.privateAreaId || "").trim().slice(0, 72);
+  if (privateAreaId) entry.privateAreaId = privateAreaId;
+
+  const teleporter = normalizeWorldTeleporter(value.teleporter, columns, rows, roomId);
+  if (teleporter) entry.teleporter = teleporter;
+
+  const portal = normalizeWorldPortal(value.portal);
+  if (portal) entry.portal = portal;
+
+  const openUrl = String(value.openUrl || value.linkUrl || "").trim().slice(0, 500);
+  if (openUrl) entry.openUrl = openUrl;
+
+  if (value.entryExit === true) entry.entryExit = true;
+
+  return Object.keys(entry).length ? entry : null;
+}
+
+function normalizeWorldTilemap(value, columns, rows, roomId) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const normalized = {};
+  let count = 0;
+
+  for (const [rawKey, rawTile] of Object.entries(source)) {
+    if (count >= WORLD_CONFIG_MAX_TILES) break;
+    const parsed = normalizeWorldKey(rawKey, columns, rows);
+    if (!parsed) continue;
+
+    const tile = normalizeWorldTileEntry(rawTile, columns, rows, roomId);
+    if (!tile) continue;
+
+    normalized[parsed.key] = tile;
+    count += 1;
+  }
+
+  return normalized;
+}
+
+function ensureWorldTile(tilemap, x, y) {
+  const key = `${x},${y}`;
+  tilemap[key] = tilemap[key] || {};
+  return tilemap[key];
+}
+
+function migrateLegacyWorldTilemap(config, columns, rows) {
+  const tilemap = {};
+
+  (Array.isArray(config.collisions) ? config.collisions : []).forEach((collision) => {
+    const normalized = normalizeWorldCollision(collision, columns, rows);
+    if (!normalized) return;
+    const [x, y] = normalized.split(",").map(Number);
+    ensureWorldTile(tilemap, x, y).impassable = true;
+  });
+
+  (Array.isArray(config.objects) ? config.objects : []).forEach((object) => {
+    const assetId = normalizeWorldLayerAsset(object?.assetId);
+    if (!assetId) return;
+    const x = clampInteger(object.col ?? object.x, 0, columns - 1, 0);
+    const y = clampInteger(object.row ?? object.y, 0, rows - 1, 0);
+    ensureWorldTile(tilemap, x, y).object = assetId;
+  });
+
+  (Array.isArray(config.privateAreas) ? config.privateAreas : []).forEach((area, index) => {
+    const normalized = normalizeWorldPrivateArea(area, index, columns, rows);
+    if (!normalized) return;
+    const { col, row, width, height } = normalized.bounds;
+    for (let y = row; y < row + height; y += 1) {
+      for (let x = col; x < col + width; x += 1) {
+        ensureWorldTile(tilemap, x, y).privateAreaId = normalized.id;
+      }
+    }
+  });
+
+  (Array.isArray(config.zones) ? config.zones : []).forEach((zone, index) => {
+    const normalized = normalizeWorldZone(zone, index, columns, rows);
+    if (!normalized) return;
+    const { col, row, width, height } = normalized.bounds;
+    for (let y = row; y < row + height; y += 1) {
+      for (let x = col; x < col + width; x += 1) {
+        ensureWorldTile(tilemap, x, y).portal = {
+          tabId: normalized.tabId,
+          label: normalized.label,
+        };
+      }
+    }
+  });
+
+  return tilemap;
+}
+
+function normalizeWorldRoom(value, index, columns, rows) {
+  const room = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const fallbackId = index === 0 ? "custom-world" : `world-room-${index + 1}`;
+  const id = String(room.id || room.roomId || room.mapId || fallbackId)
+    .trim()
+    .slice(0, 64) || fallbackId;
+
+  return {
+    id,
+    name: String(room.name || (index === 0 ? "World" : `Room ${index + 1}`))
+      .trim()
+      .slice(0, 72) || "World",
+    tilemap: normalizeWorldTilemap(room.tilemap, columns, rows, id),
+  };
+}
+
+function normalizeWorldConfig(value) {
+  const config = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const columns = clampInteger(config.columns, 12, 256, WORLD_CONFIG_DEFAULT.columns);
+  const rows = clampInteger(config.rows, 10, 256, WORLD_CONFIG_DEFAULT.rows);
+  const backgroundImage = normalizeWorldImage(config.backgroundImage);
+  const sourceRooms =
+    Array.isArray(config.rooms) && config.rooms.length
+      ? config.rooms
+      : [
+          {
+            id: "custom-world",
+            name: "World",
+            tilemap: migrateLegacyWorldTilemap(config, columns, rows),
+          },
+        ];
+  const rooms = sourceRooms
+    .map((room, index) => normalizeWorldRoom(room, index, columns, rows))
+    .filter((room) => room.id && room.name)
+    .slice(0, WORLD_CONFIG_MAX_ROOMS);
+  if (!rooms.length) rooms.push(WORLD_CONFIG_DEFAULT.rooms[0]);
+  const activeRoomId = rooms.some((room) => room.id === config.activeRoomId)
+    ? String(config.activeRoomId).trim().slice(0, 64)
+    : rooms[0].id;
+  const spawnSource = config.spawnpoint || config.spawn || WORLD_CONFIG_DEFAULT.spawnpoint;
+  const spawnpoint = {
+    roomId: String(spawnSource?.roomId || spawnSource?.mapId || rooms[0].id)
+      .trim()
+      .slice(0, 64) || rooms[0].id,
+    x: clampInteger(spawnSource?.x ?? spawnSource?.col, 0, columns - 1, Math.floor(columns / 2)),
+    y: clampInteger(spawnSource?.y ?? spawnSource?.row, 0, rows - 1, Math.floor(rows / 2)),
+  };
+  if (!rooms.some((room) => room.id === spawnpoint.roomId)) {
+    spawnpoint.roomId = rooms[0].id;
+  }
+  const collisions = Array.from(
+    new Set(
+      (Array.isArray(config.collisions) ? config.collisions : [])
+        .map((collision) => normalizeWorldCollision(collision, columns, rows))
+        .filter(Boolean),
+    ),
+  ).slice(0, WORLD_CONFIG_MAX_COLLISIONS);
+  const zones = (Array.isArray(config.zones) ? config.zones : [])
+    .map((zone, index) => normalizeWorldZone(zone, index, columns, rows))
+    .filter(Boolean)
+    .slice(0, WORLD_CONFIG_MAX_ZONES);
+  const objects = (Array.isArray(config.objects) ? config.objects : [])
+    .map((object, index) => normalizeWorldObject(object, index, columns, rows))
+    .filter(Boolean)
+    .slice(0, WORLD_CONFIG_MAX_OBJECTS);
+  const privateAreas = (Array.isArray(config.privateAreas) ? config.privateAreas : [])
+    .map((area, index) => normalizeWorldPrivateArea(area, index, columns, rows))
+    .filter(Boolean)
+    .slice(0, WORLD_CONFIG_MAX_ZONES);
+
+  return {
+    enabled: config.enabled !== false,
+    version: 2,
+    backgroundImage,
+    tileSize: clampInteger(config.tileSize, 16, 72, WORLD_CONFIG_DEFAULT.tileSize),
+    columns,
+    rows,
+    activeRoomId,
+    spawnpoint,
+    spawn: { mapId: spawnpoint.roomId, col: spawnpoint.x, row: spawnpoint.y },
+    rooms,
+    collisions,
+    objects,
+    privateAreas,
+    zones,
+  };
 }
 
 function normalizeFolder(value) {
@@ -896,6 +1739,35 @@ async function warmChatbotOnStartup() {
   }
 }
 
+async function readChatbotHealthWithRetry(timeoutMs = chatbotHealthTimeoutMs) {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    const remainingMs = Math.max(1_000, timeoutMs - (Date.now() - startedAt));
+
+    try {
+      console.info(
+        `[buddy] Checking chatbot health (${attempt}, ${Math.ceil(remainingMs / 1000)}s left)...`,
+      );
+
+      const response = await fetch(chatbotWarmupUrl("/health"), {
+        signal: AbortSignal.timeout(remainingMs),
+      });
+      return await readChatbotPayload(response);
+    } catch (error) {
+      lastError = error;
+
+      if (Date.now() - startedAt >= timeoutMs) break;
+      await wait(Math.min(chatbotWarmupRetryDelayMs, timeoutMs - (Date.now() - startedAt)));
+    }
+  }
+
+  throw lastError || new Error("Intelligrate is not available right now.");
+}
+
 async function callChatbotJson(pathname, body, timeoutMs = 180_000) {
   const response = await fetch(chatbotUrl(pathname), {
     method: "POST",
@@ -1064,8 +1936,40 @@ const io = new Server(server, {
   },
 });
 
+function refreshLiveUserProfile(user) {
+  const profile = publicUser(user);
+
+  io.sockets.sockets.forEach((socket) => {
+    if (socket.user?.id === user.id) {
+      socket.user = { ...socket.user, ...user };
+    }
+  });
+
+  roomActivityByRoom.forEach((activityByUser) => {
+    const activity = activityByUser.get(user.id);
+    if (activity) activityByUser.set(user.id, { ...activity, user: profile });
+  });
+
+  spacePresenceByRoom.forEach((presenceBySocket) => {
+    presenceBySocket.forEach((presence, presenceKey) => {
+      if (presence.userId === user.id) {
+        presenceBySocket.set(presenceKey, { ...presence, user: profile });
+      }
+    });
+  });
+
+  meetingPresenceByRoom.forEach((presenceByArea) => {
+    presenceByArea.forEach((presenceByUser) => {
+      const presence = presenceByUser.get(user.id);
+      if (presence) presenceByUser.set(user.id, { ...presence, user: profile });
+    });
+  });
+
+  return profile;
+}
+
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "5mb" }));
 app.use("/uploads", express.static(uploadDir));
 
 app.get("/api/health", (_req, res) => {
@@ -1093,6 +1997,8 @@ app.post("/api/auth/register", async (req, res) => {
     id: createId("usr"),
     name,
     email,
+    avatarPreset: null,
+    avatarUrl: "",
     passwordHash: await bcrypt.hash(password, 10),
     createdAt: now,
   };
@@ -1124,6 +2030,43 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+app.patch("/api/auth/me", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const name = String(req.body.name || "").trim();
+  if (!name || name.length > 80) {
+    return res.status(400).json({ message: "Display name must be 1 to 80 characters." });
+  }
+
+  try {
+    user.name = name;
+    user.avatarUrl = normalizeAvatarUrl(req.body.avatarUrl);
+    user.avatarPreset = normalizeAvatarPreset(req.body.avatarPreset);
+    await writeDb(db);
+
+    const profile = refreshLiveUserProfile(user);
+    db.rooms
+      .filter((room) => isMember(room, user.id))
+      .forEach((room) => {
+        io.to(`room:${room.id}`).emit("user:profile-updated", {
+          roomId: room.id,
+          user: profile,
+        });
+      });
+
+    res.json({ user: profile });
+  } catch (error) {
+    const profileError = error as Error & { status?: number };
+    res
+      .status(profileError.status || 400)
+      .json({ message: profileError.message || "Unable to update profile." });
+  }
 });
 
 app.get("/api/rooms", requireAuth, async (req, res) => {
@@ -1177,6 +2120,7 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
     tags: normalizeTags(req.body.tags),
     theme: String(req.body.theme || "twilight"),
     background: String(req.body.background || "aurora"),
+    worldConfig: normalizeWorldConfig(req.body.worldConfig),
     channels: ["general"],
     passwordHash:
       visibility === "private" ? await bcrypt.hash(password.trim(), 10) : null,
@@ -1228,6 +2172,9 @@ app.patch("/api/rooms/:roomId", requireAuth, async (req, res) => {
   room.tags = normalizeTags(req.body.tags ?? room.tags);
   room.theme = String(req.body.theme || room.theme || "twilight");
   room.background = String(req.body.background || room.background || "aurora");
+  if (Object.prototype.hasOwnProperty.call(req.body, "worldConfig")) {
+    room.worldConfig = normalizeWorldConfig(req.body.worldConfig);
+  }
 
   if (room.visibility === "private") {
     const password = String(req.body.password || "");
@@ -1770,10 +2717,7 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
   }
 
   try {
-    const response = await fetch(chatbotWarmupUrl("/health"), {
-      signal: AbortSignal.timeout(chatbotHealthTimeoutMs),
-    });
-    const payload = await readChatbotPayload(response);
+    const payload = await readChatbotHealthWithRetry(chatbotHealthTimeoutMs);
     res.json({
       ok: true,
       ...providerStatus,
@@ -2040,6 +2984,296 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("room:activity:set", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before updating activity." });
+        return;
+      }
+
+      const tabId = normalizeRoomActivityTab(payload?.tabId);
+      if (!tabId) {
+        ack?.({ ok: false, message: "Room activity tab is invalid." });
+        return;
+      }
+
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
+      const roomActivity = getRoomActivity(room.id);
+      roomActivity.set(socket.user.id, {
+        profileStatus,
+        roomId: room.id,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        tabId,
+        socketId: socket.id,
+        updatedAt: new Date().toISOString(),
+      });
+
+      socket.join(`room:${room.id}`);
+      updateSocketSpaceProfileStatus(socket, room.id, profileStatus);
+      updateSocketMeetingProfileStatus(socket, room.id, profileStatus);
+      const members = serializeRoomActivity(room.id);
+      io.to(`room:${room.id}`).emit("room:activity:state", {
+        roomId: room.id,
+        members,
+      });
+      emitMeetingSummary(room.id, socket);
+      ack?.({ ok: true, members, meetings: serializeMeetingSummary(room.id) });
+    } catch {
+      ack?.({ ok: false, message: "Unable to update room activity right now." });
+    }
+  });
+
+  socket.on("space:join", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before entering Limeets." });
+        return;
+      }
+
+      const position = normalizeSpacePosition(payload?.position, DEFAULT_SPACE_TILE);
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
+      const roomPresence = getSpacePresence(room.id);
+      const presence = {
+        presenceId: socket.id,
+        profileStatus,
+        roomId: room.id,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        position,
+        socketId: socket.id,
+        updatedAt: new Date().toISOString(),
+      };
+
+      socket.join(getSpaceRoomKey(room.id));
+      roomPresence.set(socket.id, presence);
+
+      const users = serializeSpacePresence(room.id);
+      io.to(getSpaceRoomKey(room.id)).emit("space:state", {
+        roomId: room.id,
+        users,
+      });
+      ack?.({ ok: true, users, meetings: serializeMeetingSummary(room.id) });
+    } catch {
+      ack?.({ ok: false, message: "Unable to enter Limeets right now." });
+    }
+  });
+
+  socket.on("space:move", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before moving in Limeets." });
+        return;
+      }
+
+      const position = normalizeSpacePosition(payload?.position);
+      if (!position) {
+        ack?.({ ok: false, message: "Avatar position is invalid." });
+        return;
+      }
+
+      const roomPresence = getSpacePresence(room.id);
+      const currentPresence = roomPresence.get(socket.id);
+      if (!currentPresence || currentPresence.socketId !== socket.id) {
+        ack?.({ ok: false, message: "Enter Limeets before moving." });
+        return;
+      }
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus ?? currentPresence.profileStatus);
+
+      const presence = {
+        ...currentPresence,
+        profileStatus,
+        position,
+        updatedAt: new Date().toISOString(),
+      };
+
+      roomPresence.set(socket.id, presence);
+      if (profileStatus === "invisible") {
+        io.to(getSpaceRoomKey(room.id)).emit("space:state", {
+          roomId: room.id,
+          users: serializeSpacePresence(room.id),
+        });
+      } else {
+        socket.to(getSpaceRoomKey(room.id)).emit("space:user-moved", {
+          presenceId: socket.id,
+          profileStatus,
+          roomId: room.id,
+          userId: socket.user.id,
+          user: publicUser(socket.user),
+          position,
+        });
+      }
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to move in Limeets right now." });
+    }
+  });
+
+  socket.on("space:leave", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Study Space room not found." });
+        return;
+      }
+
+      removeSocketSpacePresence(socket, room.id);
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to leave Limeets right now." });
+    }
+  });
+
+  socket.on("meeting:join", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before entering a Meeting Area." });
+        return;
+      }
+
+      if (!areaId) {
+        ack?.({ ok: false, message: "Meeting Area is invalid." });
+        return;
+      }
+
+      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
+      removeSocketMeetingPresence(socket, room.id);
+
+      const areaPresence = getMeetingAreaPresence(room.id, areaId);
+      const presence = {
+        roomId: room.id,
+        areaId,
+        profileStatus,
+        userId: socket.user.id,
+        user: publicUser(socket.user),
+        media: normalizeMeetingMedia(payload?.media),
+        socketId: socket.id,
+        joinedAt: new Date().toISOString(),
+      };
+
+      socket.join(getMeetingRoomKey(room.id, areaId));
+      areaPresence.set(socket.user.id, presence);
+
+      const users = serializeMeetingPresence(room.id, areaId);
+      const { socketId: _socketId, ...publicPresence } = presence;
+      if (profileStatus !== "invisible") {
+        socket.to(getMeetingRoomKey(room.id, areaId)).emit("meeting:user-joined", {
+          ...publicPresence,
+        });
+      }
+      emitMeetingState(room.id, areaId);
+      emitMeetingSummary(room.id);
+      ack?.({ ok: true, users });
+    } catch {
+      ack?.({ ok: false, message: "Unable to join the Meeting Area right now." });
+    }
+  });
+
+  socket.on("meeting:leave", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Meeting Area room not found." });
+        return;
+      }
+
+      removeSocketMeetingPresence(socket, room.id, areaId);
+      emitMeetingSummary(room.id);
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to leave the Meeting Area right now." });
+    }
+  });
+
+  socket.on("meeting:media-state", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+
+      if (!room || !isMember(room, socket.user.id) || !areaId) {
+        ack?.({ ok: false, message: "Meeting Area is invalid." });
+        return;
+      }
+
+      const areaPresence = meetingPresenceByRoom.get(room.id)?.get(areaId);
+      const currentPresence = areaPresence?.get(socket.user.id);
+      if (!currentPresence || currentPresence.socketId !== socket.id) {
+        ack?.({ ok: false, message: "Join the Meeting Area before updating media." });
+        return;
+      }
+
+      const media = normalizeMeetingMedia(payload?.media);
+      areaPresence.set(socket.user.id, {
+        ...currentPresence,
+        media,
+      });
+
+      io.to(getMeetingRoomKey(room.id, areaId)).emit("meeting:user-media", {
+        roomId: room.id,
+        areaId,
+        userId: socket.user.id,
+        media,
+      });
+      emitMeetingSummary(room.id);
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to update media state right now." });
+    }
+  });
+
+  socket.on("meeting:signal", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const areaId = normalizeMeetingAreaId(payload?.areaId);
+      const targetUserId = String(payload?.targetUserId || "").trim();
+      const signal = normalizeMeetingSignal(payload?.signal);
+
+      if (!room || !isMember(room, socket.user.id) || !areaId || !targetUserId || !signal) {
+        ack?.({ ok: false, message: "Meeting signal is invalid." });
+        return;
+      }
+
+      const areaPresence = meetingPresenceByRoom.get(room.id)?.get(areaId);
+      const sender = areaPresence?.get(socket.user.id);
+      const target = areaPresence?.get(targetUserId);
+      if (!sender || sender.socketId !== socket.id || !target) {
+        ack?.({ ok: false, message: "Meeting participant is unavailable." });
+        return;
+      }
+
+      io.to(target.socketId).emit("meeting:signal", {
+        roomId: room.id,
+        areaId,
+        fromUserId: socket.user.id,
+        fromUser: publicUser(socket.user),
+        signal,
+      });
+      ack?.({ ok: true });
+    } catch {
+      ack?.({ ok: false, message: "Unable to relay meeting signal right now." });
+    }
+  });
+
   socket.on("message:send", async (payload, ack) => {
     try {
       const db = await readDb();
@@ -2142,6 +3376,12 @@ io.on("connection", (socket) => {
     } catch {
       ack?.({ ok: false, message: "Unable to delete the message right now." });
     }
+  });
+
+  socket.on("disconnect", () => {
+    removeSocketSpacePresence(socket);
+    removeSocketRoomActivity(socket);
+    removeSocketMeetingPresence(socket);
   });
 });
 

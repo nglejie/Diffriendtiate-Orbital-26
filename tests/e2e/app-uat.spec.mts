@@ -60,8 +60,8 @@ async function createRoomViaApi(request, token, overrides = {}) {
 }
 
 // Full owner walkthrough: sign up through the UI, switch theme, create a room
-// with custom logo/background uploads, then verify the main room tabs are usable
-// and Calendar remains disabled while it is intentionally not supported.
+// with custom logo/background uploads, then verify the renamed World shell tabs
+// are usable and Coordidate remains disabled while it is intentionally rebuilt.
 test("UAT: user registers, toggles theme, creates a custom room, and navigates core tabs", async ({ page }) => {
   const email = uniqueEmail("uat-owner");
   await registerThroughUi(page, "UAT Owner", email);
@@ -94,26 +94,26 @@ test("UAT: user registers, toggles theme, creates a custom room, and navigates c
     .click();
 
   await expect(page).toHaveURL(/#\/rooms\//);
-  await expect(page.getByText("UAT Custom Room").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: /room settings/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "UAT Custom Room" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^world$/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /world settings/i })).toBeVisible();
 
-  await page.getByRole("button", { name: /^chat$/i }).click();
+  await page.getByRole("button", { name: /^convolution$/i }).click();
   await expect(page.getByRole("heading", { name: /welcome to #general/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /general options/i })).toBeVisible();
 
-  await page.getByRole("button", { name: /^resources$/i }).click();
-  await expect(page.getByRole("heading", { name: /resources/i })).toBeVisible();
+  await page.getByRole("button", { name: /^infilenite$/i }).click();
   await expect(page.getByRole("button", { name: /new folder/i })).toBeVisible();
 
   await page.getByRole("button", { name: /^intelligrate$/i }).click();
   await expect(page.getByText(/intelligrate/i).first()).toBeVisible();
 
-  await expect(page.getByRole("button", { name: /^calendar$/i })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^coordidate$/i })).toBeDisabled();
 });
 
 // Permission UAT: create an owner/member pair, join the member to the room, and
 // load the room as that member. The member should see normal room content but no
-// owner-only settings, channel creation, or channel options controls.
+// owner-only world settings, channel creation, or channel options controls.
 test("UAT: non-owner members cannot see room management controls", async ({ page, request }) => {
   const ownerPayload = await registerViaApi(request, "E2E Owner", uniqueEmail("e2e-owner"));
   const memberPayload = await registerViaApi(request, "E2E Member", uniqueEmail("e2e-member"));
@@ -129,10 +129,11 @@ test("UAT: non-owner members cannot see room management controls", async ({ page
   }, memberPayload.token);
 
   await page.goto(`/#/rooms/${room.id}`);
-  await expect(page.getByText("Member Visibility Room").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: /room settings/i })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /^world$/i })).toBeVisible();
+  await expect(page.getByText("E2E Member").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /world settings/i })).toHaveCount(0);
 
-  await page.getByRole("button", { name: /^chat$/i }).click();
+  await page.getByRole("button", { name: /^convolution$/i }).click();
   await expect(page.getByRole("button", { name: /create channel in text channels/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /general options/i })).toHaveCount(0);
 });

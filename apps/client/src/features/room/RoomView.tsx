@@ -17,31 +17,38 @@ import {
   Globe2,
   Hash,
   Headphones,
-  House,
   Info,
   Link as LinkIcon,
   Lock,
   LogOut,
+  Map as MapIcon,
   MessageCircle,
+  Mic,
   MicOff,
   MoreVertical,
+  MonitorUp,
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
+  PhoneOff,
   Plus,
   Search,
   Send,
   Star,
   Settings,
+  ScreenShare,
+  ScreenShareOff,
   Tag,
   Trash2,
   Upload,
   Video,
+  VideoOff,
+  VolumeX,
   Wand2,
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { io } from "socket.io-client";
 import { api } from "../../api.ts";
@@ -52,10 +59,22 @@ import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.tsx";
 import { ChatPanel as DiscordChatPanel } from "./chat/ChatPanel.tsx";
 import { ChatSidebar } from "./chat/ChatSidebar.tsx";
 import {
+  MeetingDisplayStage,
+  MeetingDockPreview,
+  MeetingMediaStrip,
+} from "./meeting/MeetingMediaTiles.tsx";
+import { MeetingSidebarPanel } from "./meeting/MeetingSidebarPanel.tsx";
+import { useLimeetsMeeting } from "./meeting/useLimeetsMeeting.ts";
+import {
+  UserProfileControls,
+  getStoredProfileStatus,
+} from "./profile/UserProfileControls.tsx";
+import {
   ResourceDriveSidebar,
   ResourceFileManager,
   useResourceDriveController,
 } from "./resources/ResourceFileManager.tsx";
+import { VirtualStudySpace } from "./space/VirtualStudySpace.tsx";
 import {
   DEFAULT_CATEGORY_ID,
   addChannelToCategory,
@@ -109,13 +128,33 @@ import {
   moduleCodeOptions,
 } from "../../constants.ts";
 
-const tabs = [
-  { id: "focus", label: "Home", icon: House },
-  { id: "chat", label: "Chat", icon: MessageCircle },
+const BASE_ROOM_TABS = [
+  { id: "space", label: "World", icon: MapIcon },
+  { id: "chat", label: "Convolution", icon: MessageCircle },
   { id: "buddy", label: "Intelligrate", icon: Bot },
-  { id: "resources", label: "Resources", icon: FolderOpen },
-  { id: "calendar", label: "Calendar", icon: CalendarDays, disabled: true },
+  { id: "resources", label: "Infilenite", icon: FolderOpen },
+  { id: "calendar", label: "Coordidate", icon: CalendarDays, disabled: true },
 ];
+
+function getRoomTabs(meetingActive) {
+  return meetingActive
+    ? [
+        ...BASE_ROOM_TABS,
+        { id: "meetings", label: "Limeets", icon: Video },
+      ]
+    : BASE_ROOM_TABS;
+}
+
+const DEFAULT_BUDDY_AVAILABILITY = {
+  ok: null,
+  available: false,
+  code: "checking",
+  provider: "unknown",
+  providerLabel: "Checking provider",
+  message: "Checking Intelligrate availability.",
+  setupRequired: false,
+  canConfigure: false,
+};
 
 /** Reads optional room-local UI state without involving the shared backend. */
 function readRoomStorage(roomId, key, fallback) {
@@ -151,14 +190,19 @@ function getRoomChannels(room) {
   return channels.length ? channels : ["general"];
 }
 
-function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
+function mergeUserProfile(currentUser, nextUser) {
+  if (!currentUser || !nextUser || currentUser.id !== nextUser.id) return currentUser;
+  return { ...currentUser, ...nextUser };
+}
+
+function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token, user }) {
   const [room, setRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [resources, setResources] = useState([]);
   const [customResourceFolders, setCustomResourceFolders] = useState([]);
   const [resourceFoldersLoadedRoomId, setResourceFoldersLoadedRoomId] = useState("");
   const [sessions, setSessions] = useState([]);
-  const [activeTab, setActiveTab] = useState("focus");
+  const [activeTab, setActiveTab] = useState("space");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -179,12 +223,26 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const [buddyThreads, setBuddyThreads] = useState([]);
   const [activeBuddyThreadId, setActiveBuddyThreadId] = useState("");
   const [draftBuddyThread, setDraftBuddyThread] = useState(null);
+  const [buddyAvailability, setBuddyAvailability] = useState(DEFAULT_BUDDY_AVAILABILITY);
   const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
   const [roomToast, setRoomToast] = useState(null);
+  const [roomSocket, setRoomSocket] = useState(null);
+  const [roomActivityMembers, setRoomActivityMembers] = useState([]);
+  const [profileStatus, setProfileStatus] = useState(getStoredProfileStatus);
+  const [activeMeetingArea, setActiveMeetingArea] = useState(null);
+  const [spaceReturnToSpawnSignal, setSpaceReturnToSpawnSignal] = useState(0);
+  const [worldHasUnsavedChanges, setWorldHasUnsavedChanges] = useState(false);
   const [importantMessages, setImportantMessages] = useState([]);
   const [resourceThreads, setResourceThreads] = useState({});
   const toastTimeoutRef = useRef(null);
+  const onUserUpdatedRef = useRef(onUserUpdated);
+  const userRef = useRef(user);
+  const limeetsMeeting = useLimeetsMeeting({ profileStatus, room, socket: roomSocket, user });
+  const availableTabs = useMemo(
+    () => getRoomTabs(Boolean(limeetsMeeting.isActive)),
+    [limeetsMeeting.isActive],
+  );
 
   const theme = getTheme(room?.theme);
   const background = getBackground(room?.background);
@@ -297,6 +355,12 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     writeRoomStorage(room?.id, "resourceThreads", resourceThreads);
   }, [resourceThreads, room?.id]);
 
+  useEffect(() => {
+    if (activeTab === "buddy" && room?.isMember) {
+      refreshBuddyAvailability(room.id);
+    }
+  }, [activeTab, room?.id, room?.isMember]);
+
   /** Stars or unstarrs a chat message so the Resources tab can surface reusable context. */
   function toggleImportantMessage(message) {
     if (!message?.id) return;
@@ -354,11 +418,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   // Keep the Intelligrate tab usable even before a saved chat exists.
   useEffect(() => {
     if (loading || !room?.isMember || activeTab !== "buddy") return;
+    if (!buddyAvailability.available) return;
     if (!draftBuddyThread && !buddyThreadList.length) {
       setDraftBuddyThread(createDraftBuddyThread());
       setActiveBuddyThreadId("");
     }
-  }, [activeTab, buddyThreadList.length, draftBuddyThread, loading, room?.isMember]);
+  }, [
+    activeTab,
+    buddyAvailability.available,
+    buddyThreadList.length,
+    draftBuddyThread,
+    loading,
+    room?.isMember,
+  ]);
 
   /** Shows compact room feedback without interrupting the current workflow. */
   function showRoomToast(message) {
@@ -371,6 +443,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       setRoomToast((current) => (current?.id === id ? null : current));
     }, 3600);
   }
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    onUserUpdatedRef.current = onUserUpdated;
+  }, [onUserUpdated]);
 
   useEffect(() => {
     if (inviteCode) {
@@ -390,6 +470,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       auth: { token },
       path: "/socket.io",
     });
+    setRoomSocket(socket);
 
     socket.on("connect", () => {
       socket.emit("room:join", room.id, (ack) => {
@@ -428,6 +509,41 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       }
     });
 
+    socket.on("room:activity:state", (payload) => {
+      if (payload?.roomId !== room.id) return;
+      setRoomActivityMembers(Array.isArray(payload.members) ? payload.members : []);
+    });
+
+    socket.on("user:profile-updated", (payload) => {
+      if (payload?.roomId !== room.id || !payload.user?.id) return;
+      const nextUser = payload.user;
+
+      if (nextUser.id === userRef.current?.id) {
+        onUserUpdatedRef.current?.(mergeUserProfile(userRef.current, nextUser));
+      }
+
+      setRoom((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          members: asArray(current.members).map((member) => mergeUserProfile(member, nextUser)),
+          owner: mergeUserProfile(current.owner, nextUser),
+        };
+      });
+      setMessages((current) =>
+        current.map((message) => ({
+          ...message,
+          sender: mergeUserProfile(message.sender, nextUser),
+        })),
+      );
+      setRoomActivityMembers((current) =>
+        current.map((member) => ({
+          ...member,
+          user: mergeUserProfile(member.user, nextUser),
+        })),
+      );
+    });
+
     // Chat panel children send messages through this room-scoped socket.
     // The reference is cleared on unmount to avoid leaking a stale connection.
     window.diffriendtiateSocket = socket;
@@ -437,8 +553,22 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       if (window.diffriendtiateSocket === socket) {
         delete window.diffriendtiateSocket;
       }
+      setRoomSocket((currentSocket) => (currentSocket === socket ? null : currentSocket));
+      setRoomActivityMembers([]);
     };
   }, [room?.id, room?.isMember, token]);
+
+  useEffect(() => {
+    if (!roomSocket || !room?.id || !room.isMember || !activeTab) return undefined;
+
+    roomSocket.emit("room:activity:set", {
+      profileStatus,
+      roomId: room.id,
+      tabId: activeTab,
+    });
+
+    return undefined;
+  }, [activeTab, profileStatus, room?.id, room?.isMember, roomSocket]);
 
   /**
    * Fetches the room and all member-only data needed by the active room workspace.
@@ -454,18 +584,40 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
       setRoom(loadedRoom);
 
       if (loadedRoom.isMember) {
-        const [messagePayload, resourcePayload, sessionPayload, buddyPayload] = await Promise.all([
+        const [
+          messagePayload,
+          resourcePayload,
+          sessionPayload,
+          buddyPayload,
+          buddyHealthPayload,
+        ] = await Promise.all([
           api.getMessages(loadedRoom.id),
           api.getResources(loadedRoom.id, { includeDeleted: true }),
           api.getSessions(loadedRoom.id),
           api.getBuddyThreads(loadedRoom.id),
+          api.getBuddyHealth(loadedRoom.id).catch((err) => ({
+            ok: false,
+            available: false,
+            code: "health_check_failed",
+            providerLabel: "Unavailable",
+            setupRequired: true,
+            canConfigure: loadedRoom.isOwner,
+            message: err.message || "Unable to check Intelligrate availability.",
+          })),
         ]);
         setMessages(asArray(messagePayload.messages));
         setResources(asArray(resourcePayload.resources));
         setSessions(asArray(sessionPayload.sessions));
+        setBuddyAvailability({
+          ...DEFAULT_BUDDY_AVAILABILITY,
+          ...buddyHealthPayload,
+          available: Boolean(buddyHealthPayload.available ?? buddyHealthPayload.ok),
+          ok: Boolean(buddyHealthPayload.ok),
+        });
         const loadedThreads = asArray(buddyPayload.threads).map((thread) =>
           normalizeBuddyThread(thread, user),
         );
+        const buddyAvailable = Boolean(buddyHealthPayload.available ?? buddyHealthPayload.ok);
 
         if (loadedThreads.length) {
           setBuddyThreads(loadedThreads);
@@ -477,7 +629,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         } else {
           setBuddyThreads([]);
           setActiveBuddyThreadId("");
-          setDraftBuddyThread(createDraftBuddyThread());
+          setDraftBuddyThread(buddyAvailable ? createDraftBuddyThread() : null);
         }
       } else {
         setMessages([]);
@@ -486,6 +638,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         setBuddyThreads([]);
         setActiveBuddyThreadId("");
         setDraftBuddyThread(null);
+        setBuddyAvailability(DEFAULT_BUDDY_AVAILABILITY);
       }
     } catch (err) {
       setError(err.message);
@@ -543,6 +696,44 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
    */
   function showError(message) {
     setAlertMessage(message || "Something went wrong.");
+  }
+
+  /** Checks whether Intelligrate has a usable provider before exposing the chat UI. */
+  async function refreshBuddyAvailability(nextRoomId = room?.id) {
+    if (!nextRoomId) return DEFAULT_BUDDY_AVAILABILITY;
+
+    setBuddyAvailability((current) => ({
+      ...current,
+      code: current.available ? current.code : "checking",
+      message: current.available
+        ? current.message
+        : "Checking Intelligrate availability.",
+    }));
+
+    try {
+      const payload = await api.getBuddyHealth(nextRoomId);
+      const nextAvailability = {
+        ...DEFAULT_BUDDY_AVAILABILITY,
+        ...payload,
+        available: Boolean(payload.available ?? payload.ok),
+        ok: Boolean(payload.ok),
+      };
+      setBuddyAvailability(nextAvailability);
+      return nextAvailability;
+    } catch (err) {
+      const nextAvailability = {
+        ...DEFAULT_BUDDY_AVAILABILITY,
+        ok: false,
+        available: false,
+        code: "health_check_failed",
+        providerLabel: "Unavailable",
+        setupRequired: true,
+        canConfigure: Boolean(room?.isOwner),
+        message: err.message || "Unable to check Intelligrate availability.",
+      };
+      setBuddyAvailability(nextAvailability);
+      return nextAvailability;
+    }
   }
 
   /**
@@ -662,14 +853,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   }
 
   /**
-   * Sends a chat message over the active room socket and exposes Socket.IO acks as
+   * Sends a Convolution message over the active room socket and exposes Socket.IO acks as
    * a Promise so panels can use normal async error handling.
    */
   function sendViaSocket(body, options: any = {}) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
-        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        reject(new Error("Convolution is reconnecting. Try again in a moment."));
         return;
       }
 
@@ -698,7 +889,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
-        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        reject(new Error("Convolution is reconnecting. Try again in a moment."));
         return;
       }
 
@@ -725,7 +916,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     return new Promise((resolve, reject) => {
       const socket = window.diffriendtiateSocket;
       if (!socket?.connected) {
-        reject(new Error("Chat is reconnecting. Try again in a moment."));
+        reject(new Error("Convolution is reconnecting. Try again in a moment."));
         return;
       }
 
@@ -909,24 +1100,112 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
     }
   }
 
-  /** Keeps the detail sidebar open whenever a room tool is selected. */
+  /** Keeps the room sidebar dock available across room tools. */
   function selectRoomTab(tabId) {
-    if (tabs.some((tab) => tab.id === tabId && tab.disabled)) {
-      setNotice("Calendar is currently disabled.");
+    const nextTabId = tabId === "focus" ? "space" : tabId;
+    if (
+      room?.isOwner &&
+      activeTab === "space" &&
+      nextTabId !== "space" &&
+      worldHasUnsavedChanges &&
+      !window.confirm("You have unsaved World changes. Leave without saving?")
+    ) {
       return;
     }
 
-    setActiveTab(tabId);
+    const nextTabs = getRoomTabs(Boolean(limeetsMeeting.isActive));
+    if (nextTabs.some((tab) => tab.id === nextTabId && tab.disabled)) {
+      setNotice("Coordidate is currently disabled.");
+      return;
+    }
+
+    if (!nextTabs.some((tab) => tab.id === nextTabId)) {
+      setNotice(nextTabId === "meetings" ? "Join a Meeting Area to open Limeets." : "That room area is unavailable.");
+      return;
+    }
+
+    setActiveTab(nextTabId);
+    if (nextTabId !== "space") setWorldHasUnsavedChanges(false);
     setContextOpen(true);
   }
+
+  const handleExitRoom = useCallback(() => {
+    if (
+      room?.isOwner &&
+      worldHasUnsavedChanges &&
+      !window.confirm("You have unsaved World changes. Leave without saving?")
+    ) {
+      return;
+    }
+
+    setWorldHasUnsavedChanges(false);
+    onBack();
+  }, [onBack, room?.isOwner, worldHasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!limeetsMeeting.isActive && activeTab === "meetings") {
+      setActiveTab("space");
+    }
+
+    if (!limeetsMeeting.isActive) {
+      setActiveMeetingArea(null);
+    }
+  }, [activeTab, limeetsMeeting.isActive]);
+
+  const handleMeetingAreaChange = useCallback(
+    (meetingArea) => {
+      if (meetingArea?.areaId) {
+        setActiveMeetingArea({
+          id: meetingArea.areaId,
+          name: meetingArea.name || meetingArea.label || "Meeting Area",
+        });
+        setContextOpen(true);
+        void limeetsMeeting.joinMeeting(meetingArea.areaId);
+        return;
+      }
+
+      setActiveMeetingArea(null);
+      limeetsMeeting.leaveMeeting();
+    },
+    [limeetsMeeting.joinMeeting, limeetsMeeting.leaveMeeting],
+  );
+
+  const handleLeaveMeetingArea = useCallback(() => {
+    setActiveMeetingArea(null);
+    setSpaceReturnToSpawnSignal((current) => current + 1);
+    setActiveTab("space");
+    setContextOpen(true);
+    limeetsMeeting.leaveMeeting();
+  }, [limeetsMeeting.leaveMeeting]);
 
   /** Opens a local draft chat; persistence starts only after the first message. */
   async function startBuddyThread() {
     if (!room?.id) return;
+    if (
+      room?.isOwner &&
+      activeTab === "space" &&
+      worldHasUnsavedChanges &&
+      !window.confirm("You have unsaved World changes. Leave without saving?")
+    ) {
+      return;
+    }
+
+    const availability = buddyAvailability.available
+      ? buddyAvailability
+      : await refreshBuddyAvailability(room.id);
+
+    if (!availability.available) {
+      setActiveTab("buddy");
+      setWorldHasUnsavedChanges(false);
+      setContextOpen(true);
+      setNotice("Intelligrate needs an LLM provider before chats can start.");
+      return;
+    }
 
     setDraftBuddyThread(createDraftBuddyThread());
     setActiveBuddyThreadId("");
     setActiveTab("buddy");
+    setWorldHasUnsavedChanges(false);
     setContextOpen(true);
   }
 
@@ -1172,13 +1451,28 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   const safeChannelLayout = asArray(channelLayout);
   const safeChatDrafts = asObjectRecord(chatDrafts);
   const safeMessages = asArray(messages);
+  const safeResources = asArray(resources);
   const safeSessions = asArray(sessions);
   const safeStarredMessageIds = asArray(starredMessageIds);
+  const visibleResourceCount = safeResources.filter((resource) => !resource?.deletedAt).length;
+  const spaceContext = {
+    activeBuddyThreadTitle: activeBuddyThread?.title || "",
+    activeChatChannel,
+    calendarAvailable: false,
+    intelligrateAvailable: Boolean(buddyAvailability.available),
+    intelligrateProviderLabel: buddyAvailability.providerLabel || "",
+    resourceCount: visibleResourceCount,
+    sessionCount: safeSessions.length,
+  };
 
   return (
     <div
       className={`room-workspace ${contextOpen ? "context-open" : "context-collapsed"} ${
-        activeTab === "focus" ? "home-active" : ""
+        activeTab === "space" ? "world-active" : ""
+      } ${limeetsMeeting.isActive ? "meeting-active" : ""} ${
+        limeetsMeeting.isActive && activeTab !== "space" && activeTab !== "meetings"
+          ? "dock-preview-active"
+          : ""
       }`}
       style={{
         "--theme-a": theme.colors[0],
@@ -1191,7 +1485,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         <div className="room-rail-top">
           <button
             className={contextOpen ? "room-rail-logo" : "room-rail-logo collapsed-toggle"}
-            onClick={() => (contextOpen ? selectRoomTab("focus") : setContextOpen(true))}
+            onClick={() => (contextOpen ? selectRoomTab("space") : setContextOpen(true))}
             title={contextOpen ? room.name : "Open sidebar"}
             type="button"
           >
@@ -1202,7 +1496,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             )}
             {!contextOpen ? <PanelLeftOpen size={15} /> : null}
           </button>
-          {tabs.map((tab) => {
+          {availableTabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
@@ -1219,22 +1513,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
               </button>
             );
           })}
-        </div>
-
-        <div className="room-rail-bottom">
           {room.isOwner ? (
-            <button
-              aria-label="Room settings"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings"
-              type="button"
-            >
-              <Settings size={22} />
-            </button>
+            <>
+              <span className="room-rail-divider" aria-hidden="true" />
+              <button
+                aria-label="World settings"
+                onClick={() => setSettingsOpen(true)}
+                title="World settings"
+                type="button"
+              >
+                <Settings size={22} />
+              </button>
+            </>
           ) : null}
-          <button aria-label="Exit room" onClick={onBack} title="Exit room" type="button">
-            <LogOut size={22} />
-          </button>
         </div>
       </nav>
 
@@ -1243,13 +1534,16 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
           <RoomContextPanel
             activeTab={activeTab}
             activeChannel={activeChatChannel}
+            buddyAvailability={buddyAvailability}
             activeBuddyThreadId={activeBuddyThread?.id}
             buddyThreads={buddyThreads}
             channels={safeChannels}
             channelLayout={safeChannelLayout}
             chatDrafts={safeChatDrafts}
             copyInviteLink={copyInviteLink}
+            currentProfileStatus={profileStatus}
             inviteCopied={inviteCopied}
+            meetingCall={limeetsMeeting}
             onCloseSidebar={() => setContextOpen(false)}
             onCreateCategory={openCreateCategoryDialog}
             onCreateChannel={openCreateChannelDialog}
@@ -1268,6 +1562,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             }}
             room={room}
             resourceDrive={resourceDrive}
+            roomActivityMembers={roomActivityMembers}
             sessions={safeSessions}
             channelActionLoading={channelActionLoading}
             user={user}
@@ -1275,10 +1570,35 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         </div>
       </aside>
 
+      {room.isMember && !settingsOpen ? (
+        <div className="room-sidebar-dock">
+          <RoomVoiceDock
+            meeting={limeetsMeeting}
+            onExitRoom={handleExitRoom}
+            onLeaveMeetingArea={handleLeaveMeetingArea}
+            onOpenMeeting={() => selectRoomTab("meetings")}
+            onProfileStatusChange={setProfileStatus}
+            onUserUpdated={onUserUpdated}
+            meetingAreaName={activeMeetingArea?.name || "Meeting Area"}
+            profileStatus={profileStatus}
+            showMeetingPreview={limeetsMeeting.isActive && activeTab !== "space" && activeTab !== "meetings"}
+            user={user}
+          />
+        </div>
+      ) : null}
+
       <main className="room-main-stage">
         <div className="room-floating-notices" aria-live="polite">
           {notice ? <p className="form-notice">{notice}</p> : null}
         </div>
+
+        {room.isMember && activeTab === "space" ? (
+          <MeetingMediaStrip
+            meeting={limeetsMeeting}
+            onOpen={() => selectRoomTab("meetings")}
+            user={user}
+          />
+        ) : null}
 
         {!room.isMember ? (
           <section className="room-content-panel join-surface">
@@ -1290,8 +1610,6 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
             </button>
           </section>
         ) : null}
-
-        {room.isMember && activeTab === "focus" ? <HomePanel room={room} /> : null}
 
         {room.isMember && activeTab === "chat" ? (
           <section className="room-content-panel chat-content-panel">
@@ -1319,7 +1637,13 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
 
         {room.isMember && activeTab === "buddy" ? (
           <section className="room-content-panel buddy-content-panel">
-            {activeBuddyThread ? (
+            {!buddyAvailability.available ? (
+              <IntelligrateUnavailable
+                availability={buddyAvailability}
+                isOwner={room.isOwner}
+                onRefresh={() => refreshBuddyAvailability(room.id)}
+              />
+            ) : activeBuddyThread ? (
               <BuddyPanel
                 isDraftThread={Boolean(activeBuddyThread.isDraft)}
                 messages={activeBuddyThread.messages || []}
@@ -1348,6 +1672,38 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
         {room.isMember && activeTab === "resources" ? (
           <section className="room-content-panel resource-content-panel">
             <ResourceFileManager drive={resourceDrive} />
+          </section>
+        ) : null}
+
+        {room.isMember && activeTab === "space" ? (
+          <section className="room-content-panel study-space-content-panel">
+            <VirtualStudySpace
+              onMeetingAreaChange={handleMeetingAreaChange}
+              onNavigate={selectRoomTab}
+              onWorldChanged={(updatedRoom) => {
+                setRoom(updatedRoom);
+                setWorldHasUnsavedChanges(false);
+                setNotice("World updated.");
+              }}
+              onWorldDirtyChange={setWorldHasUnsavedChanges}
+              profileStatus={profileStatus}
+              returnToSpawnSignal={spaceReturnToSpawnSignal}
+              room={room}
+              roomActivityMembers={roomActivityMembers}
+              socket={roomSocket}
+              spaceContext={spaceContext}
+              user={user}
+            />
+          </section>
+        ) : null}
+
+        {room.isMember && activeTab === "meetings" ? (
+          <section className="room-content-panel meeting-content-panel">
+            <MeetingDisplayStage
+              meeting={limeetsMeeting}
+              meetingAreaName={activeMeetingArea?.name || "Meeting Area"}
+              user={user}
+            />
           </section>
         ) : null}
 
@@ -1439,18 +1795,66 @@ function RoomView({ inviteCode, onBack, onOpenRoom, roomId, token, user }) {
   );
 }
 
+function IntelligrateUnavailable({ availability, isOwner, onRefresh }) {
+  const checking = availability?.code === "checking";
+  const providerLabel = availability?.providerLabel || "No LLM provider configured";
+  const message =
+    availability?.message ||
+    "Intelligrate needs a local GPU model or a configured Gemini API key before it can be used.";
+
+  return (
+    <div className="intelligrate-gate" role="status" aria-live="polite">
+      <div className="intelligrate-gate-card">
+        <span className="intelligrate-gate-icon">
+          <Lock size={24} />
+        </span>
+        <div>
+          <p className="eyebrow">Intelligrate unavailable</p>
+          <h2>{checking ? "Checking provider" : "LLM provider required"}</h2>
+          <p>{message}</p>
+        </div>
+        <div className="intelligrate-gate-status">
+          <span>Current provider</span>
+          <strong>{providerLabel}</strong>
+        </div>
+        {isOwner ? (
+          <div className="intelligrate-gate-owner">
+            <h3>Owner setup</h3>
+            <p>
+              Start the app with the GPU compose override to use the built-in local model,
+              or configure a real Gemini API key in the server environment. Per-room API
+              keys are not stored in the app yet.
+            </p>
+          </div>
+        ) : (
+          <p className="intelligrate-gate-member">
+            Ask the room owner to enable the built-in model or configure an API key.
+          </p>
+        )}
+        <button className="secondary-button compact" onClick={onRefresh} type="button">
+          <Wand2 size={16} />
+          Check again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** Sidebar content that changes based on the active room tool. */
 function RoomContextPanel({
   activeTab,
   activeChannel,
   activeBuddyThreadId,
+  buddyAvailability,
   buddyThreads,
   channelActionLoading,
   channels,
   channelLayout,
   chatDrafts,
   copyInviteLink,
+  currentProfileStatus,
   inviteCopied,
+  meetingCall,
   onCloseSidebar,
   onCreateCategory,
   onCreateChannel,
@@ -1465,6 +1869,7 @@ function RoomContextPanel({
   onSelectBuddyThread,
   onStartGroupBuddyThread,
   room,
+  roomActivityMembers,
   resourceDrive,
   sessions,
   user,
@@ -1481,6 +1886,7 @@ function RoomContextPanel({
   const safeChatDrafts = asObjectRecord(chatDrafts);
   const safeSessions = asArray(sessions);
   const canManageRoom = Boolean(room?.isOwner);
+  const buddyLocked = activeTab === "buddy" && !buddyAvailability?.available;
   const filteredBuddyThreads = safeBuddyThreads.filter((thread) =>
     String(thread?.title || "New Chat")
       .toLowerCase()
@@ -1525,7 +1931,7 @@ function RoomContextPanel({
   if (activeTab === "chat") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Chat" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Convolution" />
         <PanelDivider />
         <ChatSidebar
           activeChannel={activeChannel}
@@ -1589,10 +1995,21 @@ function RoomContextPanel({
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Intelligrate" />
         <PanelDivider />
         <div className="buddy-sidebar-nav">
-          <button className="buddy-nav-action" onClick={onNewBuddyThread} type="button">
+          <button
+            className="buddy-nav-action"
+            disabled={buddyLocked}
+            onClick={onNewBuddyThread}
+            title={buddyLocked ? "Intelligrate needs an LLM provider first" : "New Chat"}
+            type="button"
+          >
             <Edit3 size={17} />
             New Chat
           </button>
+          {buddyLocked ? (
+            <p className="buddy-sidebar-status">
+              {buddyAvailability?.providerLabel || "Provider setup required"}
+            </p>
+          ) : null}
           <label className="buddy-nav-search">
             <Search size={16} />
             <input
@@ -1706,9 +2123,30 @@ function RoomContextPanel({
   if (activeTab === "resources") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Resources" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Infilenite" />
         <PanelDivider />
         <ResourceDriveSidebar drive={resourceDrive} />
+      </>
+    );
+  }
+
+  if (activeTab === "space" || activeTab === "meetings") {
+    return (
+      <>
+        <PanelHeader
+          onCloseSidebar={onCloseSidebar}
+          title={activeTab === "meetings" ? "Limeets" : "World"}
+        />
+        <PanelDivider />
+        <MeetingSidebarPanel
+          copyInviteLink={copyInviteLink}
+          inviteCopied={inviteCopied}
+          meeting={meetingCall}
+          room={room}
+          roomActivityMembers={roomActivityMembers}
+          currentProfileStatus={currentProfileStatus}
+          user={user}
+        />
       </>
     );
   }
@@ -1716,7 +2154,7 @@ function RoomContextPanel({
   if (activeTab === "calendar") {
     return (
       <>
-        <PanelHeader onCloseSidebar={onCloseSidebar} title="Calendar" />
+        <PanelHeader onCloseSidebar={onCloseSidebar} title="Coordidate" />
         <PanelDivider />
         <section className="context-section roomy">
           <h3>Scheduled</h3>
@@ -1797,34 +2235,115 @@ function HomePanel({ room }) {
   );
 }
 
-/** Persistent voice/video dock that keeps future call controls visible in every room. */
-function RoomCallDock({ user, variant = "embedded" }) {
-  const displayName = user?.name || user?.email || "You";
-  const avatarUrl = user?.avatarUrl || user?.avatar || user?.photoUrl || "";
+/** Persistent Discord-like room voice/video dock shown across room tabs. */
+function RoomVoiceDock({
+  meeting,
+  meetingAreaName = "Meeting Area",
+  onExitRoom,
+  onLeaveMeetingArea,
+  onOpenMeeting,
+  onProfileStatusChange,
+  onUserUpdated,
+  profileStatus,
+  showMeetingPreview = false,
+  user,
+}) {
+  const active = Boolean(meeting?.isActive);
+  const cameraOff = meeting?.cameraOff ?? true;
+  const deafened = Boolean(meeting?.deafened);
+  const displayName = meeting?.displayName || user?.name || user?.email || "You";
+  const muted = meeting?.muted ?? true;
+  const screenSharing = Boolean(meeting?.screenSharing);
+  const statusText = active ? `In ${meetingAreaName}` : "In World";
 
   return (
-    <section className={`room-call-dock ${variant}`} aria-label="Room voice and video controls">
-      <div className="room-call-user">
-        <span className="room-call-avatar" aria-hidden="true">
-          {avatarUrl ? <img src={avatarUrl} alt="" /> : getInitial(displayName)}
-          <i />
-        </span>
-        {variant === "embedded" ? (
-          <span className="room-call-name" title={displayName}>
-            {displayName}
-          </span>
-        ) : null}
-      </div>
-      <div className="room-call-actions" aria-label="Call controls">
-        <button aria-label="Mute microphone" title="Mute microphone" type="button">
-          <MicOff size={18} />
-        </button>
-        <button aria-label="Deafen" title="Deafen" type="button">
-          <Headphones size={18} />
-        </button>
-        <button aria-label="Toggle video" title="Toggle video" type="button">
-          <Video size={18} />
-        </button>
+    <section className="room-voice-dock" aria-label="Room voice and video controls">
+      {showMeetingPreview ? (
+        <MeetingDockPreview
+          meeting={meeting}
+          meetingAreaName={meetingAreaName}
+          onOpen={onOpenMeeting}
+          user={user}
+        />
+      ) : active ? (
+        <div className="room-voice-connected" aria-label="Meeting Area connection">
+          <div className="room-voice-connected-header">
+            <span className="room-voice-signal" aria-hidden="true">
+              <MonitorUp size={18} />
+            </span>
+            <div>
+              <strong>Voice Connected</strong>
+              <span>{meetingAreaName}</span>
+            </div>
+          </div>
+          <div className="room-voice-connected-actions">
+            <button
+              aria-label={cameraOff ? "Turn camera on" : "Turn camera off"}
+              aria-pressed={!cameraOff}
+              className={cameraOff ? "is-off" : "is-on"}
+              onClick={meeting?.toggleCamera}
+              title={cameraOff ? "Turn camera on" : "Turn camera off"}
+              type="button"
+            >
+              {cameraOff ? <VideoOff size={17} /> : <Video size={17} />}
+            </button>
+            <button
+              aria-label={screenSharing ? "Stop sharing screen" : "Share screen"}
+              aria-pressed={screenSharing}
+              className={screenSharing ? "is-on" : ""}
+              onClick={meeting?.toggleScreenShare}
+              title={screenSharing ? "Stop sharing screen" : "Share screen"}
+              type="button"
+            >
+              {screenSharing ? <ScreenShareOff size={17} /> : <ScreenShare size={17} />}
+            </button>
+            <button
+              aria-label="Leave Meeting Area"
+              className="danger"
+              onClick={onLeaveMeetingArea || meeting?.leaveMeeting}
+              title="Leave Meeting Area"
+              type="button"
+            >
+              <PhoneOff size={17} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="room-user-controls">
+        <UserProfileControls
+          active={active}
+          onProfileStatusChange={onProfileStatusChange}
+          onProfileUpdated={onUserUpdated}
+          profileStatus={profileStatus}
+          statusText={statusText}
+          user={{ ...user, name: displayName }}
+        />
+        <div className="room-call-actions" aria-label="User controls">
+          <button
+            aria-label={muted ? "Unmute microphone" : "Mute microphone"}
+            aria-pressed={muted}
+            className={muted ? "danger active" : ""}
+            onClick={meeting?.toggleMuted}
+            title={muted ? "Unmute microphone" : "Mute microphone"}
+            type="button"
+          >
+            {muted ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
+          <button
+            aria-label={deafened ? "Undeafen" : "Deafen"}
+            aria-pressed={deafened}
+            className={deafened ? "active" : ""}
+            onClick={meeting?.toggleDeafened}
+            title={deafened ? "Undeafen" : "Deafen"}
+            type="button"
+          >
+            {deafened ? <VolumeX size={18} /> : <Headphones size={18} />}
+          </button>
+          <button aria-label="Exit room" onClick={onExitRoom} title="Exit room" type="button">
+            <LogOut size={18} />
+          </button>
+        </div>
       </div>
     </section>
   );

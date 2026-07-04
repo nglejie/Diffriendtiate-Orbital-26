@@ -127,6 +127,7 @@ function App() {
         user={user}
         onBack={() => navigate("/")}
         onOpenRoom={(roomId) => navigate(`/rooms/${roomId}`)}
+        onUserUpdated={setUser}
       />
     </main>
   );

@@ -142,6 +142,7 @@ export const api = {
   register: (body) => request("/api/auth/register", { method: "POST", body }),
   login: (body) => request("/api/auth/login", { method: "POST", body }),
   me: () => request("/api/auth/me"),
+  updateProfile: (body) => request("/api/auth/me", { method: "PATCH", body }),
   listRooms: (search = "") =>
     request(`/api/rooms${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   createRoom: (body) => request("/api/rooms", { method: "POST", body }),

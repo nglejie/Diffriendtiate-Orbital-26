@@ -1,7 +1,11 @@
 services:
+  server:
+    environment:
+      INTELLIGRATE_GPU_ENABLED: true
+
   ollama:
-    profiles: []    # override — remove profile so ollama starts locally
-    deploy: 
+    profiles: []    # override - remove profile so ollama starts locally
+    deploy:
       resources:
         reservations:
           devices:

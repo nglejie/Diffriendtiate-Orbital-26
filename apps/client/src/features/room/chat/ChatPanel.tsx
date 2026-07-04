@@ -51,7 +51,7 @@ export function ChatPanel({
   const messageListRef = useRef(null);
 
   // Keep the chat panel resilient to stale room state persisted by older UI
-  // builds. These guards prevent one malformed local value from crashing Chat.
+  // builds. These guards prevent one malformed local value from crashing Convolution.
   const safeDraft = typeof draft === "string" ? draft : "";
   const safeDrafts: Record<string, string> =
     drafts && typeof drafts === "object" && !Array.isArray(drafts) ? drafts : {};

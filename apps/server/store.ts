@@ -40,11 +40,22 @@ export function storageMode() {
  */
 function normalizeDb(db) {
   return {
-    users: db.users || [],
+    users: (db.users || []).map((user) => ({
+      ...user,
+      avatarPreset:
+        user.avatarPreset && typeof user.avatarPreset === "object" && !Array.isArray(user.avatarPreset)
+          ? user.avatarPreset
+          : null,
+      avatarUrl: user.avatarUrl || "",
+    })),
     rooms: (db.rooms || []).map((room) => ({
       ...room,
       academicTerm: room.academicTerm || "",
       roomLogo: room.roomLogo || "",
+      worldConfig:
+        room.worldConfig && typeof room.worldConfig === "object" && !Array.isArray(room.worldConfig)
+          ? room.worldConfig
+          : {},
       resourceSyncFingerprint: room.resourceSyncFingerprint || "",
       resourceSyncUpdatedAt: room.resourceSyncUpdatedAt || "",
       channels: Array.isArray(room.channels) && room.channels.length
@@ -123,6 +134,7 @@ async function initPostgres() {
       tags TEXT[] NOT NULL DEFAULT '{}',
       theme TEXT NOT NULL DEFAULT 'twilight',
       background TEXT NOT NULL DEFAULT 'aurora',
+      world_config JSONB NOT NULL DEFAULT '{}'::jsonb,
       channels TEXT[] NOT NULL DEFAULT '{general}',
       password_hash TEXT,
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -205,6 +217,11 @@ async function initPostgres() {
 
   await pool.query(`
     ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS world_config JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await pool.query(`
+    ALTER TABLE rooms
       ADD COLUMN IF NOT EXISTS academic_term TEXT NOT NULL DEFAULT ''
   `);
 
@@ -269,6 +286,9 @@ async function initPostgres() {
       ON resources(room_id, content_hash)
       WHERE content_hash <> ''
   `);
+
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_preset JSONB");
 }
 
 /**
@@ -320,6 +340,8 @@ export async function readDb() {
         id,
         name,
         email,
+        avatar_url AS "avatarUrl",
+        avatar_preset AS "avatarPreset",
         password_hash AS "passwordHash",
         created_at AS "createdAt"
       FROM users
@@ -337,6 +359,7 @@ export async function readDb() {
         r.tags,
         r.theme,
         r.background,
+        r.world_config AS "worldConfig",
         r.channels,
         r.password_hash AS "passwordHash",
         r.owner_id AS "ownerId",
@@ -482,10 +505,18 @@ async function writePostgresDb(db) {
     for (const user of db.users) {
       await client.query(
         `
-          INSERT INTO users (id, name, email, password_hash, created_at)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO users (id, name, email, avatar_url, avatar_preset, password_hash, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
-        [user.id, user.name, user.email, user.passwordHash, user.createdAt],
+        [
+          user.id,
+          user.name,
+          user.email,
+          user.avatarUrl || "",
+          JSON.stringify(user.avatarPreset || null),
+          user.passwordHash,
+          user.createdAt,
+        ],
       );
     }
 
@@ -494,12 +525,12 @@ async function writePostgresDb(db) {
         `
           INSERT INTO rooms (
             id, name, module_code, academic_term, room_logo, description, visibility, tags, theme,
-            background, channels, password_hash, owner_id, invite_code, created_at, updated_at,
+            background, world_config, channels, password_hash, owner_id, invite_code, created_at, updated_at,
             resource_sync_fingerprint, resource_sync_updated_at
           )
           VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17, $18
+            $11, $12, $13, $14, $15, $16, $17, $18, $19
           )
         `,
         [
@@ -513,6 +544,7 @@ async function writePostgresDb(db) {
           room.tags || [],
           room.theme || "twilight",
           room.background || "aurora",
+          JSON.stringify(room.worldConfig || {}),
           room.channels?.length ? room.channels : ["general"],
           room.passwordHash || null,
           room.ownerId,
