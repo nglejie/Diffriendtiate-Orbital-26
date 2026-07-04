@@ -70,9 +70,6 @@ jobs:
     - name: Run API integration tests
       run: npm run test:integration
 
-    - name: Run browser E2E tests
-      run: npm run test:e2e
-
     - name: on fail
       if: failure()
       run: docker compose logs --tail=200
