@@ -97,7 +97,7 @@ services:
       USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment
       PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
     volumes:
-      - chroma_db:${CHROMA_DIR}
+      - chroma_db:${CHROMA_DIR:-/app/chroma_db}
     # depends_on: # removed when deploying (no need ollama)
     #   ollama:
     #     condition: service_healthy

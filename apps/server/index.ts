@@ -667,6 +667,7 @@ function roomDto(db, room, userId) {
     theme: room.theme,
     background: room.background || "aurora",
     worldConfig: normalizeWorldConfig(room.worldConfig),
+    integrations: publicRoomIntegrations(room),
     inviteCode: isMember(room, userId) ? room.inviteCode : null,
     channels: normalizeChannels(room.channels),
     owner: publicUser(owner),
@@ -699,10 +700,67 @@ function resourceDto(db, resource) {
   };
 }
 
+function publicRoomIntegrations(room) {
+  const integrations = room.integrations && typeof room.integrations === "object" && !Array.isArray(room.integrations)
+    ? room.integrations
+    : {};
+  const canvas = integrations.canvas && typeof integrations.canvas === "object" && !Array.isArray(integrations.canvas)
+    ? integrations.canvas
+    : null;
+
+  return {
+    ...integrations,
+    canvas: canvas
+      ? {
+          connected: canvas.connected === true,
+          host: canvas.host || "canvas.nus.edu.sg",
+          courseId: canvas.courseId || "",
+          courseName: canvas.courseName || "",
+          courseCode: canvas.courseCode || "",
+          connectedAt: canvas.connectedAt || "",
+          lastSyncedAt: canvas.lastSyncedAt || "",
+          importedDeadlineCount: Number(canvas.importedDeadlineCount) || 0,
+        }
+      : null,
+  };
+}
+
 function sessionDto(db, session) {
   return {
     ...session,
     creator: publicUser(db.users.find((user) => user.id === session.createdBy)),
+  };
+}
+
+function coordinatePollDto(db, poll) {
+  return {
+    ...poll,
+    creator: publicUser(db.users.find((user) => user.id === poll.createdBy)),
+  };
+}
+
+function coordinateResponseDto(db, response) {
+  return {
+    ...response,
+    user: publicUser(db.users.find((user) => user.id === response.userId)),
+  };
+}
+
+function coordinateDto(db, room) {
+  const polls = db.coordinatePolls
+    .filter((poll) => poll.roomId === room.id)
+    .sort((a, b) => String(a.rangeStart || a.createdAt).localeCompare(String(b.rangeStart || b.createdAt)));
+  const activePoll =
+    polls.find((poll) => !poll.scheduledSessionId) ||
+    polls[polls.length - 1] ||
+    null;
+
+  return {
+    poll: activePoll ? coordinatePollDto(db, activePoll) : null,
+    polls: polls.map((poll) => coordinatePollDto(db, poll)),
+    responses: db.coordinateResponses
+      .filter((response) => response.roomId === room.id)
+      .map((response) => coordinateResponseDto(db, response)),
   };
 }
 
@@ -1912,6 +1970,180 @@ function assertRoomMember(db, roomId, userId, res) {
   return room;
 }
 
+function assertRoomOwner(db, roomId, userId, res) {
+  const room = findRoomOr404(db, roomId, res);
+  if (!room) return null;
+
+  if (room.ownerId !== userId) {
+    res.status(403).json({ message: "Only the room owner can manage this setting." });
+    return null;
+  }
+
+  return room;
+}
+
+function normalizeSessionKind(value) {
+  return ["meeting", "event", "deadline"].includes(value) ? value : "meeting";
+}
+
+function normalizeSessionVisibility(value) {
+  return value === "private" ? "private" : "room";
+}
+
+function normalizeSessionColor(value) {
+  return ["rose", "gold", "green", "iris", "foam"].includes(value) ? value : "";
+}
+
+function isSessionVisibleToUser(session, userId) {
+  return session.visibility !== "private" || session.createdBy === userId;
+}
+
+function normalizeOptionalIso(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
+function normalizeAvailabilitySlots(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((slot) => {
+      const startAt = normalizeOptionalIso(slot?.startAt);
+      const endAt = normalizeOptionalIso(slot?.endAt);
+      if (!startAt || !endAt || Date.parse(endAt) <= Date.parse(startAt)) return null;
+
+      return {
+        startAt,
+        endAt,
+        status: slot?.status === "ifNeeded" ? "ifNeeded" : "available",
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 1_500);
+}
+
+function normalizeMinuteOfDay(value, fallback) {
+  const minutes = Math.round(Number(value));
+  if (!Number.isFinite(minutes)) return fallback;
+  return Math.min(24 * 60, Math.max(0, minutes));
+}
+
+function datePartsInTimeZone(value, timeZone = "Asia/Singapore") {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function localDateKey(value, timeZone = "Asia/Singapore") {
+  const parts = datePartsInTimeZone(value, timeZone);
+  if (!parts) return "";
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function minutesOfDay(value, timeZone = "Asia/Singapore") {
+  const parts = datePartsInTimeZone(value, timeZone);
+  if (!parts) return 0;
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+function normalizeSelectedDates(value, rangeStart, rangeEnd) {
+  const startKey = localDateKey(rangeStart);
+  const endKey = localDateKey(rangeEnd);
+  const dates = Array.isArray(value) ? value : [];
+  return Array.from(
+    new Set(
+      dates
+        .map((date) => String(date || "").trim())
+        .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+        .filter((date) => date >= startKey && date <= endKey),
+    ),
+  ).slice(0, 180);
+}
+
+function availabilitySlotAllowedForPoll(slot, poll) {
+  const startMs = Date.parse(slot.startAt);
+  const endMs = Date.parse(slot.endAt);
+  if (startMs < Date.parse(poll.rangeStart) || endMs > Date.parse(poll.rangeEnd)) return false;
+
+  const timeZone = poll.timezone || "Asia/Singapore";
+  const selectedDates = Array.isArray(poll.selectedDates) ? poll.selectedDates : [];
+  if (selectedDates.length && !selectedDates.includes(localDateKey(slot.startAt, timeZone))) return false;
+
+  const startMinutes = minutesOfDay(slot.startAt, timeZone);
+  const endMinutes = minutesOfDay(slot.endAt, timeZone);
+  const dayStart = normalizeMinuteOfDay(poll.dayStartMinutes, 9 * 60);
+  const dayEnd = normalizeMinuteOfDay(poll.dayEndMinutes, 17 * 60);
+  return startMinutes >= dayStart && endMinutes <= dayEnd;
+}
+
+function normalizeCanvasHost(value) {
+  const host = String(value || "canvas.nus.edu.sg")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .toLowerCase();
+
+  if (!host || host.length > 253 || !/^[a-z0-9.-]+$/.test(host)) {
+    const error = new Error("Enter a valid Canvas host.") as Error & { status?: number };
+    error.status = 400;
+    throw error;
+  }
+
+  return host;
+}
+
+function stripHtml(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 700);
+}
+
+async function fetchCanvasJson(host, accessToken, pathname, params = {}) {
+  const url = new URL(`https://${host}${pathname}`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value != null && value !== "") url.searchParams.set(key, String(value));
+  });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 18_000);
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message =
+        response.status === 401 || response.status === 403
+          ? "Canvas rejected that access token."
+          : payload?.errors?.[0]?.message || payload?.message || "Canvas did not return a successful response.";
+      const error = new Error(message) as Error & { status?: number };
+      error.status = response.status === 401 || response.status === 403 ? 401 : 502;
+      throw error;
+    }
+
+    return payload;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 const storage = multer.diskStorage({
   destination: uploadDir,
   filename: (_req, file, callback) => {
@@ -2304,6 +2536,8 @@ app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
   db.messages = db.messages.filter((message) => message.roomId !== room.id);
   db.resources = db.resources.filter((resource) => resource.roomId !== room.id);
   db.sessions = db.sessions.filter((session) => session.roomId !== room.id);
+  db.coordinatePolls = db.coordinatePolls.filter((poll) => poll.roomId !== room.id);
+  db.coordinateResponses = db.coordinateResponses.filter((response) => response.roomId !== room.id);
   db.buddyThreads = db.buddyThreads.filter((thread) => thread.roomId !== room.id);
   await writeDb(db);
 
@@ -2905,6 +3139,7 @@ app.get("/api/rooms/:roomId/sessions", requireAuth, async (req, res) => {
 
   const sessions = db.sessions
     .filter((session) => session.roomId === room.id)
+    .filter((session) => isSessionVisibleToUser(session, req.user.id))
     .map((session) => sessionDto(db, session))
     .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)));
 
@@ -2918,24 +3153,330 @@ app.post("/api/rooms/:roomId/sessions", requireAuth, async (req, res) => {
 
   const title = String(req.body.title || "").trim();
   const startsAt = String(req.body.startsAt || "").trim();
+  const startsAtDate = new Date(startsAt);
+  const endsAt = normalizeOptionalIso(req.body.endsAt);
+  const kind = normalizeSessionKind(req.body.kind);
+  const visibility = normalizeSessionVisibility(req.body.visibility);
+  const color = normalizeSessionColor(req.body.color);
 
-  if (!title || Number.isNaN(Date.parse(startsAt))) {
-    return res.status(400).json({ message: "Session title and date/time are required." });
+  if (!title || Number.isNaN(startsAtDate.getTime())) {
+    return res.status(400).json({ message: "Event title and date/time are required." });
+  }
+
+  if (endsAt && Date.parse(endsAt) <= startsAtDate.getTime()) {
+    return res.status(400).json({ message: "End time must be after the start time." });
+  }
+
+  const coordinatePollId = String(req.body.coordinatePollId || "").trim();
+  const coordinatePoll = coordinatePollId
+    ? db.coordinatePolls.find((poll) => poll.id === coordinatePollId && poll.roomId === room.id)
+    : null;
+  const allDay = Boolean(req.body.allDay);
+
+  if (coordinatePollId && !coordinatePoll) {
+    return res.status(404).json({ message: "Meetup window not found." });
+  }
+
+  if (coordinatePollId && room.ownerId !== req.user.id) {
+    return res.status(403).json({ message: "Only the owner can schedule a meetup window." });
   }
 
   const session = {
     id: createId("ses"),
     roomId: room.id,
     createdBy: req.user.id,
-    title,
+    title: title.slice(0, 140),
     agenda: String(req.body.agenda || "").trim(),
-    startsAt: new Date(startsAt).toISOString(),
+    startsAt: startsAtDate.toISOString(),
+    endsAt,
+    kind,
+    visibility,
+    location: String(req.body.location || "").trim().slice(0, 160),
+    source: "manual",
+    sourceId: "",
+    metadata: {
+      ...(coordinatePollId ? { coordinatePollId } : {}),
+      ...(allDay ? { allDay: true } : {}),
+      ...(color ? { color } : {}),
+    },
     createdAt: new Date().toISOString(),
   };
 
   db.sessions.push(session);
+  if (coordinatePoll) {
+    coordinatePoll.scheduledSessionId = session.id;
+    coordinatePoll.updatedAt = session.createdAt;
+  }
   await writeDb(db);
   res.status(201).json({ session: sessionDto(db, session) });
+});
+
+app.get("/api/rooms/:roomId/coordinate", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  res.json(coordinateDto(db, room));
+});
+
+app.put("/api/rooms/:roomId/coordinate/poll", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomOwner(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const rangeStart = normalizeOptionalIso(req.body.rangeStart);
+  const rangeEnd = normalizeOptionalIso(req.body.rangeEnd);
+  const slotMinutes = Math.min(180, Math.max(15, Number(req.body.slotMinutes) || 60));
+  const dayStartMinutes = normalizeMinuteOfDay(req.body.dayStartMinutes, 9 * 60);
+  const dayEndMinutes = normalizeMinuteOfDay(req.body.dayEndMinutes, 17 * 60);
+
+  if (!rangeStart || !rangeEnd || Date.parse(rangeEnd) <= Date.parse(rangeStart)) {
+    return res.status(400).json({ message: "Choose a valid Coordinate date range." });
+  }
+
+  if (dayEndMinutes <= dayStartMinutes) {
+    return res.status(400).json({ message: "Meetup window end time must be after the start time." });
+  }
+
+  const selectedDates = normalizeSelectedDates(req.body.selectedDates, rangeStart, rangeEnd);
+  const now = new Date().toISOString();
+  const pollId = String(req.body.pollId || "").trim();
+  const existingPoll = pollId
+    ? db.coordinatePolls.find((poll) => poll.id === pollId && poll.roomId === room.id)
+    : null;
+
+  if (pollId && !existingPoll) {
+    return res.status(404).json({ message: "Meetup window not found." });
+  }
+
+  if (existingPoll?.scheduledSessionId) {
+    return res.status(409).json({ message: "Scheduled meetup windows are locked. Delete the scheduled event first to reopen it." });
+  }
+
+  if (existingPoll) {
+    existingPoll.title = String(req.body.title || "Group availability").trim().slice(0, 140);
+    existingPoll.rangeStart = rangeStart;
+    existingPoll.rangeEnd = rangeEnd;
+    existingPoll.slotMinutes = slotMinutes;
+    existingPoll.dayStartMinutes = dayStartMinutes;
+    existingPoll.dayEndMinutes = dayEndMinutes;
+    existingPoll.selectedDates = selectedDates;
+    existingPoll.timezone = String(req.body.timezone || "Asia/Singapore").trim().slice(0, 80);
+    existingPoll.updatedAt = now;
+  } else {
+    db.coordinatePolls.push({
+      id: createId("cop"),
+      roomId: room.id,
+      createdBy: req.user.id,
+      title: String(req.body.title || "Group availability").trim().slice(0, 140),
+      rangeStart,
+      rangeEnd,
+      slotMinutes,
+      dayStartMinutes,
+      dayEndMinutes,
+      selectedDates,
+      timezone: String(req.body.timezone || "Asia/Singapore").trim().slice(0, 80),
+      scheduledSessionId: "",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  await writeDb(db);
+  res.json(coordinateDto(db, room));
+});
+
+app.delete("/api/rooms/:roomId/coordinate/poll/:pollId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomOwner(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const poll = db.coordinatePolls.find((candidate) => candidate.id === req.params.pollId && candidate.roomId === room.id);
+  if (!poll) {
+    return res.status(404).json({ message: "Meetup window not found." });
+  }
+
+  if (poll.scheduledSessionId) {
+    return res.status(409).json({ message: "Delete the scheduled calendar event before deleting this meetup window." });
+  }
+
+  db.coordinatePolls = db.coordinatePolls.filter((candidate) => candidate.id !== poll.id);
+  db.coordinateResponses = db.coordinateResponses.filter((response) => response.pollId !== poll.id);
+  await writeDb(db);
+  res.json(coordinateDto(db, room));
+});
+
+app.put("/api/rooms/:roomId/coordinate/availability", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const poll = db.coordinatePolls.find(
+    (candidate) => candidate.id === req.body.pollId && candidate.roomId === room.id,
+  );
+
+  if (!poll) {
+    return res.status(404).json({ message: "Create a Coordinate date range before saving availability." });
+  }
+
+  if (poll.scheduledSessionId) {
+    return res.status(409).json({ message: "This meetup window has already been scheduled." });
+  }
+
+  const slots = normalizeAvailabilitySlots(req.body.slots).filter((slot) => availabilitySlotAllowedForPoll(slot, poll));
+  const now = new Date().toISOString();
+  const existingResponse = db.coordinateResponses.find(
+    (response) => response.pollId === poll.id && response.userId === req.user.id,
+  );
+
+  if (!slots.length) {
+    db.coordinateResponses = db.coordinateResponses.filter(
+      (response) => !(response.pollId === poll.id && response.userId === req.user.id),
+    );
+    poll.updatedAt = now;
+    await writeDb(db);
+    return res.json(coordinateDto(db, room));
+  }
+
+  if (existingResponse) {
+    existingResponse.slots = slots;
+    existingResponse.updatedAt = now;
+  } else {
+    db.coordinateResponses.push({
+      id: createId("cor"),
+      pollId: poll.id,
+      roomId: room.id,
+      userId: req.user.id,
+      slots,
+      updatedAt: now,
+    });
+  }
+
+  poll.updatedAt = now;
+  await writeDb(db);
+  res.json(coordinateDto(db, room));
+});
+
+app.post("/api/rooms/:roomId/integrations/canvas/courses", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomOwner(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  try {
+    const host = normalizeCanvasHost(req.body.host);
+    const accessToken = String(req.body.accessToken || "").trim();
+    if (!accessToken) {
+      return res.status(400).json({ message: "Canvas access token is required." });
+    }
+
+    const payload = await fetchCanvasJson(host, accessToken, "/api/v1/courses", {
+      enrollment_state: "active",
+      per_page: 100,
+    });
+    const courses = (Array.isArray(payload) ? payload : [])
+      .map((course) => ({
+        id: String(course.id || ""),
+        name: String(course.name || course.course_code || "Untitled course"),
+        courseCode: String(course.course_code || ""),
+        startAt: course.start_at || "",
+        endAt: course.end_at || "",
+      }))
+      .filter((course) => course.id);
+
+    res.json({ courses });
+  } catch (err) {
+    res.status(err.status || 502).json({ message: err.message || "Unable to connect to Canvas." });
+  }
+});
+
+app.post("/api/rooms/:roomId/integrations/canvas/import", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomOwner(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  try {
+    const host = normalizeCanvasHost(req.body.host);
+    const accessToken = String(req.body.accessToken || "").trim();
+    const courseId = String(req.body.courseId || "").trim();
+    const courseName = String(req.body.courseName || room.moduleCode || "Canvas").trim().slice(0, 140);
+
+    if (!accessToken || !courseId) {
+      return res.status(400).json({ message: "Canvas access token and course are required." });
+    }
+
+    const assignments = await fetchCanvasJson(
+      host,
+      accessToken,
+      `/api/v1/courses/${encodeURIComponent(courseId)}/assignments`,
+      {
+        per_page: 100,
+      },
+    );
+    const existingSourceIds = new Set(
+      db.sessions
+        .filter((session) => session.roomId === room.id && session.source === "canvas")
+        .map((session) => session.sourceId),
+    );
+    const now = new Date().toISOString();
+    const importedSessions = [];
+
+    (Array.isArray(assignments) ? assignments : []).forEach((assignment) => {
+      const dueAt = normalizeOptionalIso(assignment?.due_at);
+      const sourceId = `${courseId}:${assignment?.id || assignment?.html_url || assignment?.name || ""}`;
+      if (!dueAt || existingSourceIds.has(sourceId)) return;
+
+      const session = {
+        id: createId("ses"),
+        roomId: room.id,
+        createdBy: req.user.id,
+        title: String(assignment?.name || "Canvas deadline").trim().slice(0, 140),
+        agenda: stripHtml(assignment?.description),
+        startsAt: dueAt,
+        endsAt: "",
+        kind: "deadline",
+        visibility: "room",
+        location: courseName,
+        source: "canvas",
+        sourceId,
+        metadata: {
+          canvasHost: host,
+          courseId,
+          courseName,
+          htmlUrl: assignment?.html_url || "",
+        },
+        createdAt: now,
+      };
+
+      db.sessions.push(session);
+      importedSessions.push(session);
+      existingSourceIds.add(sourceId);
+    });
+
+    room.integrations = {
+      ...(room.integrations || {}),
+      canvas: {
+        connected: true,
+        host,
+        courseId,
+        courseName,
+        courseCode: String(req.body.courseCode || "").trim().slice(0, 80),
+        connectedAt: room.integrations?.canvas?.connectedAt || now,
+        lastSyncedAt: now,
+        importedDeadlineCount:
+          Number(room.integrations?.canvas?.importedDeadlineCount || 0) + importedSessions.length,
+      },
+    };
+    room.updatedAt = now;
+
+    await writeDb(db);
+    res.status(201).json({
+      imported: importedSessions.length,
+      sessions: importedSessions.map((session) => sessionDto(db, session)),
+      room: roomDto(db, room, req.user.id),
+    });
+  } catch (err) {
+    res.status(err.status || 502).json({ message: err.message || "Unable to import Canvas deadlines." });
+  }
 });
 
 app.delete("/api/sessions/:sessionId", requireAuth, async (req, res) => {
@@ -2952,6 +3493,9 @@ app.delete("/api/sessions/:sessionId", requireAuth, async (req, res) => {
   }
 
   db.sessions = db.sessions.filter((candidate) => candidate.id !== session.id);
+  db.coordinatePolls = (db.coordinatePolls || []).map((poll) =>
+    poll.scheduledSessionId === session.id ? { ...poll, scheduledSessionId: "", updatedAt: new Date().toISOString() } : poll,
+  );
   await writeDb(db);
   res.status(204).end();
 });
