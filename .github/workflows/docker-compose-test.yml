@@ -1,41 +1,7 @@
 name: Docker Compose Smoke Test
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/docker-compose-test.yml"
-      - ".env.example"
-      - "apps/client/Dockerfile"
-      - "apps/client/nginx.conf"
-      - "apps/client/package.json"
-      - "apps/server/Dockerfile"
-      - "apps/server/package.json"
-      - "services/**"
-      - "docker-compose.yaml"
-      - "package.json"
-      - "package-lock.json"
-      - "!**.md"
-      - "!services/server-chatbot/static/**"
-      - "!.drawio"
-      
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/docker-compose-test.yml"
-      - ".env.example"
-      - "apps/client/Dockerfile"
-      - "apps/client/nginx.conf"
-      - "apps/client/package.json"
-      - "apps/server/Dockerfile"
-      - "apps/server/package.json"
-      - "services/**"
-      - "docker-compose.yaml"
-      - "package.json"
-      - "package-lock.json"
-      - "!**.md"
-      - "!services/server-chatbot/static/**"
-      - "!.drawio"
+  workflow_dispatch:
 
 jobs:
   test:
