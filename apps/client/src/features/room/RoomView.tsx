@@ -2492,6 +2492,20 @@ function RoomContextPanel({
     return () => window.clearInterval(intervalId);
   }, [activeTab]);
 
+  function toggleCalendarSection(sectionId) {
+    setCalendarSectionsOpen((current) => ({
+      ...current,
+      [sectionId]: !current[sectionId],
+    }));
+  }
+
+  useEffect(() => {
+    if (activeTab !== "calendar") return undefined;
+    setCalendarNow(Date.now());
+    const intervalId = window.setInterval(() => setCalendarNow(Date.now()), 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeTab]);
+
   // Chat option menus should behave like native popovers: click elsewhere to close.
   useEffect(() => {
     if (!buddyMenuTargetId) return undefined;

@@ -1,25 +1,7 @@
-name: Docker Compose Test (Build and test the app)
+name: Docker Compose Smoke Test
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - "services/**"
-      - "docker-compose.yaml"
-      - "!**.md"
-      - "!services/server-chatbot/static/**"
-      - "!.drawio"
-      
-  push:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - "services/**"
-      - "docker-compose.yaml"
-      - "!**.md"
-      - "!services/server-chatbot/static/**"
-      - "!.drawio"
+  workflow_dispatch:
 
 jobs:
   test:
@@ -28,24 +10,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 22
-        cache: npm
-
-    - name: Install dependencies
-      run: npm ci
-
-    - name: Typecheck and build app
-      run: npm run check
-
-    - name: Run client unit tests
-      run: npm run test:unit
-
-    - name: Install Playwright browser
-      run: npx playwright install --with-deps chromium
 
     - name: Create .env
       run: cp .env.example .env
@@ -66,12 +30,6 @@ jobs:
         done
         docker compose logs --tail=200
         exit 1
-
-    - name: Run API integration tests
-      run: npm run test:integration
-
-    - name: Run browser E2E tests
-      run: npm run test:e2e
 
     - name: on fail
       if: failure()

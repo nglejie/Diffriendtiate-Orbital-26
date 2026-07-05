@@ -28,6 +28,7 @@ export default defineConfig({
     // only when a test fails, so successful runs stay lightweight.
     baseURL: `http://127.0.0.1:${clientPort}`,
     screenshot: "only-on-failure",
+    timezoneId: "Asia/Singapore",
     trace: "retain-on-failure",
   },
   projects: [
