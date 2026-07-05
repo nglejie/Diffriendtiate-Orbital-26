@@ -5,6 +5,7 @@ import {
   CalendarPlus,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Edit3,
@@ -51,13 +52,16 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { io } from "socket.io-client";
-import { api } from "../../api.ts";
+import { api, resolveServerAssetUrl } from "../../api.ts";
 import { BuddyPanel } from "./BuddyPanel.tsx";
 import { UPLOADS_FOLDER } from "./roomConstants.ts";
 import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.ts";
 import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.tsx";
 import { ChatPanel as DiscordChatPanel } from "./chat/ChatPanel.tsx";
 import { ChatSidebar } from "./chat/ChatSidebar.tsx";
+import { DocumentChannelPanel } from "./chat/DocumentChannelPanel.tsx";
+import { ImageAnnotatorPanel } from "./chat/ImageAnnotatorPanel.tsx";
+import { CoordinatePanel } from "./coordinate/CoordinatePanel.tsx";
 import {
   MeetingDisplayStage,
   MeetingDockPreview,
@@ -75,14 +79,15 @@ import {
   useResourceDriveController,
 } from "./resources/ResourceFileManager.tsx";
 import { VirtualStudySpace } from "./space/VirtualStudySpace.tsx";
+import { CUSTOM_WORLD_MAP_ID } from "./space/worldConfig.ts";
 import {
   DEFAULT_CATEGORY_ID,
   addChannelToCategory,
   createCategoryId,
+  moveCategoryInLayout,
   moveChannelToCategory,
   normalizeChannelLayout,
-  removeChannelFromLayout,
-  renameChannelInLayout,
+  renameCategoryInLayout,
 } from "./chat/chatLayout.ts";
 import {
   RESOURCE_TYPES,
@@ -93,6 +98,7 @@ import {
   getResourceDisplayName,
 } from "./resourceWorkspace.ts";
 import AlertDialog from "../../shared/ui/AlertDialog.tsx";
+import { AppSelectMenu } from "../../shared/ui/AppSelectMenu.tsx";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog.tsx";
 import TextInputDialog from "../../shared/ui/TextInputDialog.tsx";
 import {
@@ -133,7 +139,7 @@ const BASE_ROOM_TABS = [
   { id: "chat", label: "Convolution", icon: MessageCircle },
   { id: "buddy", label: "Intelligrate", icon: Bot },
   { id: "resources", label: "Infilenite", icon: FolderOpen },
-  { id: "calendar", label: "Coordidate", icon: CalendarDays, disabled: true },
+  { id: "calendar", label: "Coordidate", icon: CalendarDays },
 ];
 
 function getRoomTabs(meetingActive) {
@@ -143,6 +149,11 @@ function getRoomTabs(meetingActive) {
         { id: "meetings", label: "Limeets", icon: Video },
       ]
     : BASE_ROOM_TABS;
+}
+
+function getRoomActivityLabel(tabId) {
+  const tab = getRoomTabs(true).find((candidate) => candidate.id === tabId);
+  return tab?.label || "World";
 }
 
 const DEFAULT_BUDDY_AVAILABILITY = {
@@ -155,6 +166,17 @@ const DEFAULT_BUDDY_AVAILABILITY = {
   setupRequired: false,
   canConfigure: false,
 };
+const DOCUMENT_CHANNEL_UPLOAD_MESSAGE =
+  "Document channels support PDF, DOCX, PPTX, PNG, JPG, JPEG, or WEBP files only.";
+const DOCUMENT_CHANNEL_UPLOAD_EXTENSIONS = /\.(pdf|docx|pptx|png|jpe?g|webp)$/i;
+const DOCUMENT_CHANNEL_UPLOAD_MIME_TYPES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+];
 
 /** Reads optional room-local UI state without involving the shared backend. */
 function readRoomStorage(roomId, key, fallback) {
@@ -184,10 +206,105 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function isDocumentChannelUploadFile(file: File) {
+  const mimeType = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+
+  return (
+    DOCUMENT_CHANNEL_UPLOAD_MIME_TYPES.includes(mimeType) ||
+    DOCUMENT_CHANNEL_UPLOAD_EXTENSIONS.test(name)
+  );
+}
+
 /** Returns the room channel list with the default channel always available. */
 function getRoomChannels(room) {
-  const channels = asArray(room?.channels).filter((channel) => typeof channel === "string" && channel.trim());
+  const seen = new Set();
+  const channels = [];
+
+  for (const channel of ["general", ...asArray(room?.channels)]) {
+    const name =
+      typeof channel === "string"
+        ? channel.trim()
+        : typeof channel?.name === "string"
+          ? channel.name.trim()
+          : "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    channels.push(name);
+  }
+
   return channels.length ? channels : ["general"];
+}
+
+const DEADLINE_SOON_WINDOW_MS = 60 * 60 * 1000;
+
+function parseSessionTime(value) {
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : time;
+}
+
+function getSessionEndTime(session) {
+  const start = parseSessionTime(session?.startsAt);
+  if (start == null) return null;
+
+  const explicitEnd = parseSessionTime(session?.endsAt);
+  if (explicitEnd != null && explicitEnd > start) return explicitEnd;
+  if (session?.kind === "deadline") return start;
+  if (session?.metadata?.allDay) return start + 24 * 60 * 60 * 1000;
+  return start + 60 * 60 * 1000;
+}
+
+function isSessionOngoing(session, now = Date.now()) {
+  if (session?.kind === "deadline") return false;
+  const start = parseSessionTime(session?.startsAt);
+  const end = getSessionEndTime(session);
+  return start != null && end != null && start <= now && now < end;
+}
+
+function isDeadlineDueSoon(session, now = Date.now()) {
+  if (session?.kind !== "deadline") return false;
+  const start = parseSessionTime(session?.startsAt);
+  return start != null && start >= now && start - now <= DEADLINE_SOON_WINDOW_MS;
+}
+
+function normalizeAreaLookup(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function getRoomMeetingAreas(room) {
+  return asArray(room?.worldConfig?.privateAreas).filter((area) => area?.effects?.meeting);
+}
+
+function findSessionWorldMeetingArea(session, room) {
+  if (session?.kind !== "meeting") return null;
+  const location = normalizeAreaLookup(session?.location);
+  if (!location) return null;
+
+  return (
+    getRoomMeetingAreas(room).find((area) =>
+      [area?.id, area?.name, area?.label].some((candidate) => normalizeAreaLookup(candidate) === location),
+    ) || null
+  );
+}
+
+function getAreaTeleportTarget(area, room) {
+  const bounds = area?.bounds || area;
+  const col = Number(bounds?.col ?? bounds?.x);
+  const row = Number(bounds?.row ?? bounds?.y);
+  const width = Number(bounds?.width ?? bounds?.w);
+  const height = Number(bounds?.height ?? bounds?.h);
+  if (![col, row, width, height].every(Number.isFinite)) return null;
+
+  return {
+    areaId: area?.id || "",
+    areaName: area?.name || area?.label || "Meeting Area",
+    worldRoomId: String(area?.roomId || area?.mapId || room?.worldConfig?.activeRoomId || CUSTOM_WORLD_MAP_ID),
+    x: Math.floor(col + width / 2),
+    y: Math.floor(row + height / 2),
+  };
 }
 
 function mergeUserProfile(currentUser, nextUser) {
@@ -198,10 +315,12 @@ function mergeUserProfile(currentUser, nextUser) {
 function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token, user }) {
   const [room, setRoom] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [annotations, setAnnotations] = useState([]);
   const [resources, setResources] = useState([]);
   const [customResourceFolders, setCustomResourceFolders] = useState([]);
   const [resourceFoldersLoadedRoomId, setResourceFoldersLoadedRoomId] = useState("");
   const [sessions, setSessions] = useState([]);
+  const [coordinate, setCoordinate] = useState({ poll: null, polls: [], responses: [] });
   const [activeTab, setActiveTab] = useState("space");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -232,10 +351,12 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const [profileStatus, setProfileStatus] = useState(getStoredProfileStatus);
   const [activeMeetingArea, setActiveMeetingArea] = useState(null);
   const [spaceReturnToSpawnSignal, setSpaceReturnToSpawnSignal] = useState(0);
+  const [spaceTeleportTarget, setSpaceTeleportTarget] = useState(null);
   const [worldHasUnsavedChanges, setWorldHasUnsavedChanges] = useState(false);
   const [importantMessages, setImportantMessages] = useState([]);
   const [resourceThreads, setResourceThreads] = useState({});
   const toastTimeoutRef = useRef(null);
+  const documentChannelUploadInputRef = useRef<HTMLInputElement | null>(null);
   const onUserUpdatedRef = useRef(onUserUpdated);
   const userRef = useRef(user);
   const limeetsMeeting = useLimeetsMeeting({ profileStatus, room, socket: roomSocket, user });
@@ -266,6 +387,47 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     draftBuddyThread ||
     buddyThreadList.find((thread) => thread.id === activeBuddyThreadId) ||
     buddyThreadList[0];
+  const documentPresence = useMemo(
+    () =>
+      asArray(roomActivityMembers)
+        .filter((entry) => {
+          const entryUserId = String(entry?.userId || entry?.user?.id || "");
+          const page = Number(entry?.documentPage);
+          return (
+            entryUserId &&
+            entryUserId !== user?.id &&
+            entry?.tabId === "chat" &&
+            entry?.documentChannel === activeChatChannel &&
+            Number.isFinite(page)
+          );
+        })
+        .map((entry) => {
+          const profile = entry?.user || entry;
+          const name = String(profile?.name || profile?.email || entry?.name || "Unknown");
+          const userId = String(entry?.userId || entry?.user?.id || "");
+          const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
+          return {
+            avatarPreset: profile?.avatarPreset,
+            avatarUrl: profile?.avatarUrl || profile?.avatar || profile?.photoUrl || "",
+            email: profile?.email || "",
+            userId,
+            name,
+            page: Number(entry?.documentPage),
+            initial,
+          };
+        }),
+    [activeChatChannel, roomActivityMembers, user?.id],
+  );
+  const handleDocumentPageChange = useCallback(
+    (page: number) => {
+      if (!roomSocket?.connected) return;
+      roomSocket.emit("room:activity:set", {
+        documentChannel: activeChatChannel,
+        documentPage: page,
+      });
+    },
+    [activeChatChannel, roomSocket],
+  );
 
   /** Builds an unsaved Intelligrate chat that becomes persistent after first send. */
   function createDraftBuddyThread() {
@@ -322,7 +484,9 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setStarredMessageIds(Array.isArray(savedStarredMessageIds) ? savedStarredMessageIds : []);
     setChannelLayout(
       normalizeChannelLayout(
-        readRoomStorage(room.id, "channelLayout", null),
+        asArray(room.channelLayout).length
+          ? room.channelLayout
+          : readRoomStorage(room.id, "channelLayout", null),
         getRoomChannels(room),
       ),
     );
@@ -331,9 +495,12 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   useEffect(() => {
     if (!room?.id) return;
     setChannelLayout((current) =>
-      normalizeChannelLayout(current, getRoomChannels(room)),
+      normalizeChannelLayout(
+        asArray(room.channelLayout).length ? room.channelLayout : current,
+        getRoomChannels(room),
+      ),
     );
-  }, [room?.id, room?.channels]);
+  }, [room?.id, room?.channels, room?.channelLayout]);
 
   useEffect(() => {
     writeRoomStorage(room?.id, "chatDrafts", chatDrafts);
@@ -499,6 +666,44 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       setMessages((current) => current.filter((message) => message.id !== payload.id));
     });
 
+    socket.on("annotation:new", (annotation) => {
+      if (annotation.roomId && annotation.roomId !== room.id) return;
+      setAnnotations((current) =>
+        current.some((existing) => existing.id === annotation.id)
+          ? current
+          : [...current, annotation],
+      );
+    });
+
+    socket.on("annotation:updated", (annotation) => {
+      if (annotation.roomId && annotation.roomId !== room.id) return;
+      setAnnotations((current) =>
+        current.map((existing) => (existing.id === annotation.id ? annotation : existing)),
+      );
+    });
+
+    socket.on("annotation:deleted", (payload) => {
+      if (payload.roomId && payload.roomId !== room.id) return;
+      setAnnotations((current) => current.filter((annotation) => annotation.id !== payload.id));
+    });
+
+    socket.on("resource:conversion-done", (payload) => {
+      if (payload?.roomId && payload.roomId !== room.id) return;
+      if (!payload?.resourceId) return;
+
+      setResources((current) =>
+        asArray(current).map((resource) =>
+          resource.id === payload.resourceId
+            ? {
+                ...resource,
+                conversionStatus: payload.conversionStatus || resource.conversionStatus,
+                pdfUrl: resolveServerAssetUrl(payload.pdfUrl || resource.pdfUrl || null),
+              }
+            : resource,
+        ),
+      );
+    });
+
     socket.on("room:deleted", (payload) => {
       if (payload.roomId === room.id) onBack();
     });
@@ -511,7 +716,16 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
 
     socket.on("room:activity:state", (payload) => {
       if (payload?.roomId !== room.id) return;
-      setRoomActivityMembers(Array.isArray(payload.members) ? payload.members : []);
+      setRoomActivityMembers(
+        asArray(payload.members).map((member) => {
+          const documentPage = Number(member?.documentPage);
+          return {
+            ...member,
+            documentChannel: String(member?.documentChannel || ""),
+            documentPage: Number.isFinite(documentPage) ? documentPage : undefined,
+          };
+        }),
+      );
     });
 
     socket.on("user:profile-updated", (payload) => {
@@ -559,6 +773,68 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   }, [room?.id, room?.isMember, token]);
 
   useEffect(() => {
+    if (!room?.id || !room.isMember) return undefined;
+
+    const activeChannelMeta = getActiveChannelMeta();
+    if (activeChannelMeta?.type !== "document") return undefined;
+
+    let cancelled = false;
+    api
+      .getAnnotations(room.id, activeChatChannel)
+      .then((payload) => {
+        if (cancelled) return;
+        const loadedAnnotations = asArray(payload.annotations);
+        setAnnotations((current) => [
+          ...current.filter((annotation) => annotation.channel !== activeChatChannel),
+          ...loadedAnnotations,
+        ]);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatChannel, room?.channels, room?.id, room?.isMember]);
+
+  useEffect(() => {
+    if (!room?.id || !room.isMember || activeTab !== "chat") return undefined;
+
+    const activeChannelMeta = getActiveChannelMeta();
+    if (activeChannelMeta?.type !== "document" || !activeChannelMeta.resourceId) return undefined;
+
+    const activeResource = asArray(resources).find(
+      (resource) => resource.id === activeChannelMeta.resourceId,
+    );
+    if (
+      !["docx", "pptx"].includes(String(activeResource?.resourceType || "")) ||
+      activeResource?.conversionStatus !== "pending"
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    async function refreshPendingConversion() {
+      try {
+        const payload = await api.getResources(room.id, { includeDeleted: true });
+        if (!cancelled) {
+          setResources(asArray(payload.resources));
+        }
+      } catch {
+        // Socket updates are still the primary path; this polling fallback should
+        // never interrupt document reading if one refresh fails.
+      }
+    }
+
+    const initialRefreshId = window.setTimeout(refreshPendingConversion, 800);
+    const intervalId = window.setInterval(refreshPendingConversion, 2500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialRefreshId);
+      window.clearInterval(intervalId);
+    };
+  }, [activeChatChannel, activeTab, resources, room?.channels, room?.id, room?.isMember]);
+
+  useEffect(() => {
     if (!roomSocket || !room?.id || !room.isMember || !activeTab) return undefined;
 
     roomSocket.emit("room:activity:set", {
@@ -569,6 +845,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
 
     return undefined;
   }, [activeTab, profileStatus, room?.id, room?.isMember, roomSocket]);
+
+  useEffect(() => {
+    if (!roomSocket || !room?.id || !room.isMember || activeTab !== "chat") return undefined;
+
+    roomSocket.emit("room:activity:set", {
+      documentChannel: "",
+      documentPage: null,
+      roomId: room.id,
+      tabId: activeTab,
+    });
+
+    return undefined;
+  }, [activeChatChannel, activeTab, room?.id, room?.isMember, roomSocket]);
 
   /**
    * Fetches the room and all member-only data needed by the active room workspace.
@@ -588,12 +877,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           messagePayload,
           resourcePayload,
           sessionPayload,
+          coordinatePayload,
           buddyPayload,
           buddyHealthPayload,
         ] = await Promise.all([
           api.getMessages(loadedRoom.id),
           api.getResources(loadedRoom.id, { includeDeleted: true }),
           api.getSessions(loadedRoom.id),
+          api.getCoordinate(loadedRoom.id),
           api.getBuddyThreads(loadedRoom.id),
           api.getBuddyHealth(loadedRoom.id).catch((err) => ({
             ok: false,
@@ -606,8 +897,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           })),
         ]);
         setMessages(asArray(messagePayload.messages));
+        setAnnotations([]);
         setResources(asArray(resourcePayload.resources));
         setSessions(asArray(sessionPayload.sessions));
+        setCoordinate({
+          poll: coordinatePayload.poll || null,
+          polls: asArray(coordinatePayload.polls),
+          responses: asArray(coordinatePayload.responses),
+        });
         setBuddyAvailability({
           ...DEFAULT_BUDDY_AVAILABILITY,
           ...buddyHealthPayload,
@@ -633,8 +930,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         }
       } else {
         setMessages([]);
+        setAnnotations([]);
         setResources([]);
         setSessions([]);
+        setCoordinate({ poll: null, polls: [], responses: [] });
         setBuddyThreads([]);
         setActiveBuddyThreadId("");
         setDraftBuddyThread(null);
@@ -751,7 +1050,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
    * Uploads files into the room resource library, then returns the saved resources
    * so chat/Intelligrate can attach the canonical server records.
    */
-  async function uploadSharedFiles(fileList, folder = UPLOADS_FOLDER) {
+  async function uploadSharedFiles(fileList, folder = UPLOADS_FOLDER, options: { purpose?: string } = {}) {
     const files = Array.from(fileList || []) as File[];
     if (!files.length || !room?.id) return [];
 
@@ -761,12 +1060,48 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       formData.append("file", file);
       formData.append("title", file.name);
       formData.append("folder", folder);
+      if (options.purpose) {
+        formData.append("purpose", options.purpose);
+      }
       const payload = await api.uploadFileResource(room.id, formData);
       uploaded.push(payload.resource);
     }
 
     await refreshResources();
     return uploaded;
+  }
+
+  function requestDocumentChannelUpload() {
+    documentChannelUploadInputRef.current?.click();
+  }
+
+  async function handleDocumentChannelUpload(fileList) {
+    if (!fileList?.length) return;
+
+    const files = Array.from(fileList) as File[];
+    const invalidFiles = files.filter((file) => !isDocumentChannelUploadFile(file));
+    if (invalidFiles.length) {
+      const names = invalidFiles
+        .map((file) => file.name)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(", ");
+      showError(names ? `${DOCUMENT_CHANNEL_UPLOAD_MESSAGE} Remove: ${names}.` : DOCUMENT_CHANNEL_UPLOAD_MESSAGE);
+      if (documentChannelUploadInputRef.current) {
+        documentChannelUploadInputRef.current.value = "";
+      }
+      return;
+    }
+
+    try {
+      await uploadSharedFiles(files, UPLOADS_FOLDER, { purpose: "document-channel" });
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      if (documentChannelUploadInputRef.current) {
+        documentChannelUploadInputRef.current.value = "";
+      }
+    }
   }
 
   /**
@@ -934,6 +1269,66 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     });
   }
 
+  function getActiveChannelMeta() {
+    const channel = asArray(room?.channels).find((candidate) => {
+      const name = typeof candidate === "string" ? candidate : candidate?.name;
+      return name === activeChatChannel;
+    });
+
+    if (!channel && activeChatChannel !== "general") return null;
+    if (!channel || typeof channel === "string") {
+      return { name: channel || activeChatChannel || "general", type: "text", resourceId: "" };
+    }
+
+    return {
+      name: String(channel.name || "general"),
+      type: channel.type === "document" ? "document" : "text",
+      resourceId: String(channel.resourceId || ""),
+    };
+  }
+
+  async function createAnnotation(annotationData) {
+    if (!room?.id) throw new Error("Room is not ready.");
+    const payload = await api.createAnnotation(room.id, activeChatChannel, annotationData);
+    if (payload?.annotation) {
+      setAnnotations((current) =>
+        current.some((annotation) => annotation.id === payload.annotation.id)
+          ? current.map((annotation) =>
+              annotation.id === payload.annotation.id ? payload.annotation : annotation,
+            )
+          : [...current, payload.annotation],
+      );
+    }
+  }
+
+  async function updateAnnotation(id, patch) {
+    if (!room?.id) throw new Error("Room is not ready.");
+    const payload = await api.updateAnnotation(room.id, activeChatChannel, id, patch);
+    if (payload?.annotation) {
+      setAnnotations((current) =>
+        current.map((annotation) => (annotation.id === id ? payload.annotation : annotation)),
+      );
+    }
+  }
+
+  async function deleteAnnotation(id) {
+    if (!room?.id) throw new Error("Room is not ready.");
+    await api.deleteAnnotation(room.id, activeChatChannel, id);
+    setAnnotations((current) => current.filter((annotation) => annotation.id !== id));
+  }
+
+  async function addAnnotationReply(annotationId, comment) {
+    if (!room?.id) throw new Error("Room is not ready.");
+    const payload = await api.addAnnotationReply(room.id, activeChatChannel, annotationId, { comment });
+    if (payload?.annotation) {
+      setAnnotations((current) =>
+        current.map((annotation) =>
+          annotation.id === annotationId ? payload.annotation : annotation,
+        ),
+      );
+    }
+  }
+
   async function copyInviteLink() {
     const inviteUrl = `${window.location.origin}${window.location.pathname}#/invite/${room.inviteCode}`;
     setInviteCopied(true);
@@ -958,16 +1353,36 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setChatDialog({ mode: "category" });
   }
 
+  async function saveChatChannelLayout(nextLayout, sourceRoom = room) {
+    if (!sourceRoom?.id) return;
+
+    const normalized = normalizeChannelLayout(nextLayout, getRoomChannels(sourceRoom));
+    setChannelLayout(normalized);
+
+    if (!sourceRoom.isOwner) return;
+
+    try {
+      const payload = await api.updateChannelLayout(sourceRoom.id, normalized);
+      if (payload?.room) {
+        setRoom(payload.room);
+        setChannelLayout(normalizeChannelLayout(payload.room.channelLayout, getRoomChannels(payload.room)));
+      }
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
   /** Creates a local category used for organising server-backed text channels. */
   function createChatCategory(name) {
     if (!room?.isOwner) return;
     const trimmed = name.trim();
     if (!trimmed) return;
 
-    setChannelLayout((current) => [
-      ...normalizeChannelLayout(current, getRoomChannels(room)),
+    const nextLayout = [
+      ...normalizeChannelLayout(channelLayout, getRoomChannels(room)),
       { id: createCategoryId(trimmed), name: trimmed, channels: [] },
-    ]);
+    ];
+    void saveChatChannelLayout(nextLayout);
     setChatDialog(null);
   }
 
@@ -975,45 +1390,70 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   function deleteChatCategory(categoryId) {
     if (!room?.isOwner || !categoryId) return;
 
-    setChannelLayout((current) => {
-      const normalized = normalizeChannelLayout(current, getRoomChannels(room));
-      const target = normalized.find((category) => category.id === categoryId);
-      if (!target) return normalized;
+    const normalized = normalizeChannelLayout(channelLayout, getRoomChannels(room));
+    const target = normalized.find((category) => category.id === categoryId);
+    if (!target) return;
 
-      const remaining = normalized.filter((category) => category.id !== categoryId);
-      const targetChannels = Array.from(new Set(target.channels || []));
-      if (!remaining.length) {
-        return [
-          {
-            id: DEFAULT_CATEGORY_ID,
-            name: "Text Channels",
-            channels: targetChannels,
-          },
-        ];
-      }
+    const remaining = normalized.filter((category) => category.id !== categoryId);
+    const targetChannels = Array.from(new Set(target.channels || []));
+    if (!remaining.length) {
+      void saveChatChannelLayout([
+        {
+          id: DEFAULT_CATEGORY_ID,
+          name: "Text Channels",
+          channels: targetChannels,
+        },
+      ]);
+      return;
+    }
 
-      const fallbackIndex = Math.max(
-        0,
-        remaining.findIndex((category) => category.id === DEFAULT_CATEGORY_ID),
-      );
+    const fallbackIndex = Math.max(
+      0,
+      remaining.findIndex((category) => category.id === DEFAULT_CATEGORY_ID),
+    );
 
-      return remaining.map((category, index) =>
+    void saveChatChannelLayout(
+      remaining.map((category, index) =>
         index === fallbackIndex
           ? {
             ...category,
             channels: Array.from(new Set([...category.channels, ...targetChannels])),
           }
           : category,
-      );
-    });
+      ),
+    );
+  }
+
+  /** Renames a local sidebar category without changing its channels. */
+  function renameChatCategory(categoryId, name) {
+    if (!room?.isOwner || !categoryId) return;
+    void saveChatChannelLayout(
+      renameCategoryInLayout(
+        normalizeChannelLayout(channelLayout, getRoomChannels(room)),
+        categoryId,
+        name,
+      ),
+    );
+  }
+
+  /** Reorders whole local categories in the Convolution sidebar. */
+  function moveChatCategory(categoryId, beforeCategoryId = "") {
+    if (!room?.isOwner || !categoryId) return;
+    void saveChatChannelLayout(
+      moveCategoryInLayout(
+        normalizeChannelLayout(channelLayout, getRoomChannels(room)),
+        categoryId,
+        beforeCategoryId,
+      ),
+    );
   }
 
   /** Moves an existing channel between local categories without touching messages. */
   function moveChatChannel(channel, categoryId, beforeChannel = "") {
     if (!room?.isOwner) return;
-    setChannelLayout((current) =>
+    void saveChatChannelLayout(
       moveChannelToCategory(
-        normalizeChannelLayout(current, getRoomChannels(room)),
+        normalizeChannelLayout(channelLayout, getRoomChannels(room)),
         channel,
         categoryId,
         beforeChannel,
@@ -1026,20 +1466,22 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     if (!room?.id || !room.isOwner) return;
 
     const name = typeof input === "string" ? input : input?.name;
+    const type = typeof input === "string" || input?.type !== "document" ? "text" : "document";
+    const resourceId = type === "document" ? input?.resourceId || "" : "";
     const categoryId =
       typeof input === "string" ? DEFAULT_CATEGORY_ID : input?.categoryId || chatDialog?.categoryId;
 
     try {
-      const payload = await api.createChannel(room.id, { name });
+      const payload = await api.createChannel(room.id, { name, type, resourceId });
       setRoom(payload.room);
       setActiveChatChannel(payload.channel);
-      setChannelLayout((current) =>
+      const nextLayout =
         addChannelToCategory(
-          normalizeChannelLayout(current, getRoomChannels(payload.room)),
+          normalizeChannelLayout(channelLayout, getRoomChannels(payload.room)),
           payload.channel,
           categoryId || DEFAULT_CATEGORY_ID,
-        ),
-      );
+        );
+      void saveChatChannelLayout(nextLayout, payload.room);
       setChatDialog(null);
     } catch (err) {
       showError(err.message);
@@ -1055,13 +1497,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       const payload = await api.renameChannel(room.id, channel, { name });
       setRoom(payload.room);
       setActiveChatChannel((current) => (current === channel ? payload.channel : current));
-      setChannelLayout((current) =>
-        renameChannelInLayout(
-          normalizeChannelLayout(current, getRoomChannels(payload.room)),
-          channel,
-          payload.channel,
-        ),
-      );
+      setChannelLayout(normalizeChannelLayout(payload.room.channelLayout, getRoomChannels(payload.room)));
       setMessages((current) =>
         current.map((message) =>
           (message.channel || "general") === channel
@@ -1086,12 +1522,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       const messagePayload = await api.getMessages(room.id);
       setRoom(payload.room);
       setActiveChatChannel((current) => (current === channel ? payload.channel : current));
-      setChannelLayout((current) =>
-        removeChannelFromLayout(
-          normalizeChannelLayout(current, getRoomChannels(payload.room)),
-          channel,
-        ),
-      );
+      setChannelLayout(normalizeChannelLayout(payload.room.channelLayout, getRoomChannels(payload.room)));
       setMessages(asArray(messagePayload.messages));
     } catch (err) {
       showError(err.message);
@@ -1127,6 +1558,21 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setActiveTab(nextTabId);
     if (nextTabId !== "space") setWorldHasUnsavedChanges(false);
     setContextOpen(true);
+  }
+
+  function joinWorldMeetingFromCalendar(session) {
+    const area = findSessionWorldMeetingArea(session, room);
+    const target = getAreaTeleportTarget(area, room);
+    if (!target) {
+      setNotice("That meeting is not linked to a World area.");
+      return;
+    }
+
+    setSpaceTeleportTarget({
+      ...target,
+      requestedAt: Date.now(),
+    });
+    selectRoomTab("space");
   }
 
   const handleExitRoom = useCallback(() => {
@@ -1451,14 +1897,24 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const safeChannelLayout = asArray(channelLayout);
   const safeChatDrafts = asObjectRecord(chatDrafts);
   const safeMessages = asArray(messages);
+  const safeAnnotations = asArray(annotations);
   const safeResources = asArray(resources);
   const safeSessions = asArray(sessions);
   const safeStarredMessageIds = asArray(starredMessageIds);
   const visibleResourceCount = safeResources.filter((resource) => !resource?.deletedAt).length;
+  const activeChannelMeta = getActiveChannelMeta();
+  const isDocumentChannel = activeChannelMeta?.type === "document";
+  const activeDocumentResource = safeResources.find(
+    (resource) => resource.id === activeChannelMeta?.resourceId,
+  );
+  const isImageDocumentResource = activeDocumentResource?.resourceType === "image";
+  const roomModalOpen = Boolean(
+    settingsOpen || alertMessage || chatDialog || buddyDeleteTarget || buddyRenameTarget,
+  );
   const spaceContext = {
     activeBuddyThreadTitle: activeBuddyThread?.title || "",
     activeChatChannel,
-    calendarAvailable: false,
+    calendarAvailable: true,
     intelligrateAvailable: Boolean(buddyAvailability.available),
     intelligrateProviderLabel: buddyAvailability.providerLabel || "",
     resourceCount: visibleResourceCount,
@@ -1538,6 +1994,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
             activeBuddyThreadId={activeBuddyThread?.id}
             buddyThreads={buddyThreads}
             channels={safeChannels}
+            channelObjects={asArray(room.channels)}
             channelLayout={safeChannelLayout}
             chatDrafts={safeChatDrafts}
             copyInviteLink={copyInviteLink}
@@ -1549,17 +2006,20 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
             onCreateChannel={openCreateChannelDialog}
             onDeleteCategory={deleteChatCategory}
             onDeleteChannel={deleteChatChannel}
+            onMoveCategory={moveChatCategory}
             onMoveChannel={moveChatChannel}
             onRequestDeleteBuddyThread={setBuddyDeleteTarget}
             onRequestRenameBuddyThread={setBuddyRenameTarget}
             onStartGroupBuddyThread={startGroupBuddyThread}
             onNewBuddyThread={startBuddyThread}
+            onRenameCategory={renameChatCategory}
             onRenameChannel={renameChatChannel}
             onSelectChannel={setActiveChatChannel}
             onSelectBuddyThread={(threadId) => {
               setDraftBuddyThread(null);
               setActiveBuddyThreadId(threadId);
             }}
+            onJoinWorldMeeting={joinWorldMeetingFromCalendar}
             room={room}
             resourceDrive={resourceDrive}
             roomActivityMembers={roomActivityMembers}
@@ -1570,9 +2030,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         </div>
       </aside>
 
-      {room.isMember && !settingsOpen ? (
+      {room.isMember && !roomModalOpen ? (
         <div className="room-sidebar-dock">
           <RoomVoiceDock
+            activityLabel={getRoomActivityLabel(activeTab)}
             meeting={limeetsMeeting}
             onExitRoom={handleExitRoom}
             onLeaveMeetingArea={handleLeaveMeetingArea}
@@ -1613,25 +2074,84 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
 
         {room.isMember && activeTab === "chat" ? (
           <section className="room-content-panel chat-content-panel">
-            <DiscordChatPanel
-              activeChannel={activeChatChannel}
-              channelLayout={safeChannelLayout}
-              draft={safeChatDrafts[activeChatChannel] || ""}
-              drafts={safeChatDrafts}
-              messages={safeMessages}
-              onDeleteMessage={deleteViaSocket}
-              onDraftChange={updateChatDraft}
-              onEditMessage={editViaSocket}
-              onError={showError}
-              onSelectChannel={(channel) => {
-                setActiveChatChannel(channel || "general");
-              }}
-              onSend={sendViaSocket}
-              onToggleStarredMessage={toggleStarredMessage}
-              onUploadFiles={uploadSharedFiles}
-              starredMessageIds={safeStarredMessageIds}
-              user={user}
-            />
+            {isDocumentChannel && isImageDocumentResource ? (
+              <ImageAnnotatorPanel
+                activeChannel={activeChatChannel}
+                annotations={safeAnnotations.filter(
+                  (annotation) => annotation.channel === activeChatChannel,
+                )}
+                isOwner={room.isOwner}
+                documentPresence={documentPresence}
+                onAddReply={addAnnotationReply}
+                onCreateAnnotation={createAnnotation}
+                onDeleteAnnotation={deleteAnnotation}
+                onError={showError}
+                onPageChange={handleDocumentPageChange}
+                onUpdateAnnotation={updateAnnotation}
+                resourceId={activeChannelMeta.resourceId}
+                resourceTitle={activeDocumentResource?.title || activeDocumentResource?.originalName || "Image"}
+                resourceUrl={
+                  activeDocumentResource?.fileUrl ||
+                  (activeChannelMeta.resourceId
+                    ? `/api/resources/${encodeURIComponent(activeChannelMeta.resourceId)}/file`
+                    : "")
+                }
+                user={user}
+              />
+            ) : isDocumentChannel ? (
+              <DocumentChannelPanel
+                activeChannel={activeChatChannel}
+                annotations={safeAnnotations.filter(
+                  (annotation) => annotation.channel === activeChatChannel,
+                )}
+                isOwner={room.isOwner}
+                documentPresence={documentPresence}
+                onAddReply={addAnnotationReply}
+                onCreateAnnotation={createAnnotation}
+                onDeleteAnnotation={deleteAnnotation}
+                onError={showError}
+                onPageChange={handleDocumentPageChange}
+                onUpdateAnnotation={updateAnnotation}
+                resourceId={activeChannelMeta.resourceId}
+                resourceConversionStatus={activeDocumentResource?.conversionStatus || "not-needed"}
+                resourceFileUrl={
+                  activeDocumentResource?.fileUrl ||
+                  (activeChannelMeta.resourceId
+                    ? `/api/resources/${encodeURIComponent(activeChannelMeta.resourceId)}/file`
+                    : "")
+                }
+                resourceMimeType={activeDocumentResource?.mimeType || ""}
+                resourcePdfUrl={activeDocumentResource?.pdfUrl || ""}
+                resourceTitle={activeDocumentResource?.title || activeDocumentResource?.originalName || "Document"}
+                resourceType={activeDocumentResource?.resourceType || ""}
+                resourceUrl={
+                  activeChannelMeta.resourceId
+                    ? `/api/resources/${encodeURIComponent(activeChannelMeta.resourceId)}/file`
+                    : ""
+                }
+                user={user}
+              />
+            ) : (
+              <DiscordChatPanel
+                activeChannel={activeChatChannel}
+                channelLayout={safeChannelLayout}
+                draft={safeChatDrafts[activeChatChannel] || ""}
+                drafts={safeChatDrafts}
+                messages={safeMessages}
+                onDeleteMessage={deleteViaSocket}
+                onDraftChange={updateChatDraft}
+                onEditMessage={editViaSocket}
+                onError={showError}
+                onSelectChannel={(channel) => {
+                  setActiveChatChannel(channel || "general");
+                }}
+                onSend={sendViaSocket}
+                onToggleStarredMessage={toggleStarredMessage}
+                onUploadFiles={uploadSharedFiles}
+                starredMessageIds={safeStarredMessageIds}
+                user={user}
+              />
+            )}
           </section>
         ) : null}
 
@@ -1692,6 +2212,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
               roomActivityMembers={roomActivityMembers}
               socket={roomSocket}
               spaceContext={spaceContext}
+              teleportTarget={spaceTeleportTarget}
               user={user}
             />
           </section>
@@ -1708,12 +2229,15 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         ) : null}
 
         {room.isMember && activeTab === "calendar" ? (
-          <section className="room-content-panel">
-            <SessionPanel
+          <section className="room-content-panel coordinate-content-panel">
+            <CoordinatePanel
+              coordinate={coordinate}
               onChanged={() => loadRoomBundle(room.id)}
+              onCoordinateChanged={setCoordinate}
               onError={showError}
               room={room}
               sessions={safeSessions}
+              user={user}
             />
           </section>
         ) : null}
@@ -1727,6 +2251,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
             }}
             onClose={() => setSettingsOpen(false)}
             onError={showError}
+            onCalendarChanged={() => loadRoomBundle(room.id)}
             room={room}
           />
         ) : null}
@@ -1760,6 +2285,19 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
             onCreateChannel={(payload) =>
               createChatChannel({ ...payload, categoryId: chatDialog.categoryId })
             }
+            onRequestUpload={requestDocumentChannelUpload}
+            resources={safeResources}
+          />
+        ) : null}
+
+        {room.isOwner ? (
+          <input
+            accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/png,image/jpeg,image/webp"
+            className="document-channel-upload-input"
+            multiple
+            onChange={(event) => handleDocumentChannelUpload(event.target.files)}
+            ref={documentChannelUploadInputRef}
+            type="file"
           />
         ) : null}
 
@@ -1840,6 +2378,41 @@ function IntelligrateUnavailable({ availability, isOwner, onRefresh }) {
   );
 }
 
+function MiniSessionCard({ joinable = false, now = Date.now(), onJoinWorldMeeting, session, stateLabel = "" }) {
+  const content = (
+    <>
+      <strong>{session.title}</strong>
+      <span>{formatDateTime(session.startsAt)}</span>
+      {session.location ? <small>{session.location}</small> : null}
+      {stateLabel ? <small className="mini-session-state">{stateLabel}</small> : null}
+    </>
+  );
+  const className = [
+    "mini-session-card",
+    session.kind === "deadline" ? "deadline" : "",
+    isSessionOngoing(session, now) ? "ongoing" : "",
+    isDeadlineDueSoon(session, now) ? "soon" : "",
+    joinable ? "joinable" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (joinable) {
+    return (
+      <button
+        aria-label={`Open ${session.title} In World`}
+        className={className}
+        onClick={() => onJoinWorldMeeting?.(session)}
+        type="button"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <article className={className}>{content}</article>;
+}
+
 /** Sidebar content that changes based on the active room tool. */
 function RoomContextPanel({
   activeTab,
@@ -1849,6 +2422,7 @@ function RoomContextPanel({
   buddyThreads,
   channelActionLoading,
   channels,
+  channelObjects,
   channelLayout,
   chatDrafts,
   copyInviteLink,
@@ -1860,8 +2434,11 @@ function RoomContextPanel({
   onCreateChannel,
   onDeleteCategory,
   onDeleteChannel,
+  onMoveCategory,
   onMoveChannel,
   onNewBuddyThread,
+  onJoinWorldMeeting,
+  onRenameCategory,
   onRenameChannel,
   onRequestRenameBuddyThread,
   onRequestDeleteBuddyThread,
@@ -1880,7 +2457,13 @@ function RoomContextPanel({
   const [buddyMenuPosition, setBuddyMenuPosition] = useState({ left: 0, top: 0 });
   const [channelRenameTarget, setChannelRenameTarget] = useState(null);
   const [channelDeleteTarget, setChannelDeleteTarget] = useState(null);
+  const [categoryRenameTarget, setCategoryRenameTarget] = useState(null);
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState(null);
+  const [calendarSectionsOpen, setCalendarSectionsOpen] = useState({
+    deadlines: true,
+    meetings: true,
+  });
+  const [calendarNow, setCalendarNow] = useState(() => Date.now());
   const safeBuddyThreads = asArray(buddyThreads);
   const safeChannelLayout = asArray(channelLayout);
   const safeChatDrafts = asObjectRecord(chatDrafts);
@@ -1893,6 +2476,21 @@ function RoomContextPanel({
       .includes(buddySearch.trim().toLowerCase()),
   );
   const buddyMenuTarget = safeBuddyThreads.find((thread) => thread.id === buddyMenuTargetId);
+  const safeChannelObjects = asArray(channelObjects);
+
+  function toggleCalendarSection(sectionId) {
+    setCalendarSectionsOpen((current) => ({
+      ...current,
+      [sectionId]: !current[sectionId],
+    }));
+  }
+
+  useEffect(() => {
+    if (activeTab !== "calendar") return undefined;
+    setCalendarNow(Date.now());
+    const intervalId = window.setInterval(() => setCalendarNow(Date.now()), 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeTab]);
 
   // Chat option menus should behave like native popovers: click elsewhere to close.
   useEffect(() => {
@@ -1935,6 +2533,7 @@ function RoomContextPanel({
         <PanelDivider />
         <ChatSidebar
           activeChannel={activeChannel}
+          channelObjects={safeChannelObjects}
           channelLayout={safeChannelLayout}
           drafts={safeChatDrafts}
           isOwner={canManageRoom}
@@ -1943,8 +2542,11 @@ function RoomContextPanel({
           onDeleteCategory={(categoryId, categoryName) =>
             setCategoryDeleteTarget({ id: categoryId, name: categoryName })
           }
+          onMoveCategory={onMoveCategory}
           onMoveChannel={onMoveChannel}
           onRequestDeleteChannel={setChannelDeleteTarget}
+          onRequestRenameCategory={setCategoryRenameTarget}
+          onRequestRenameChannel={setChannelRenameTarget}
           onSelectChannel={onSelectChannel}
         />
         {channelRenameTarget ? (
@@ -1959,6 +2561,20 @@ function RoomContextPanel({
             }}
             placeholder="tutorials"
             title="Rename Channel"
+          />
+        ) : null}
+        {categoryRenameTarget ? (
+          <TextInputDialog
+            confirmLabel="Rename"
+            initialValue={categoryRenameTarget.name}
+            label="Category name"
+            onCancel={() => setCategoryRenameTarget(null)}
+            onSubmit={async (name) => {
+              await onRenameCategory(categoryRenameTarget.id, name);
+              setCategoryRenameTarget(null);
+            }}
+            placeholder="Lecture Notes"
+            title="Rename Category"
           />
         ) : null}
         {channelDeleteTarget ? (
@@ -2152,24 +2768,81 @@ function RoomContextPanel({
   }
 
   if (activeTab === "calendar") {
+    const upcomingSessions = safeSessions
+      .filter((session) => {
+        const start = parseSessionTime(session?.startsAt);
+        if (start == null) return false;
+        const end = getSessionEndTime(session);
+        if (session?.kind === "deadline") return start >= calendarNow;
+        return end != null && end >= calendarNow;
+      })
+      .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+    const upcomingDeadlines = upcomingSessions.filter((session) => session.kind === "deadline");
+    const upcomingMeetings = upcomingSessions.filter((session) => session.kind !== "deadline");
+
     return (
       <>
         <PanelHeader onCloseSidebar={onCloseSidebar} title="Coordidate" />
         <PanelDivider />
-        <section className="context-section roomy">
-          <h3>Scheduled</h3>
-          <div className="mini-session-list">
-            {safeSessions.length ? (
-              safeSessions.map((session) => (
-                <article key={session.id}>
-                  <strong>{session.title}</strong>
-                  <span>{formatDateTime(session.startsAt)}</span>
-                </article>
-              ))
-            ) : (
-              <p>No meetings yet.</p>
-            )}
-          </div>
+        <section className="context-section roomy calendar-sidebar-section">
+          <button
+            aria-expanded={calendarSectionsOpen.meetings}
+            className="calendar-sidebar-heading"
+            onClick={() => toggleCalendarSection("meetings")}
+            type="button"
+          >
+            <h3>Scheduled Meetings</h3>
+            <ChevronDown size={16} />
+          </button>
+          {calendarSectionsOpen.meetings ? (
+            <div className="mini-session-list">
+              {upcomingMeetings.length ? (
+                upcomingMeetings.slice(0, 6).map((session) => {
+                  const ongoing = isSessionOngoing(session, calendarNow);
+                  const joinable = ongoing && Boolean(findSessionWorldMeetingArea(session, room));
+                  return (
+                    <MiniSessionCard
+                      joinable={joinable}
+                      key={session.id}
+                      now={calendarNow}
+                      onJoinWorldMeeting={onJoinWorldMeeting}
+                      session={session}
+                      stateLabel={joinable ? "Ongoing | Join In World" : ongoing ? "Ongoing" : ""}
+                    />
+                  );
+                })
+              ) : (
+                <p>No Meetings Yet.</p>
+              )}
+            </div>
+          ) : null}
+        </section>
+        <section className="context-section roomy calendar-sidebar-section">
+          <button
+            aria-expanded={calendarSectionsOpen.deadlines}
+            className="calendar-sidebar-heading"
+            onClick={() => toggleCalendarSection("deadlines")}
+            type="button"
+          >
+            <h3>Upcoming Deadlines</h3>
+            <ChevronDown size={16} />
+          </button>
+          {calendarSectionsOpen.deadlines ? (
+            <div className="mini-session-list">
+              {upcomingDeadlines.length ? (
+                upcomingDeadlines.slice(0, 6).map((session) => (
+                  <MiniSessionCard
+                    key={session.id}
+                    now={calendarNow}
+                    session={session}
+                    stateLabel={isDeadlineDueSoon(session, calendarNow) ? "Due Soon" : ""}
+                  />
+                ))
+              ) : (
+                <p>No Imported Deadlines Yet.</p>
+              )}
+            </div>
+          ) : null}
         </section>
       </>
     );
@@ -2202,7 +2875,9 @@ function RoomContextPanel({
         <div className="member-list">
           {members.map((member) => (
             <article key={member.id}>
-              <span className="member-avatar">{member.initial}</span>
+              <span className={member.avatarUrl ? "member-avatar image" : "member-avatar"}>
+                {member.avatarUrl ? <img alt="" src={member.avatarUrl} /> : member.initial}
+              </span>
               <div>
                 <strong>{member.name}</strong>
                 <p>{member.role}</p>
@@ -2237,6 +2912,7 @@ function HomePanel({ room }) {
 
 /** Persistent Discord-like room voice/video dock shown across room tabs. */
 function RoomVoiceDock({
+  activityLabel = "World",
   meeting,
   meetingAreaName = "Meeting Area",
   onExitRoom,
@@ -2254,7 +2930,7 @@ function RoomVoiceDock({
   const displayName = meeting?.displayName || user?.name || user?.email || "You";
   const muted = meeting?.muted ?? true;
   const screenSharing = Boolean(meeting?.screenSharing);
-  const statusText = active ? `In ${meetingAreaName}` : "In World";
+  const statusText = active ? `In ${meetingAreaName}` : `In ${activityLabel}`;
 
   return (
     <section className="room-voice-dock" aria-label="Room voice and video controls">
@@ -2958,17 +3634,16 @@ function ResourcePanel({
             value={query}
           />
         </div>
-        <select
-          aria-label="Filter by resource type"
-          onChange={(event) => setTypeFilter(event.target.value)}
+        <AppSelectMenu
+          ariaLabel="Filter by resource type"
+          className="resource-type-select"
+          onChange={setTypeFilter}
+          options={RESOURCE_TYPES.map((type) => ({
+            label: type,
+            value: type,
+          }))}
           value={typeFilter}
-        >
-          {RESOURCE_TYPES.map((type) => (
-            <option key={type} value={type}>
-              {type}
-            </option>
-          ))}
-        </select>
+        />
         <button className="secondary-button compact" onClick={() => setFolderDialogOpen(true)} type="button">
           <FolderPlus size={17} />
           New Folder
@@ -3354,8 +4029,201 @@ function createRoomSettingsForm(room) {
   };
 }
 
+function CanvasIntegrationSettings({ onCalendarChanged, onError, onRoomChanged, room }) {
+  const canvasConnection = room.integrations?.canvas || null;
+  const tokenStorageKey = `diffriendtiate:room:${room.id}:canvasAccessToken`;
+  const [host, setHost] = useState(canvasConnection?.host || "canvas.nus.edu.sg");
+  const [accessToken, setAccessToken] = useState(() => {
+    try {
+      return window.localStorage.getItem(tokenStorageKey) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [courses, setCourses] = useState(() =>
+    canvasConnection?.courseId
+      ? [
+          {
+            id: canvasConnection.courseId,
+            name: canvasConnection.courseName || "Connected module",
+            courseCode: canvasConnection.courseCode || "",
+          },
+        ]
+      : [],
+  );
+  const [selectedCourseId, setSelectedCourseId] = useState(canvasConnection?.courseId || "");
+  const [connecting, setConnecting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [status, setStatus] = useState("");
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId);
+
+  useEffect(() => {
+    setHost(canvasConnection?.host || "canvas.nus.edu.sg");
+    setSelectedCourseId(canvasConnection?.courseId || "");
+    setCourses(
+      canvasConnection?.courseId
+        ? [
+            {
+              id: canvasConnection.courseId,
+              name: canvasConnection.courseName || "Connected module",
+              courseCode: canvasConnection.courseCode || "",
+            },
+          ]
+        : [],
+    );
+  }, [canvasConnection?.courseId, canvasConnection?.courseName, canvasConnection?.courseCode, canvasConnection?.host]);
+
+  function rememberCanvasToken() {
+    try {
+      if (accessToken.trim()) {
+        window.localStorage.setItem(tokenStorageKey, accessToken.trim());
+      }
+    } catch {
+      // Browser storage is a convenience only; the server never relies on it.
+    }
+  }
+
+  async function connectCanvas(event) {
+    event.preventDefault();
+    setConnecting(true);
+    setStatus("");
+
+    try {
+      const payload = await api.getCanvasCourses(room.id, { host, accessToken });
+      const loadedCourses = asArray(payload.courses);
+      const moduleCode = String(room.moduleCode || "").toLowerCase();
+      const bestMatch =
+        loadedCourses.find((course) =>
+          `${course.courseCode || ""} ${course.name || ""}`.toLowerCase().includes(moduleCode),
+        ) || loadedCourses[0];
+
+      setCourses(loadedCourses);
+      setSelectedCourseId(bestMatch?.id || "");
+      rememberCanvasToken();
+      setStatus(loadedCourses.length ? "Canvas connected. Choose one module for this World." : "Canvas connected, but no active courses were returned.");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function importDeadlines() {
+    if (!selectedCourse) {
+      onError("Select a Canvas module before importing deadlines.");
+      return;
+    }
+
+    setImporting(true);
+    setStatus("");
+
+    try {
+      const payload = await api.importCanvasDeadlines(room.id, {
+        host,
+        accessToken,
+        courseId: selectedCourse.id,
+        courseName: selectedCourse.name,
+        courseCode: selectedCourse.courseCode,
+      });
+      rememberCanvasToken();
+      if (payload.room) onRoomChanged?.(payload.room);
+      setStatus(`Synced ${selectedCourse.name}. Imported ${payload.imported || 0} new deadline${payload.imported === 1 ? "" : "s"}.`);
+      onCalendarChanged?.();
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <section className="room-settings-integrations">
+      <header className="room-settings-header">
+        <h1>Integrations</h1>
+        <p>Connect one module source for this World so room tools can share the same academic context.</p>
+      </header>
+
+      <section className="room-settings-section integration-card">
+        <div className="settings-section-heading">
+          <h2>Canvas Integration</h2>
+          <p>Use an access token to choose the single Canvas module tied to this World.</p>
+        </div>
+
+        {canvasConnection?.connected ? (
+          <div className="integration-connected-summary">
+            <CheckCircle2 size={18} />
+            <div>
+              <strong>{canvasConnection.courseName || "Canvas module connected"}</strong>
+              <span>
+                {[canvasConnection.courseCode, canvasConnection.lastSyncedAt ? `Last synced ${formatDateTime(canvasConnection.lastSyncedAt)}` : ""]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        <form className="integration-connect-form" onSubmit={connectCanvas}>
+          <label className="field">
+            <span>Host</span>
+            <input
+              autoComplete="off"
+              onChange={(event) => setHost(event.target.value)}
+              placeholder="canvas.nus.edu.sg"
+              value={host}
+            />
+          </label>
+          <label className="field">
+            <span>Access Token</span>
+            <input
+              autoComplete="off"
+              onChange={(event) => setAccessToken(event.target.value)}
+              placeholder={canvasConnection?.connected ? "Token saved in this browser" : "Canvas token"}
+              type="password"
+              value={accessToken}
+            />
+          </label>
+          <button className="primary-button compact" disabled={connecting || !accessToken.trim()} type="submit">
+            <LinkIcon size={16} />
+            {connecting ? "Connecting" : "Connect"}
+          </button>
+        </form>
+
+        {courses.length ? (
+          <div className="integration-course-picker">
+            <label className="field">
+              <span>Module / Class</span>
+              <AppSelectMenu
+                ariaLabel="Module / Class"
+                className="integration-course-select"
+                onChange={setSelectedCourseId}
+                options={courses.map((course) => ({
+                  label: [course.courseCode, course.name].filter(Boolean).join(" - "),
+                  value: String(course.id),
+                }))}
+                value={String(selectedCourseId)}
+              />
+            </label>
+            <button
+              className="secondary-button compact"
+              disabled={importing || !selectedCourseId || !accessToken.trim()}
+              onClick={importDeadlines}
+              type="button"
+            >
+              <CalendarPlus size={16} />
+              {importing ? "Syncing" : canvasConnection?.connected ? "Sync Module" : "Save & Sync"}
+            </button>
+          </div>
+        ) : null}
+
+        {status ? <p className="integration-status">{status}</p> : null}
+      </section>
+    </section>
+  );
+}
+
 /** Full-screen owner settings surface modelled after the create-room flow. */
-function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
+function RoomSettingsScreen({ onBack, onChanged, onClose, onError, onCalendarChanged, room }) {
   const academicTermOptions = useMemo(() => createAcademicTermOptions(), []);
   const [activePage, setActivePage] = useState("profile");
   const [form, setForm] = useState(() => createRoomSettingsForm(room));
@@ -3552,6 +4420,14 @@ function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
           >
             <Edit3 size={16} />
             Room Profile
+          </button>
+          <button
+            className={activePage === "integrations" ? "active" : ""}
+            onClick={() => setActivePage("integrations")}
+            type="button"
+          >
+            <LinkIcon size={16} />
+            Integrations
           </button>
           <button
             className={activePage === "delete" ? "active danger" : "danger"}
@@ -3817,6 +4693,15 @@ function RoomSettingsScreen({ onBack, onChanged, onClose, onError, room }) {
               </button>
             </footer>
           </form>
+        ) : null}
+
+        {activePage === "integrations" ? (
+          <CanvasIntegrationSettings
+            onCalendarChanged={onCalendarChanged}
+            onError={onError}
+            onRoomChanged={onChanged}
+            room={room}
+          />
         ) : null}
 
         {activePage === "delete" ? (

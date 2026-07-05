@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Small modal for naming entities such as channels, folders, and Intelligrate chats.
@@ -28,12 +29,18 @@ function TextInputDialog({
     setSubmitting(false);
   }
 
-  return (
+  const dialog = (
     <div
       className="modal-backdrop room-form-modal-backdrop"
       onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
     >
-      <form className="room-form-modal compact-dialog" onSubmit={handleSubmit}>
+      <form
+        aria-label={title}
+        aria-modal="true"
+        className="room-form-modal compact-dialog"
+        onSubmit={handleSubmit}
+        role="dialog"
+      >
         <header>
           <h2>{title}</h2>
           <button onClick={onCancel} type="button">
@@ -64,6 +71,8 @@ function TextInputDialog({
       </form>
     </div>
   );
+
+  return createPortal(dialog, document.body);
 }
 
 export default TextInputDialog;

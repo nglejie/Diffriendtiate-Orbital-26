@@ -23,6 +23,8 @@ export function buildVisibleMembers(room, user) {
     const isOwner = member.id === owner.id;
 
     return {
+      avatarUrl: member.avatarUrl || member.avatar || member.photoUrl || "",
+      email: member.email || "",
       id: member.id,
       name,
       initial: getInitial(name),

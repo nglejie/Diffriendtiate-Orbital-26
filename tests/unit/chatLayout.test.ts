@@ -4,10 +4,12 @@ import {
   addChannelToCategory,
   createCategoryId,
   getCategoryNameForChannel,
+  moveCategoryInLayout,
   moveChannelToCategory,
   normalizeChannelLayout,
   normalizeChannelName,
   removeChannelFromLayout,
+  renameCategoryInLayout,
   renameChannelInLayout,
 } from "../../apps/client/src/features/room/chat/chatLayout.ts";
 
@@ -28,6 +30,22 @@ describe("chat layout helpers", () => {
       { id: DEFAULT_CATEGORY_ID, name: "Text Channels", channels: ["general", "labs"] },
       { id: "cat-study", name: "Study", channels: ["lectures"] },
     ]);
+  });
+
+  // Typed channel payloads are the server shape for document-aware Convolution.
+  // The current text sidebar still works with names, so this locks the migration
+  // shim that extracts names from both old strings and new channel objects.
+  it("extracts channel names from typed channel objects", () => {
+    const layout = normalizeChannelLayout(
+      [{ id: DEFAULT_CATEGORY_ID, name: "Text Channels", channels: ["general"] }],
+      [
+        { name: "general", type: "text", resourceId: "" },
+        { name: "lecture-doc", type: "document", resourceId: "res_123" },
+        "tutorials",
+      ],
+    );
+
+    expect(layout[0].channels).toEqual(["general", "lecture-doc", "tutorials"]);
   });
 
   // Exercises the core category operations used by owner controls in the Chat
@@ -51,6 +69,30 @@ describe("chat layout helpers", () => {
 
     expect(renameChannelInLayout(layout, "lectures", "lecture-notes")[0].channels).toContain("lecture-notes");
     expect(removeChannelFromLayout(layout, "labs")[1].channels).toEqual([]);
+  });
+
+  it("renames and reorders whole categories", () => {
+    const layout = [
+      { id: DEFAULT_CATEGORY_ID, name: "Text Channels", channels: ["general"] },
+      { id: "cat-lab", name: "Labs", channels: ["labs"] },
+      { id: "cat-revision", name: "Revision", channels: ["papers"] },
+    ];
+
+    expect(renameCategoryInLayout(layout, "cat-lab", "Lab Work")[1]).toEqual({
+      id: "cat-lab",
+      name: "Lab Work",
+      channels: ["labs"],
+    });
+    expect(moveCategoryInLayout(layout, "cat-revision", "cat-lab").map((category) => category.id)).toEqual([
+      DEFAULT_CATEGORY_ID,
+      "cat-revision",
+      "cat-lab",
+    ]);
+    expect(moveCategoryInLayout(layout, DEFAULT_CATEGORY_ID, "").map((category) => category.id)).toEqual([
+      "cat-lab",
+      "cat-revision",
+      DEFAULT_CATEGORY_ID,
+    ]);
   });
 
   // Confirms user-entered channel names are transformed into URL/storage-safe

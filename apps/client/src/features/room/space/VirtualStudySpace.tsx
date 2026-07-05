@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   Box,
-  ChevronDown,
   ChevronRight,
   DoorOpen,
   Eraser,
@@ -32,6 +31,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.ts";
 import { getBackground } from "../../../constants.ts";
+import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
 import { AvatarPreview } from "../profile/AvatarPreview.tsx";
 import { normalizeLimeetsAvatarPreset } from "../profile/avatarPresets.ts";
 import { normalizeProfileStatus } from "../profile/UserProfileControls.tsx";
@@ -963,48 +963,19 @@ function LayerButton({ active, children, disabled = false, layer, onClick }) {
 }
 
 function FieldSelectMenu({ label, onChange, options, value }) {
-  const [open, setOpen] = useState(false);
   const selectedOption = options.find((option) => option.value === value) || options[0];
-
-  function chooseOption(option) {
-    onChange(option.value);
-    setOpen(false);
-  }
 
   return (
     <label className="limeets-gather-field">
       <span>{label}</span>
-      <div
+      <AppSelectMenu
+        ariaLabel={label}
         className="field-select-menu academic-term-select limeets-gather-select-menu"
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-      >
-        <button
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          onClick={() => setOpen((current) => !current)}
-          type="button"
-        >
-          {selectedOption?.label || "Select"}
-          <ChevronDown size={17} />
-        </button>
-
-        {open ? (
-          <div className="custom-option-list field-option-list" role="listbox">
-            {options.map((option) => (
-              <button
-                className={option.value === value ? "active" : ""}
-                key={option.value}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => chooseOption(option)}
-                role="option"
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+        onChange={onChange}
+        options={options}
+        placeholder={selectedOption?.label || "Select"}
+        value={value}
+      />
     </label>
   );
 }
@@ -1094,6 +1065,7 @@ export function VirtualStudySpace({
   roomActivityMembers = [],
   socket,
   spaceContext,
+  teleportTarget = null,
   user,
 }) {
   const currentProfileStatus = normalizeProfileStatus(profileStatus);
@@ -1112,6 +1084,7 @@ export function VirtualStudySpace({
   const lastPresenceSnapshotRef = useRef("");
   const lastSpaceJoinRetryRef = useRef(0);
   const lastReturnToSpawnSignalRef = useRef(0);
+  const lastTeleportTargetRef = useRef("");
   const panRef = useRef(null);
   const areaDragRef = useRef(null);
   const dragTileRef = useRef(null);
@@ -1628,6 +1601,73 @@ export function VirtualStudySpace({
     persistAndBroadcast(nextPlayer, performance.now() + MOVE_EMIT_INTERVAL_MS);
   }, [applyWorldUpdate, centerCameraOn, fitScale, onMeetingAreaChange, persistAndBroadcast, room?.id, world]);
 
+  const movePlayerToTeleportTarget = useCallback(
+    (target) => {
+      const currentWorld = worldRef.current || world;
+      const currentPlayer = playerRef.current;
+      if (!currentWorld || !currentPlayer || !target) return;
+
+      const destinationRoomId = String(target.worldRoomId || currentWorld.activeRoomId || CUSTOM_WORLD_MAP_ID);
+      const destinationRoom =
+        currentWorld.rooms.find((candidate) => candidate.id === destinationRoomId) ||
+        currentWorld.rooms[0] ||
+        worldRoomRef.current;
+      const destinationColumns = Number(destinationRoom?.columns || currentWorld.columns || 1);
+      const destinationRows = Number(destinationRoom?.rows || currentWorld.rows || 1);
+      const tile = {
+        x: clamp(Math.round(Number(target.x ?? target.col) || 0), 0, Math.max(0, destinationColumns - 1)),
+        y: clamp(Math.round(Number(target.y ?? target.row) || 0), 0, Math.max(0, destinationRows - 1)),
+      };
+      const point = tileToWorldPoint(tile, currentWorld.tileSize);
+      const nextPlayer = {
+        ...currentPlayer,
+        ...point,
+        direction: "down",
+        frame: getAvatarFrame("down", false, 0),
+        moving: false,
+        path: [],
+      };
+      const area =
+        (Array.isArray(currentWorld.privateAreas) ? currentWorld.privateAreas : []).find(
+          (candidate) => candidate?.id === target.areaId,
+        ) || null;
+
+      keysRef.current.clear();
+      playerRef.current = nextPlayer;
+      setPlayer(nextPlayer);
+      followPlayerRef.current = true;
+      worldRoomRef.current = destinationRoom;
+      lastIdleActionKeyRef.current = "";
+
+      if (target.areaId) {
+        meetingAreaRef.current = target.areaId;
+        activeAreaRef.current = target.areaId;
+        triggeredAreaRef.current = target.areaId;
+        writeAreaTriggerStorage(roomIdRef.current || room?.id, target.areaId);
+        onMeetingAreaChange?.({
+          areaId: target.areaId,
+          name: area?.name || area?.label || target.areaName || "Meeting Area",
+          tile,
+          worldRoomId: destinationRoom?.id || destinationRoomId,
+        });
+      }
+
+      if (destinationRoom?.id && destinationRoom.id !== currentWorld.activeRoomId) {
+        applyWorldUpdate(
+          (current) => ({
+            ...current,
+            activeRoomId: destinationRoom.id,
+          }),
+          { snapshot: false },
+        );
+      }
+
+      centerCameraOn(nextPlayer, cameraRef.current.scale || fitScale || 1);
+      persistAndBroadcast(nextPlayer, performance.now() + MOVE_EMIT_INTERVAL_MS);
+    },
+    [applyWorldUpdate, centerCameraOn, fitScale, onMeetingAreaChange, persistAndBroadcast, room?.id, world],
+  );
+
   useEffect(() => {
     if (!returnToSpawnSignal || returnToSpawnSignal <= lastReturnToSpawnSignalRef.current || !playerReady) {
       return;
@@ -1636,6 +1676,19 @@ export function VirtualStudySpace({
     lastReturnToSpawnSignalRef.current = returnToSpawnSignal;
     movePlayerToSpawn();
   }, [movePlayerToSpawn, playerReady, returnToSpawnSignal]);
+
+  useEffect(() => {
+    if (!teleportTarget || !playerReady) return;
+
+    const targetKey = String(
+      teleportTarget.requestedAt ||
+        `${teleportTarget.worldRoomId || ""}:${teleportTarget.areaId || ""}:${teleportTarget.x}:${teleportTarget.y}`,
+    );
+    if (!targetKey || targetKey === lastTeleportTargetRef.current) return;
+
+    lastTeleportTargetRef.current = targetKey;
+    movePlayerToTeleportTarget(teleportTarget);
+  }, [movePlayerToTeleportTarget, playerReady, teleportTarget]);
 
   useEffect(() => {
     let animationFrame = 0;

@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   DoorOpen,
   Eye,
@@ -35,6 +34,7 @@ import {
   getTheme,
   moduleCodeOptions,
 } from "../../constants.ts";
+import { AppSelectMenu } from "../../shared/ui/AppSelectMenu.tsx";
 
 const DEFAULT_CARD_ACADEMIC_TERM = createAcademicTermOptions()[0] || "";
 
@@ -798,91 +798,34 @@ function ModuleCodeCombobox({ onChange, options, value }) {
 
 /** Small custom select used by the theme-library filters. */
 function SelectMenu({ label, onChange, options, value }) {
-  const [open, setOpen] = useState(false);
-
-  /** Applies one filter value and closes the menu. */
-  function chooseOption(option) {
-    onChange(option);
-    setOpen(false);
-  }
-
   return (
-    <div
+    <AppSelectMenu
+      ariaLabel={label}
       className="filter-select"
-      onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-    >
-      <span>{label}</span>
-      <button
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        type="button"
-      >
-        {value}
-        <ChevronDown size={17} />
-      </button>
-
-      {open ? (
-        <div className="custom-option-list filter-option-list" role="listbox">
-          {options.map((option) => (
-            <button
-              className={value === option ? "active" : ""}
-              key={option}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => chooseOption(option)}
-              role="option"
-              type="button"
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+      label={label}
+      onChange={onChange}
+      options={options.map((option) => ({
+        label: option,
+        value: option,
+      }))}
+      value={value}
+    />
   );
 }
 
 /** Custom dropdown for the academic term field, avoiding browser-native select colours. */
 function AcademicTermSelect({ onChange, options, value }) {
-  const [open, setOpen] = useState(false);
-
-  /** Applies the chosen term immediately so validation and previews stay in sync. */
-  function chooseTerm(term) {
-    onChange(term);
-    setOpen(false);
-  }
-
   return (
-    <div
+    <AppSelectMenu
+      ariaLabel="Academic Term"
       className="field-select-menu academic-term-select"
-      onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-    >
-      <button
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        onClick={() => setOpen((current) => !current)}
-        type="button"
-      >
-        {value}
-        <ChevronDown size={17} />
-      </button>
-
-      {open ? (
-        <div className="custom-option-list field-option-list" role="listbox">
-          {options.map((term) => (
-            <button
-              className={value === term ? "active" : ""}
-              key={term}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => chooseTerm(term)}
-              role="option"
-              type="button"
-            >
-              {term}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+      onChange={onChange}
+      options={options.map((term) => ({
+        label: term,
+        value: term,
+      }))}
+      value={value}
+    />
   );
 }
 
