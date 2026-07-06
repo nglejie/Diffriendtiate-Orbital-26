@@ -157,6 +157,9 @@
   --button-cta-glint: color-mix(in srgb, var(--rose-pine-gold) 58%, var(--rose-pine-love));
   --button-cta-hover-fg: var(--rose-pine-text);
   --button-cta-bg-hover: color-mix(in srgb, var(--rose-pine-love) 68%, var(--rose-pine-overlay));
+  --default-avatar-fg: #f2f4f8;
+  --default-avatar-bg: #5f6368;
+  --default-avatar-radius: 14px;
   --badge-fg: var(--theme-secondary-soft);
   --badge-bg: color-mix(in srgb, var(--theme-secondary) 14%, transparent);
   --badge-border: color-mix(in srgb, var(--theme-secondary) 28%, transparent);
@@ -1949,6 +1952,61 @@ h3 {
   transform: translateY(-50%);
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  padding: 0;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+}
+
+.app-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 36px 0 12px;
+  color: var(--text-primary);
+  background:
+    linear-gradient(45deg, transparent 50%, color-mix(in srgb, var(--text-primary) 58%, transparent) 50%) right 16px center / 6px 6px no-repeat,
+    linear-gradient(135deg, color-mix(in srgb, var(--text-primary) 58%, transparent) 50%, transparent 50%) right 11px center / 6px 6px no-repeat,
+    color-mix(in srgb, var(--midnight-card) 86%, var(--theme-base));
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--midnight-border-strong);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 780;
+  line-height: 1;
+  outline: 0;
+  appearance: none;
+}
+
+.app-select:hover {
+  background:
+    linear-gradient(45deg, transparent 50%, color-mix(in srgb, var(--text-primary) 72%, transparent) 50%) right 16px center / 6px 6px no-repeat,
+    linear-gradient(135deg, color-mix(in srgb, var(--text-primary) 72%, transparent) 50%, transparent 50%) right 11px center / 6px 6px no-repeat,
+    color-mix(in srgb, var(--midnight-card-hover) 76%, var(--theme-base));
+  box-shadow: inset 0 0 0 1px var(--midnight-border-strong);
+}
+
+.app-select:focus,
+.app-select:focus-visible {
+  border-color: transparent;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 62%, var(--midnight-border-strong)),
+    0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+  outline: 0;
+}
+
+.app-select option {
+  color: var(--text-primary);
+  background: var(--midnight-card-strong);
+}
+
 .module-combobox,
 .field-select-menu,
 .filter-select {
@@ -1986,10 +2044,129 @@ h3 {
 
 .custom-option-list button:hover,
 .custom-option-list button.active {
-  color: var(--button-primary-fg);
-  background: var(--button-primary-bg);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
 
 
+}
+
+.app-select-menu {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.app-select-menu-label {
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  font-size: 0.88rem;
+  font-weight: 720;
+}
+
+.app-select-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 88%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, var(--midnight-border));
+  border-radius: 8px;
+  box-shadow: none;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 650;
+  outline: 0;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.app-select-menu-button > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-select-menu-button svg {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-primary) 76%, transparent);
+  transition: color 160ms ease;
+}
+
+.app-select-menu-button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--text-primary) 15%, var(--midnight-border-strong));
+  box-shadow: none;
+}
+
+.app-select-menu-button:focus-visible,
+.app-select-menu-button[aria-expanded="true"] {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--accent-secondary) 78%, var(--midnight-border-strong));
+  box-shadow: none;
+}
+
+.app-select-menu-button[aria-expanded="true"] svg {
+  color: var(--text-primary);
+}
+
+.app-select-option-list {
+  z-index: 2700;
+  max-height: 224px;
+  overflow-y: auto;
+  padding: 6px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 94%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--text-primary) 10%, var(--midnight-border-strong));
+  border-radius: 8px;
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--shadow-color) 34%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.app-select-option-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 9px;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.app-select-option-list button span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-select-option-list button:hover,
+.app-select-option-list button.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.app-select-option-list button svg {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+}
+
+.app-select-option-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 .field-select-menu > button {
   display: flex;
@@ -1999,28 +2176,33 @@ h3 {
   min-height: 44px;
   padding: 0 12px 0 14px;
   color: var(--text-primary);
-  background: var(--midnight-card);
-  border: 1px solid var(--midnight-border);
-  border-radius: 12px;
+  background: color-mix(in srgb, var(--midnight-card) 88%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, var(--midnight-border));
+  border-radius: 8px;
   outline: none;
+  box-shadow: none;
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
-.field-select-menu > button:hover,
+.field-select-menu > button:hover {
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--text-primary) 15%, var(--midnight-border-strong));
+}
+
+.field-select-menu > button:focus-visible,
 .field-select-menu > button[aria-expanded="true"] {
-  background: var(--midnight-card-hover);
-  border-color: var(--midnight-border-strong);
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--accent-secondary) 78%, var(--midnight-border-strong));
 
 
 }
 .field-select-menu > button svg {
   color: color-mix(in srgb, var(--text-primary) 70%, transparent);
-  transition: color 160ms ease, transform 160ms ease;
+  transition: color 160ms ease;
 }
 
 .field-select-menu > button[aria-expanded="true"] svg {
   color: var(--text-primary);
-  transform: rotate(180deg);
 }
 
 .field-option-list {
@@ -2032,15 +2214,20 @@ h3 {
 /* Academic-term uses a custom menu so its dropdown never falls back to
    browser-native white select styling inside the dark create-room flow. */
 .academic-term-select > button {
-  background: var(--midnight-card);
-  border-color: var(--midnight-border);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
+  background: color-mix(in srgb, var(--midnight-card) 88%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--text-primary) 9%, var(--midnight-border));
+  box-shadow: none;
 }
 
-.academic-term-select > button:hover,
+.academic-term-select > button:hover {
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--text-primary) 15%, var(--midnight-border-strong));
+}
+
+.academic-term-select > button:focus-visible,
 .academic-term-select > button[aria-expanded="true"] {
-  background: var(--midnight-card-hover);
-  border-color: var(--midnight-border-strong);
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--accent-secondary) 78%, var(--midnight-border-strong));
 
 
 }
@@ -2053,21 +2240,19 @@ h3 {
 
 .academic-term-select .field-option-list button {
   min-height: 36px;
-  color: var(--muted);
-  border: 1px solid transparent;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  border: 0;
 }
 
 .academic-term-select .field-option-list button:hover {
-  color: var(--ink);
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-  border-color: color-mix(in srgb, var(--theme-accent) 12%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
 
 
 }
 .academic-term-select .field-option-list button.active {
-  color: var(--button-primary-fg);
-  background: var(--button-primary-bg);
-  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
 }
 
 .field textarea {
@@ -2261,19 +2446,26 @@ h3 {
   min-height: 40px;
   padding: 0 12px;
   color: var(--text-primary);
-  background: var(--midnight-card);
-  border: 1px solid var(--midnight-border);
-  border-radius: 10px;
+  background: color-mix(in srgb, var(--midnight-card) 88%, var(--theme-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, var(--midnight-border));
+  border-radius: 8px;
+  box-shadow: none;
   outline: none;
   font-weight: 500;
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
-.filter-select > button:hover,
+.filter-select > button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--text-primary) 15%, var(--midnight-border-strong));
+}
+
+.filter-select > button:focus-visible,
 .filter-select > button[aria-expanded="true"] {
   color: var(--text-primary);
-  background: var(--midnight-card-hover);
-  border-color: var(--midnight-border-strong);
+  background: color-mix(in srgb, var(--midnight-card-hover) 82%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--accent-secondary) 78%, var(--midnight-border-strong));
 
 
 }
@@ -3063,10 +3255,9 @@ h3 {
   aspect-ratio: 1;
   place-items: center;
   overflow: visible;
-  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
-  background: color-mix(in srgb, var(--text-primary) 12%, var(--theme-base));
-  border: 1px solid color-mix(in srgb, var(--text-primary) 24%, transparent);
-  border-radius: 14px;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: var(--default-avatar-radius);
   font-size: 1rem;
 }
 
@@ -3202,10 +3393,9 @@ h3 {
   aspect-ratio: 1;
   place-items: center;
   overflow: visible;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent-secondary) 28%, var(--theme-base));
-  border: 4px solid color-mix(in srgb, var(--midnight-card-strong) 98%, var(--theme-base));
-  border-radius: 50%;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: 18px;
   font-size: 1.5rem;
   font-weight: 900;
 }
@@ -3214,7 +3404,7 @@ h3 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 50%;
+  border-radius: inherit;
 }
 
 .room-profile-popover-avatar i {
@@ -3917,8 +4107,8 @@ h3 {
   width: 34px;
   aspect-ratio: 1;
   place-items: center;
-  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
-  background: color-mix(in srgb, var(--text-primary) 12%, var(--theme-base));
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
   border-radius: 12px;
   font-size: 0.86rem;
   font-weight: 800;
@@ -4796,11 +4986,20 @@ button.limeets-meeting-tile {
   aspect-ratio: 1;
   place-items: center;
   flex: 0 0 auto;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 28%, transparent);
-  border-radius: 50%;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: var(--default-avatar-radius);
   font-weight: 900;
+}
+
+.member-avatar.image {
+  overflow: hidden;
+}
+
+.member-avatar.image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .member-list strong {
@@ -8266,9 +8465,9 @@ button.world-area {
   width: 38px;
   aspect-ratio: 1;
   place-items: center;
-  color: var(--button-primary-fg);
-  background: var(--button-primary-bg);
-  border-radius: 50%;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: var(--default-avatar-radius);
   font-weight: 950;
 }
 
@@ -11848,10 +12047,9 @@ button.attachment-preview-card {
   height: 32px;
   place-items: center;
   overflow: hidden;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--fantasy-rose) 18%, var(--midnight-card));
-  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
-  border-radius: 50%;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: 10px;
   font-size: 0.78rem;
   font-weight: 900;
 }
@@ -13638,6 +13836,15 @@ img.coordinate-member-avatar {
   background: var(--midnight-card-strong);
 }
 
+.resource-type-select {
+  flex: 0 0 auto;
+  min-width: 172px;
+}
+
+.integration-course-select {
+  width: 100%;
+}
+
 .discussion-filter-row,
 .resource-stats-row {
   display: flex;
@@ -13743,9 +13950,8 @@ img.coordinate-member-avatar {
   width: 38px;
   aspect-ratio: 1;
   place-items: center;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
   border-radius: 14px;
 }
 
@@ -13986,6 +14192,10 @@ img.coordinate-member-avatar {
   gap: 6px;
 }
 
+.chat-sidebar-owner-actions {
+  margin-top: -8px;
+}
+
 .chat-sidebar-section.muted {
   opacity: 0.5;
 }
@@ -14011,9 +14221,27 @@ img.coordinate-member-avatar {
   padding: 0 8px;
 }
 
+.chat-create-category-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 34px;
+  gap: 9px;
+  padding: 0 8px;
+  color: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
 .chat-drafts-link.has-drafts,
 .chat-drafts-link.active,
 .chat-drafts-link:hover:not(:disabled),
+.chat-create-category-button:hover:not(:disabled),
 .chat-category-header button:hover:not(:disabled),
 .chat-channel-list button:hover:not(:disabled) {
   color: var(--text-primary);
@@ -14039,11 +14267,50 @@ img.coordinate-member-avatar {
   text-align: center;
 }
 
+.chat-category-section {
+  position: relative;
+}
+
+.chat-category-section.category-drag-before::before,
+.chat-category-section.category-drag-after::after,
+.chat-channel-row.drag-before::before,
+.chat-channel-row.drag-after::after,
+.chat-channel-list.category-drag-over::after {
+  position: absolute;
+  z-index: 2;
+  height: 3px;
+  background: #3ba55d;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #3ba55d 35%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.chat-category-section.category-drag-before::before {
+  top: -6px;
+  right: 8px;
+  left: 8px;
+}
+
+.chat-category-section.category-drag-after::after {
+  right: 8px;
+  bottom: -6px;
+  left: 8px;
+}
+
 .chat-category-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
+}
+
+.chat-category-header[draggable="true"] {
+  cursor: grab;
+}
+
+.chat-category-header[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .chat-category-header button {
@@ -14107,6 +14374,7 @@ img.coordinate-member-avatar {
 
 }
 .chat-channel-list {
+  position: relative;
   display: grid;
   gap: 2px;
   min-height: 12px;
@@ -14118,8 +14386,14 @@ img.coordinate-member-avatar {
 }
 
 .chat-channel-list.category-drag-over {
-  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-channel-list.category-drag-over::after {
+  right: 8px;
+  bottom: -3px;
+  left: 8px;
 }
 
 .chat-channel-list button {
@@ -14128,6 +14402,7 @@ img.coordinate-member-avatar {
 }
 
 .chat-channel-row {
+  position: relative;
   display: flex;
   align-items: center;
   min-height: 34px;
@@ -14143,11 +14418,17 @@ img.coordinate-member-avatar {
 
 
 }
-.chat-channel-row.drag-over,
-.chat-channel-list button.drag-over {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent-primary) 82%, transparent);
+
+.chat-channel-row.drag-before::before {
+  top: -2px;
+  right: 8px;
+  left: 8px;
+}
+
+.chat-channel-row.drag-after::after {
+  right: 8px;
+  bottom: -2px;
+  left: 8px;
 }
 
 .chat-channel-row.active,
@@ -14444,11 +14725,25 @@ img.coordinate-member-avatar {
   height: 40px;
   place-items: center;
   align-self: start;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
-  border-radius: 50%;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: var(--default-avatar-radius);
   font-weight: 700;
+  overflow: hidden;
+}
+
+.discord-avatar.image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.discord-avatar.rendered {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
+.discord-avatar.rendered .limeets-avatar-stack {
+  transform: translateY(3px) scale(0.96);
 }
 
 .discord-message-compact-time {
@@ -14704,6 +14999,999 @@ img.coordinate-member-avatar {
   color: color-mix(in srgb, var(--text-primary) 42%, transparent);
 }
 
+.document-channel-panel {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 84%, transparent);
+  border-radius: 14px;
+}
+
+.document-channel-panel.empty {
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  padding: 28px;
+  text-align: center;
+}
+
+.document-channel-panel.empty h2,
+.document-channel-panel.empty p {
+  margin: 0;
+}
+
+.document-channel-panel.empty p {
+  max-width: 420px;
+  color: color-mix(in srgb, var(--text-primary) 62%, transparent);
+}
+
+.document-viewer-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 65%;
+  min-width: 0;
+  border-right: 1px solid color-mix(in srgb, var(--midnight-border) 84%, transparent);
+}
+
+.document-channel-header {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px 10px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 80%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--midnight-border) 78%, transparent);
+}
+
+.document-channel-header > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.document-channel-header span {
+  display: grid;
+  min-width: 0;
+}
+
+.document-channel-header strong,
+.document-channel-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-channel-header strong {
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.document-channel-header small {
+  color: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  font-size: 0.78rem;
+}
+
+.document-presence-bar {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-primary) 56%, transparent);
+  font-size: 0.78rem;
+}
+
+.document-presence-bar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.document-presence-bar > span > span {
+  display: grid;
+  width: 22px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--theme-base);
+  background: var(--accent-primary);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.document-pdf-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.document-reading-presence-bar {
+  display: flex;
+  align-items: center;
+  flex: 0 0 32px;
+  gap: 8px;
+  height: 32px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  color: color-mix(in srgb, var(--text-primary) 62%, transparent);
+  background: color-mix(in srgb, var(--midnight-card-strong) 52%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--midnight-border) 62%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.document-reading-presence-label {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-primary) 54%, transparent);
+}
+
+.document-reading-presence-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.document-reading-presence-member .document-annotation-avatar {
+  width: 22px;
+  font-size: 0.68rem;
+}
+
+.document-reading-presence-member .document-annotation-avatar.rendered {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
+.document-reading-presence-member .document-annotation-avatar.rendered .limeets-avatar-stack {
+  transform: translateY(2px) scale(0.66);
+}
+
+.document-reading-presence-divider {
+  width: 1px;
+  height: 14px;
+  margin-right: 2px;
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+.document-reading-presence-avatar {
+  display: grid;
+  width: 20px;
+  aspect-ratio: 1;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: 8px;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.document-reading-presence-name,
+.document-reading-presence-extra {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-pdf-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--theme-base) 82%, #000 10%);
+}
+
+.document-pdf-shell .PdfHighlighter {
+  background: color-mix(in srgb, var(--theme-base) 82%, #000 10%);
+}
+
+.document-image-preview {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--theme-base) 88%, #000 12%);
+}
+
+.document-image-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow-color) 34%, transparent);
+}
+
+.image-channel-panel .document-viewer-pane {
+  min-width: 0;
+}
+
+.image-annotation-area {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.image-annotation-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 10px;
+  color: color-mix(in srgb, var(--text-primary) 72%, transparent);
+  background: color-mix(in srgb, var(--midnight-card) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--midnight-border) 72%, transparent);
+  font-size: 0.78rem;
+  font-weight: 820;
+}
+
+.image-annotation-toolbar > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-annotation-toolbar > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.image-annotation-toolbar button {
+  display: grid;
+  width: 30px;
+  min-height: 30px;
+  place-items: center;
+  color: color-mix(in srgb, var(--text-primary) 70%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 11%, transparent);
+  border-radius: 8px;
+}
+
+.image-annotation-toolbar button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 11%, transparent);
+}
+
+.image-annotation-toolbar output {
+  min-width: 42px;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.image-annotation-stage {
+  position: relative;
+  display: grid;
+  min-height: 0;
+  place-items: center;
+  overflow: auto;
+  padding: 18px;
+  background: color-mix(in srgb, var(--midnight-base) 78%, transparent);
+}
+
+.image-annotation-frame {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  transform: scale(var(--image-zoom, 1));
+  transform-origin: center center;
+}
+
+.image-annotation-frame img {
+  display: block;
+  max-width: min(100%, 1100px);
+  max-height: calc(100vh - 230px);
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--shadow-color) 30%, transparent);
+  user-select: none;
+}
+
+.image-annotation-overlay {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+}
+
+.image-annotation-rect,
+.image-annotation-draft-rect {
+  position: absolute;
+  display: block;
+  background: color-mix(in srgb, var(--annotation-color) 20%, transparent);
+  border: 2px solid color-mix(in srgb, var(--annotation-color) 82%, transparent);
+  border-radius: 4px;
+}
+
+.image-annotation-rect {
+  padding: 0;
+  cursor: pointer;
+}
+
+.image-annotation-rect:hover,
+.image-annotation-rect:focus-visible {
+  background: color-mix(in srgb, var(--annotation-color) 28%, transparent);
+  outline: 0;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--annotation-color) 24%, transparent);
+}
+
+.image-annotation-draft-rect {
+  pointer-events: none;
+  border-style: dashed;
+}
+
+.image-annotation-hover-card,
+.image-annotation-create-popover {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 7px;
+  width: min(280px, calc(100vw - 60px));
+  overflow: auto;
+  padding: 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-strong) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 88%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--shadow-color) 34%, transparent);
+}
+
+.image-annotation-hover-card {
+  transform: translate(10px, 0);
+}
+
+.image-annotation-hover-card strong,
+.image-annotation-hover-card p {
+  margin: 0;
+}
+
+.image-annotation-hover-card p {
+  color: color-mix(in srgb, var(--text-primary) 70%, transparent);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.image-annotation-hover-card button {
+  justify-self: start;
+  padding: 0;
+  color: var(--accent-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.image-annotation-create-popover {
+  cursor: default;
+}
+
+.image-annotation-create-popover > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.image-annotation-size-label {
+  justify-self: end;
+  padding: 6px 10px;
+  color: color-mix(in srgb, var(--text-primary) 42%, transparent);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.document-conversion-state {
+  display: grid;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px;
+  color: color-mix(in srgb, var(--text-primary) 72%, transparent);
+  text-align: center;
+}
+
+.document-conversion-state strong,
+.document-conversion-state p {
+  margin: 0;
+}
+
+.document-conversion-state strong {
+  max-width: 420px;
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-conversion-state p {
+  max-width: 430px;
+  line-height: 1.45;
+}
+
+.document-pdf-state {
+  display: grid;
+  height: 100%;
+  min-height: 320px;
+  place-items: center;
+  color: color-mix(in srgb, var(--text-primary) 62%, transparent);
+}
+
+.document-annotation-tip,
+.document-highlight-popup {
+  display: grid;
+  gap: 10px;
+  width: min(340px, calc(100vw - 40px));
+  padding: 12px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card-strong) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 88%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--shadow-color) 34%, transparent);
+}
+
+.document-annotation-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.document-annotation-type-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  color: color-mix(in srgb, var(--text-primary) 74%, transparent);
+  background: color-mix(in srgb, var(--annotation-color) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--annotation-color) 26%, var(--midnight-border));
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.document-annotation-type-row button.active,
+.document-annotation-type-row button:hover {
+  color: #fff;
+  background: color-mix(in srgb, var(--annotation-color) 62%, var(--midnight-card));
+  border-color: color-mix(in srgb, var(--annotation-color) 82%, transparent);
+}
+
+.document-annotation-type-row.compact button {
+  width: 30px;
+  min-height: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.document-annotation-type-select,
+.document-annotation-filter-select {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  font-size: 0.7rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.document-annotation-type-select .app-select-menu-button,
+.document-annotation-filter-select .app-select-menu-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: none;
+}
+
+.document-annotation-type-select .app-select-option-list,
+.document-annotation-filter-select .app-select-option-list {
+  text-transform: none;
+}
+
+.document-annotation-type-select.compact,
+.document-annotation-filter-select {
+  text-transform: none;
+}
+
+.document-annotation-tip textarea,
+.document-annotation-edit-form textarea,
+.document-annotation-reply-form input,
+.image-annotation-create-popover textarea {
+  width: 100%;
+  min-width: 0;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--midnight-card) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 88%, transparent);
+  border-radius: 8px;
+  font: inherit;
+  outline: 0;
+}
+
+.document-annotation-tip textarea,
+.document-annotation-edit-form textarea,
+.image-annotation-create-popover textarea {
+  resize: vertical;
+  padding: 9px;
+  line-height: 1.4;
+}
+
+.document-highlight-popup {
+  width: 250px;
+  gap: 6px;
+}
+
+.document-highlight-popup strong,
+.document-highlight-popup p {
+  margin: 0;
+}
+
+.document-highlight-popup p {
+  color: color-mix(in srgb, var(--text-primary) 72%, transparent);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.document-highlight-popup button {
+  justify-self: start;
+  padding: 0;
+  color: var(--accent-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.document-annotation-sidebar {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 0 0 35%;
+  min-width: 330px;
+  background: color-mix(in srgb, var(--midnight-card) 82%, transparent);
+}
+
+.document-annotation-sidebar > header {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--midnight-border) 78%, transparent);
+}
+
+.document-annotation-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.document-annotation-title-row h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.document-annotation-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.document-annotation-count span {
+  display: grid;
+  min-width: 26px;
+  min-height: 22px;
+  place-items: center;
+  padding: 0 8px;
+  color: var(--theme-base);
+  background: var(--accent-primary);
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.document-annotation-count small {
+  color: color-mix(in srgb, var(--text-primary) 48%, transparent);
+  font-size: 0.74rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.document-annotation-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.document-annotation-filter-select {
+  flex: 1 1 180px;
+}
+
+.document-annotation-filter-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 5px;
+}
+
+.document-annotation-filter-arrow {
+  display: grid;
+  width: 26px;
+  min-height: 26px;
+  place-items: center;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-primary) 62%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 11%, transparent);
+  border-radius: 10px;
+}
+
+.document-annotation-filter-arrow:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.document-annotation-filter-arrow:disabled {
+  cursor: default;
+  opacity: 0.34;
+}
+
+.document-annotation-filter-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.document-annotation-filter-row::-webkit-scrollbar {
+  display: none;
+}
+
+.document-annotation-filter-row button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 4px 10px;
+  color: color-mix(in srgb, var(--text-primary) 66%, transparent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 11%, transparent);
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.document-annotation-filter-row button:hover {
+  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.document-annotation-filter-row button.active {
+  color: #fff;
+  background: var(--annotation-filter-color);
+  border-color: color-mix(in srgb, var(--annotation-filter-color) 82%, transparent);
+}
+
+.document-annotation-sort-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+  border-radius: 12px;
+}
+
+.document-annotation-sort-toggle button {
+  min-height: 28px;
+  padding: 0 10px;
+  color: color-mix(in srgb, var(--text-primary) 64%, transparent);
+  background: transparent;
+  border: 0;
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+.document-annotation-sort-toggle button + button {
+  border-left: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.document-annotation-sort-toggle button:hover,
+.document-annotation-sort-toggle button.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+@media (max-width: 980px) {
+  .document-annotation-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .document-annotation-filter-strip {
+    width: 100%;
+  }
+
+  .document-annotation-sort-toggle {
+    width: fit-content;
+  }
+}
+
+.document-annotation-list {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.document-annotation-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 12px 12px 14px;
+  background: color-mix(in srgb, var(--midnight-card-strong) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 82%, transparent);
+  border-left: 4px solid var(--annotation-color);
+  border-radius: 10px;
+}
+
+.document-annotation-card.active {
+  border-color: color-mix(in srgb, var(--annotation-color) 50%, var(--midnight-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--annotation-color) 34%, transparent);
+}
+
+.document-annotation-card-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.document-annotation-card:hover .document-annotation-card-actions,
+.document-annotation-card:focus-within .document-annotation-card-actions {
+  opacity: 1;
+}
+
+.document-annotation-card-actions button,
+.document-annotation-reply-form button {
+  display: grid;
+  width: 28px;
+  min-height: 28px;
+  place-items: center;
+  color: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  background: color-mix(in srgb, var(--midnight-card) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 88%, transparent);
+  border-radius: 8px;
+}
+
+.document-annotation-card-actions button:hover,
+.document-annotation-reply-form button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.document-annotation-card-topline,
+.document-annotation-author-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-right: 86px;
+}
+
+.document-annotation-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 8px;
+  color: #fff;
+  background: color-mix(in srgb, var(--annotation-color) 68%, var(--midnight-card));
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.document-annotation-card-topline small,
+.document-annotation-author-row time {
+  color: color-mix(in srgb, var(--text-primary) 52%, transparent);
+  font-size: 0.74rem;
+}
+
+.document-annotation-excerpt {
+  margin: 0;
+  padding: 9px 10px;
+  color: color-mix(in srgb, var(--text-primary) 78%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--annotation-color) 62%, transparent);
+  border-radius: 8px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.document-annotation-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  width: 26px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: var(--default-avatar-fg);
+  background: var(--default-avatar-bg);
+  border-radius: 9px;
+  font-size: 0.72rem;
+  font-weight: 850;
+  overflow: hidden;
+}
+
+.document-annotation-avatar.image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.document-annotation-avatar.rendered {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
+.document-annotation-avatar.rendered .limeets-avatar-stack {
+  transform: translateY(2px) scale(0.78);
+}
+
+.document-annotation-avatar.small {
+  width: 22px;
+  font-size: 0.66rem;
+}
+
+.document-annotation-avatar.small.rendered .limeets-avatar-stack {
+  transform: translateY(2px) scale(0.66);
+}
+
+.document-annotation-author-row strong {
+  overflow: hidden;
+  min-width: 0;
+  font-size: 0.84rem;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-annotation-author-row em {
+  margin-left: auto;
+  color: #9ee6b4;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.document-annotation-comment {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-primary) 86%, transparent);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.document-annotation-edit-form {
+  display: grid;
+  gap: 8px;
+}
+
+.document-annotation-edit-form > div:last-child {
+  display: flex;
+  justify-content: end;
+  gap: 8px;
+}
+
+.document-annotation-replies {
+  display: grid;
+  gap: 9px;
+  padding-top: 4px;
+}
+
+.document-annotation-reply {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.document-annotation-reply p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0 0 2px;
+}
+
+.document-annotation-reply strong {
+  font-size: 0.78rem;
+}
+
+.document-annotation-reply time {
+  color: color-mix(in srgb, var(--text-primary) 48%, transparent);
+  font-size: 0.7rem;
+}
+
+.document-annotation-reply span {
+  color: color-mix(in srgb, var(--text-primary) 78%, transparent);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.document-annotation-reply-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.document-annotation-reply-form input {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.document-annotation-reply-trigger {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  color: color-mix(in srgb, var(--text-primary) 62%, transparent);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.document-annotation-reply-trigger:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.document-annotation-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  padding: 24px;
+  color: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  text-align: center;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .document-channel-panel {
+    flex-direction: column;
+  }
+
+  .document-viewer-pane {
+    flex-basis: 60%;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--midnight-border) 84%, transparent);
+  }
+
+  .document-annotation-sidebar {
+    flex: 1 1 40%;
+    min-width: 0;
+  }
+}
+
 .chat-create-dialog {
   position: relative;
   display: grid;
@@ -14766,17 +16054,23 @@ img.coordinate-member-avatar {
 }
 
 .channel-type-option {
+  position: relative;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  cursor: pointer;
 }
 
 .channel-type-option input {
   position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
   opacity: 0;
-  pointer-events: none;
+  cursor: pointer;
 }
 
 .channel-radio {
@@ -14794,6 +16088,7 @@ img.coordinate-member-avatar {
   content: "";
   background: transparent;
   border-radius: 50%;
+  pointer-events: none;
 }
 
 .channel-type-option input:checked + .channel-radio {
@@ -14863,6 +16158,104 @@ img.coordinate-member-avatar {
   border: 0;
   outline: 0;
   font: inherit;
+}
+
+.chat-document-picker {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+}
+
+.chat-document-picker legend {
+  margin-bottom: 6px;
+  color: color-mix(in srgb, var(--text-primary) 84%, transparent);
+  font-weight: 650;
+}
+
+.chat-document-resource-list {
+  display: grid;
+  max-height: 210px;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.chat-document-resource-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 54px;
+  padding: 10px;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  background: color-mix(in srgb, var(--midnight-card) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midnight-border) 88%, transparent);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.chat-document-resource-card:hover {
+  background: color-mix(in srgb, var(--midnight-card) 90%, var(--accent-primary) 10%);
+  border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--midnight-border));
+}
+
+.chat-document-resource-card input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.chat-document-resource-card input:checked + .channel-radio {
+  border-color: var(--accent-primary);
+}
+
+.chat-document-resource-card input:checked + .channel-radio::after {
+  background: var(--accent-primary);
+}
+
+.chat-document-resource-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.chat-document-resource-copy strong,
+.chat-document-resource-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-document-resource-copy strong {
+  color: var(--text-primary);
+  font-size: 0.94rem;
+  font-weight: 650;
+}
+
+.chat-document-resource-copy small,
+.chat-document-empty {
+  color: color-mix(in srgb, var(--text-primary) 56%, transparent);
+  font-size: 0.82rem;
+}
+
+.chat-document-empty {
+  margin: 0;
+  padding: 12px;
+  background: color-mix(in srgb, var(--midnight-card) 70%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--midnight-border) 88%, transparent);
+  border-radius: 8px;
+  line-height: 1.4;
+}
+
+.chat-document-upload-button {
+  justify-self: start;
 }
 
 .chat-create-dialog footer {
@@ -15826,6 +17219,10 @@ img.coordinate-member-avatar {
 }
 
 .resource-drive-actions input[type="file"] {
+  display: none;
+}
+
+.document-channel-upload-input {
   display: none;
 }
 

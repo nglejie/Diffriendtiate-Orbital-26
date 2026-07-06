@@ -19,6 +19,36 @@ function isGroupedWithPrevious(message, previousMessage) {
   return Number.isFinite(currentTime) && currentTime - previousTime <= GROUP_WINDOW_MS;
 }
 
+function avatarUrl(user) {
+  return user?.avatarUrl || user?.avatar || user?.photoUrl || "";
+}
+
+function getMessageSender(message, currentUser) {
+  const sender = message.sender || {};
+  if (sender.id !== currentUser?.id) return sender;
+
+  return {
+    ...sender,
+    ...currentUser,
+    avatarUrl: avatarUrl(currentUser) || avatarUrl(sender),
+  };
+}
+
+function MessageAvatar({ sender }) {
+  const displayName = sender?.name || sender?.email || "Unknown";
+  const photo = avatarUrl(sender);
+
+  if (photo) {
+    return (
+      <div className="discord-avatar image">
+        <img alt={`${displayName} profile picture`} src={photo} />
+      </div>
+    );
+  }
+
+  return <div className="discord-avatar">{getInitial(displayName)}</div>;
+}
+
 /**
  * Text-channel chat surface.
  *
@@ -77,7 +107,8 @@ export function ChatPanel({
   );
 
   useEffect(() => {
-    messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight });
+    if (typeof messageListRef.current?.scrollTo !== "function") return;
+    messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight });
   }, [channelMessages.length, activeChannel, visibleDrafts.length]);
 
   function addAttachments(fileList) {
@@ -221,9 +252,10 @@ export function ChatPanel({
           const previousWasGrouped = isGroupedWithPrevious(previous, channelMessages[index - 2]);
           const firstGroupedMessage = grouped && !previousWasGrouped;
           const isOwnMessage = message.sender?.id === user?.id;
+          const sender = getMessageSender(message, user);
           const senderName = isOwnMessage
-            ? user?.name || message.sender?.name || user?.email || "You"
-            : message.sender?.name || "Unknown";
+            ? sender.name || sender.email || "You"
+            : sender.name || "Unknown";
           const starred = safeStarredMessageIds.includes(message.id);
           const editing = editingMessageId === message.id;
 
@@ -243,9 +275,7 @@ export function ChatPanel({
                   {formatTimeOnly(message.createdAt)}
                 </time>
               ) : (
-                <div className="discord-avatar">
-                  {getInitial(message.sender?.name || message.sender?.email || "U")}
-                </div>
+                <MessageAvatar sender={sender} />
               )}
 
               <div className="discord-message-content">

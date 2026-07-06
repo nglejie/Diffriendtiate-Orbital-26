@@ -7,7 +7,21 @@ export const DRAFTS_VIEW_ID = "__drafts__";
  */
 function normalizeChannelList(channels) {
   if (!Array.isArray(channels)) return ["general"];
-  const cleaned = channels.filter((channel) => typeof channel === "string" && channel.trim());
+  const seen = new Set();
+  const cleaned = [];
+
+  for (const channel of ["general", ...channels]) {
+    const name =
+      typeof channel === "string"
+        ? channel.trim()
+        : typeof channel?.name === "string"
+          ? channel.name.trim()
+          : "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    cleaned.push(name);
+  }
+
   return cleaned.length ? cleaned : ["general"];
 }
 
@@ -109,6 +123,39 @@ export function moveChannelToCategory(layout, channel, categoryId, beforeChannel
 
     return { ...category, channels: nextChannels };
   });
+}
+
+/** Renames a local category while preserving its channel membership and order. */
+export function renameCategoryInLayout(layout, categoryId, nextName) {
+  const trimmed = String(nextName || "").trim();
+  if (!trimmed) return normalizeLayoutRows(layout);
+
+  return normalizeLayoutRows(layout).map((category) =>
+    category.id === categoryId ? { ...category, name: trimmed } : category,
+  );
+}
+
+/**
+ * Moves a whole category above another category. If beforeCategoryId is empty
+ * or missing, the category is moved to the end of the sidebar.
+ */
+export function moveCategoryInLayout(layout, categoryId, beforeCategoryId = "") {
+  const normalized = normalizeLayoutRows(layout);
+  const movingCategory = normalized.find((category) => category.id === categoryId);
+  if (!movingCategory) return normalized;
+
+  const remaining = normalized.filter((category) => category.id !== categoryId);
+  const insertIndex = beforeCategoryId
+    ? remaining.findIndex((category) => category.id === beforeCategoryId)
+    : -1;
+
+  if (insertIndex >= 0) {
+    remaining.splice(insertIndex, 0, movingCategory);
+  } else {
+    remaining.push(movingCategory);
+  }
+
+  return remaining;
 }
 
 /** Keeps local category ordering valid when the server returns a renamed channel. */
