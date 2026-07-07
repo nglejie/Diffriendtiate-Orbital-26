@@ -68,33 +68,46 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Build and reproducibility checks
+        if: always()
         run: npm run test:build
 
       - name: Unit and component tests
+        if: always()
         run: npm run test:unit
 
       - name: API and integration tests
+        if: always()
         run: npm run test:integration
 
       - name: AI and reliability tests
+        if: always()
         run: npm run test:ai
 
       - name: Performance smoke tests
+        if: always()
         run: npm run test:performance
 
       - name: Security checks
+        if: always()
         run: npm run test:security
 
       - name: End-to-end UAT tests
+        if: always()
         run: npm run test:e2e
 
       - name: Build Docker Compose images
+        id: docker_build
+        if: always()
         run: docker compose -f docker-compose.yaml build client server server-chatbot
 
       - name: Start Docker Compose app stack
+        id: docker_up
+        if: step.docker_build.outcome == "success"
         run: docker compose -f docker-compose.yaml up -d db server-chatbot server client
 
       - name: Wait for Docker Compose app
+        id: docker_wait
+        if: step.docker_up.outcome == "success"
         run: |
           for i in {1..90}; do
             if curl --fail --silent --show-error http://127.0.0.1:4000/ >/dev/null \
@@ -108,6 +121,7 @@ jobs:
           exit 1
 
       - name: Check Docker Compose chatbot health
+        if: step.docker_wait.outcome == "success"
         run: |
           docker compose -f docker-compose.yaml exec -T server-chatbot python - <<'PY'
           import json

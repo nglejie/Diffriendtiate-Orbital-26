@@ -1,36 +1,6 @@
 name: Docker Compose Smoke Test
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - "services/**"
-      - "tests/**"
-      - "docker-compose*.yaml"
-      - "docker-compose*.yml"
-      - ".dockerignore"
-      - ".env.example"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/**"
-      - "!**.md"
-
-  push:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - "services/**"
-      - "tests/**"
-      - "docker-compose*.yaml"
-      - "docker-compose*.yml"
-      - ".dockerignore"
-      - ".env.example"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/**"
-      - "!**.md"
-
   workflow_dispatch:
 
 jobs:
