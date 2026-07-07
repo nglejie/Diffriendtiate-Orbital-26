@@ -102,12 +102,12 @@ jobs:
 
       - name: Start Docker Compose app stack
         id: docker_up
-        if: steps.docker_build.outcome == 'success'
+        if: always() && steps.docker_build.outcome == 'success'
         run: docker compose -f docker-compose.yaml up -d db server-chatbot server client
 
       - name: Wait for Docker Compose app
         id: docker_wait
-        if: steps.docker_up.outcome == 'success'
+        if: always() && steps.docker_up.outcome == 'success'
         run: |
           for i in {1..90}; do
             if curl --fail --silent --show-error http://127.0.0.1:4000/ >/dev/null \
@@ -121,7 +121,7 @@ jobs:
           exit 1
 
       - name: Check Docker Compose chatbot health
-        if: steps.docker_wait.outcome == 'success'
+        if: always() && steps.docker_wait.outcome == 'success'
         run: |
           docker compose -f docker-compose.yaml exec -T server-chatbot python - <<'PY'
           import json
