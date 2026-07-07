@@ -68,54 +68,6 @@ The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts sep
 
 When `DATABASE_URL` is set, the server initializes and uses PostgreSQL automatically. Without `DATABASE_URL`, local development falls back to the JSON store under `apps/server/data`.
 
-### Command Line Setup
-
-Run from the project root:
-
-#### Main App 
-
-```bash
-npm install
-npm run dev
-```
-
-The local app usually runs at:
-
-- Frontend: `http://127.0.0.1:5173`
-- Backend API: `http://127.0.0.1:4000`
-
-#### Services
-
-Ollama
-
-One-time setup
-- Download Ollama
-- Pull models
-    ```
-    ollama serve &&
-    ollama pull nomic-embed-text &&
-    ollama pull qwen2.5:7b
-    ```
-
-
-Start Ollama server
-```bash
-ollama serve
-```
-
-Chatbot Server
-
-```bash
-python -m venv venv &&
-.\venv\Scripts\activate &&
-pip install -r .\services\server-chatbot\requirements.txt &&
-uvicorn main:app --app-dir services/server-chatbot --reload
-```
-The services usually runs locally at
-
-- server-chatbot: `http://127.0.0.1:8000`
-- ollama: `http://127.0.0.1:11434`
-
 ## Features
 
 - User registration and login

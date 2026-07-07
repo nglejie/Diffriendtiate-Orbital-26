@@ -1,6 +1,5 @@
 import os
 import json
-import re
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
@@ -192,7 +191,9 @@ class Agent:
         """
         sources = []
         if hasattr(message, "name") and message.name in ("search_corpus", "read_file"):
-                for line in message.content.split("\n"):
+            content = self._extract_text_content(message.content)
+            if content:
+                for line in content.split("\n"):
                     if line.startswith("[Source:"):
                         source = line.replace("[Source:", "").replace("]", "").strip()
                         sources.append(source)
