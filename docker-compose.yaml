@@ -96,11 +96,11 @@ services:
       GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-models/gemini-embedding-2}
       USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment
       PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FILE: /app/logs/chatbot.log
     volumes:
       - chroma_db:${CHROMA_DIR:-/app/chroma_db}
-    # depends_on: # removed when deploying (no need ollama)
-    #   ollama:
-    #     condition: service_healthy
+      - chatbot_logs:/app/logs
     restart: unless-stopped
 
   ollama:
@@ -126,3 +126,4 @@ volumes:
   uploads_data:
   ollama_data:
   chroma_db:
+  chatbot_logs:

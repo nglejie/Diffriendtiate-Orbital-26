@@ -55,13 +55,13 @@ Local dev without GPU (Ollama for embeddings, Gemini for generation LLM)
 - Requires Gemini API Key
 
 ```cmd
-docker compose -f docker-compose.yaml -f docker-compose.local.yaml up --build
+docker compose --profile local -f docker-compose.yaml -f docker-compose.local.yaml up --build
 ```
 
 With NVIDIA GPU (Ollama for all models)
 
 ```cmd
-docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
+docker compose --profile local -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
 ```
 
 The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL, as well as LLM chatbot and Ollama services. Uploaded files, database data, vector database data, and pulled LLM models are stored in Docker volumes.

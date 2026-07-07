@@ -5,7 +5,15 @@ from logging.handlers import RotatingFileHandler
 LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
 LOG_FILE = os.getenv("LOG_FILE", "/app/chatbot/chatbot.log")
 
-def get_logger(name : str) -> logging.logger:
+def get_logger(name : str) -> logging.Logger:
+    """Define Logger for App logging
+
+    Args:
+        name (str): name of the module being logged
+
+    Returns:
+        logging.logger: logger object
+    """
     logger = logging.getLogger(name)
     
     if logger.handlers:
@@ -14,7 +22,7 @@ def get_logger(name : str) -> logging.logger:
     logger.setLevel(LOG_LEVEL)
     
     formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        "%(asctime)s | %(levelname)-8s | %(name)-12s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
     

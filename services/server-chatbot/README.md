@@ -73,6 +73,7 @@ If no GPU is detected / Used, or for deployment
 
 ### logger.py
 - File to handle logging of application
+    - Logging is using python logging
 
 ## Limitations / Future work
 - Limited to only text based documents (PDF, TXT, DOCX)

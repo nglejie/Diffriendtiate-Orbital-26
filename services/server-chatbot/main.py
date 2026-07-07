@@ -8,6 +8,9 @@ import json
 from vectorstore import VectorStore
 from agent import Agent
 from models import HistoryMessage, EmbedRequest, EmbedResponse, PredictResponse
+from logger import get_logger
+
+logger = get_logger(__name__)
  
 # Init Application
 app = FastAPI(title="Diffriendtiate Chat API")
@@ -80,7 +83,9 @@ async def embed_documents(body: EmbedRequest):
         EmbedResponse: contains the result of the operation, files that succeeded, files that failed, and total chunks embeded
     """
     try:
-        print(f"---Embed API for {body.room_id}")
+        # print(f"---Embed API for {body.room_id}")
+        logger.info(f"Embed request for room {body.room_id} | {len(body.urls)} file(s)")
+        
         if not body.room_id:
             raise HTTPException(status_code=400, detail="room_id is required")
         if not body.urls:
@@ -91,15 +96,20 @@ async def embed_documents(body: EmbedRequest):
             urls = body.urls
         )
         
+        logger.info(f"Embed request for room {body.room_id} | success: {len(results['success'])} | failed: {len(results['failed'])} | chunks: {results['total_chunks']}")
+        
         return EmbedResponse(
             result = len(results["failed"]) == 0, # True if no failures
             success = results["success"],
             failed = results["failed"],
             total_chunks = results["total_chunks"],
         )
-        
+    
+    except HTTPException as e:
+        raise # reraise http exception
     except Exception as e:
-        print(f"Unexpected Error {e}")
+        # print(f"Unexpected Error {e}")
+        logger.error(f"Unexpected error in embed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 @app.post("/predict", response_model=PredictResponse)
@@ -118,7 +128,8 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
         PredictResponse: contains the answer to the question, the sources referenced, as well as the chain of messages and tool calls
     """
     try:
-        print("---Predict API---")
+        # print("---Predict API---")
+        logger.info(f"Predict request | room_id: {room_id} | file: {file.filename if file else None}")
         message_chain = parse_message_chain(message_chain)
         
         file_bytes = None
@@ -126,8 +137,10 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
         if file:
             file_bytes = await file.read()
             file_name = file.filename
+            logger.debug(f"File uploaded: {file_name} ({len(file_bytes)} bytes)")
         
-        print("---Calling Agent Invoke---")        
+        # print("---Calling Agent Invoke---")       
+        logger.debug(f"Invoking agent | messages: {len(message_chain)}")     
         answer, sources, chain = await agent.invoke(
             message_chain = message_chain,
             room_id = room_id,
@@ -135,10 +148,14 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
             file_name = file_name,
         )
         
+        logger.info(f"Predict complete | soruces: {sources}")
         return PredictResponse(answer = answer, sources = sources, message_chain = chain)
     
+    except HTTPException:
+        raise # reraise http exception
     except Exception as e:
-        print(f"Unexpected Error {e}")
+        # print(f"Unexpected Error {e}")
+        logger.error(f"Unexpected error in embed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occured")
 
 @app.post("/predict/stream")
@@ -159,7 +176,8 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
         StreamingResponse: streamed response of the agent, including a sources event
     """
     try:
-        print("---Predict Stream API---")
+        # print("---Predict Stream API---")
+        logger.info(f"Predict stream request | room_id {room_id} | file: {file.filename if file else None}")
         message_chain = parse_message_chain(message_chain)
         
         file_bytes = None
@@ -167,8 +185,9 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
         if file:
             file_bytes = await file.read()
             file_name = file.filename
+            logger.debug(f"File uploaded: {file_name} ({len(file_bytes)} bytes)")
         
-        print("---Define Token Generator---")
+        # print("---Define Token Generator---")
         # PREFIX MAP to determine event name tag
         PREFIX_MAP = {
             "[TOKEN]": "token",
@@ -198,11 +217,17 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
                         yield format_sse(event_name, data)
                         break
             
-        print("---Streaming Response---")
-        return StreamingResponse(token_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
+        # print("---Streaming Response---")
+        logger.debug("Starting stream response")
+        return StreamingResponse(token_generator(), 
+                                 media_type="text/event-stream", 
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
     
+    except HTTPException:
+        raise # reraise http exception
     except Exception as e:
         print(f"Unexpected Error {e}")
+        logger.error9(f"Unexpected error in predict_stream: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 
@@ -218,12 +243,17 @@ async def clear_corpus(room_id: str):
         dict[str, str]: operation result
     """
     try:
-        print(f"---Deleting Corupus API for {room_id}")
+        # print(f"---Deleting Corupus API for {room_id}")
+        logger.info(f"Clear corpus request | room_id: {room_id}")
         if not room_id:
             raise HTTPException(status_code=400, detail="room_id is required.")
         store.clear(room_id=room_id)
+        logger.info(f"Corpus cleared for room: {room_id}")
         return {"result": True, "message": f"Corpus cleared for room {room_id}."}
-
+    
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Unexpected Error {e}")
+        # print(f"Unexpected Error {e}")
+        logger.error(f"Unexpected error in clear_corpus: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occured")

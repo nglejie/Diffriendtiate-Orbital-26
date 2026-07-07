@@ -7,6 +7,9 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 CHROMA_DIR = os.getenv("CHROMA_DIR", "/app/chroma_db")
 
@@ -24,13 +27,13 @@ SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
 class VectorStore:
     def __init__(self):
         if USE_GEMINI_EMBEDDINGS:
-            print("DEBUG: Using Gemini Embeddings")
+            logger.info(f"Using Gemini Embeddings | model: {GEMINI_EMBED_MODEL}")
             self.embeddings = GoogleGenerativeAIEmbeddings(
                 model = GEMINI_EMBED_MODEL,
                 google_api_key = GEMINI_API_KEY,
             )
         else:
-            print("DEBUG: Using Ollama Embeddings")
+            logger.info(f"Using Ollama Embeddings | model: {EMBED_MODEL} | url: {OLLAMA_BASE_URL}")
             self.embeddings = OllamaEmbeddings(
                 model = EMBED_MODEL,
                 base_url = OLLAMA_BASE_URL,
@@ -94,7 +97,8 @@ class VectorStore:
         Returns:
             str: result of load_file_content
         """
-        print("---Processing Uploaded File---")
+        # print("---Processing Uploaded File---")
+        logger.debug(f"Processing uploaded file: {file_name}")
         suffix = os.path.splitext(file_name or "")[-1]
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         try:
@@ -115,6 +119,7 @@ class VectorStore:
         Returns:
             int: Number of chunks added
         """
+        logger.info(f"Embedding {len(urls)} document(s) for room: {room_id}")
         self.clear(room_id = room_id)
         
         results = {
@@ -136,6 +141,7 @@ class VectorStore:
                 suffix = os.path.splitext(display_name or url_file_name)[-1]
                 
                 try:
+                    logger.debug(f"Fetching file: {display_name} from {url}")
                     response = await client.get(url)
                     response.raise_for_status()
                     
@@ -156,12 +162,15 @@ class VectorStore:
                         
                         results["success"].append(display_name)
                         results["total_chunks"] += len(chunks)
+                        logger.debug(f"Embedded {len(chunks)} chunks from: {display_name}")
                     finally:
                         tmp.close()
                         os.remove(tmp_path)
                 except Exception as e:
+                    logger.error(f"Failed to embed file {display_name}: {e}", exc_info=True)
                     results["failed"].append({"file": display_name, "error": str(e)})
-                    
+        
+        logger.info(f"Embed complete for room {room_id} | chunks: {results['total_chunks']} | failed: {len(results['failed'])}")
         return results
     
     def search(self, query: str, room_id: str, k: int = 5,) -> list:
@@ -175,12 +184,9 @@ class VectorStore:
         Returns:
             list: list of chunks retrieved
         """
-        # retriever = self.db.as_retriever(
-        #     search_kwargs={"k": k, "filter": {"room_id": room_id}}
-        # )
-        # return retriever.invoke(query)
-        print("---Search for Chunks---")
-        print("Chunk count:", self.db._collection.count())
+        # print("---Search for Chunks---")
+        # print("Chunk count:", self.db._collection.count())
+        logger.debug(f"Search | room: {room_id} | query: {query!r} | total chunks in db: {self.db._collection.count()}")
     
         try:
             scored_results = self.db.similarity_search_with_relevance_scores(
@@ -201,10 +207,11 @@ class VectorStore:
                 if score >= relevance_floor:
                     filtered_results.append(document)
 
+            logger.debug(f"Search results | found: {len(scored_results)} | after filter: {len(filtered_results)} | best core: {best_score:.3f} | floor: {relevance_floor:.3f}")
             return filtered_results
         
         except Exception as error:
-            print(f"DEBUG: relevance search failed, falling back to similarity search: {error}")
+            logger.warning(f"Revelance search failed, falling back to similarity search: {error}")
             documents = self.db.similarity_search(
                 query=query,
                 k=k,
@@ -220,4 +227,5 @@ class VectorStore:
         Args:
             room_id (str): filter of room id to remove documents from.
         """
+        logger.info(f"Clearning corpus for room: {room_id}")
         self.db.delete(where={"room_id": room_id})
