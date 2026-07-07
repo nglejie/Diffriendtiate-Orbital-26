@@ -16,6 +16,15 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4000
 
+RUN apk add --no-cache \
+    font-carlito \
+    font-croscore \
+    font-dejavu \
+    font-liberation \
+    font-noto \
+    libreoffice \
+    && fc-cache -f
+
 COPY package*.json ./
 COPY apps/client/package.json ./apps/client/package.json
 COPY apps/server/package.json ./apps/server/package.json

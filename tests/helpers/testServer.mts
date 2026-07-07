@@ -193,6 +193,7 @@ export async function startTestApp(options: any = {}) {
       DIFFRIENDTIATE_DATA_DIR: dataDir,
       INTELLIGRATE_GPU_ENABLED: "true",
       JWT_SECRET: "diffriendtiate-test-secret",
+      LIBREOFFICE_BIN: options.libreOfficeBin ?? process.env.LIBREOFFICE_BIN ?? "libreoffice",
       NODE_ENV: "test",
       PORT: String(port),
     },

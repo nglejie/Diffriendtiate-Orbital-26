@@ -5,11 +5,15 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import { Server } from "socket.io";
 import { initDb, readDb, storageMode, writeDb } from "./store.js";
+
+const execFileAsync = promisify(execFile);
 
 declare global {
   namespace Express {
@@ -379,6 +383,12 @@ function normalizeProfileStatus(value) {
   return PROFILE_STATUSES.has(status) ? status : "online";
 }
 
+function normalizeDocumentPage(value, fallback = null) {
+  const page = Number(value);
+  if (!Number.isFinite(page) || page < 1) return fallback;
+  return Math.floor(page);
+}
+
 function getSpaceRoomKey(roomId) {
   // Keep live avatar broadcasts separate from the room chat Socket.IO room.
   return `space:${roomId}`;
@@ -492,6 +502,20 @@ function getRoomActivity(roomId) {
   }
 
   return roomActivityByRoom.get(roomId);
+}
+
+function findSocketRoomActivity(socket) {
+  const userId = socket.user?.id;
+  if (!userId) return null;
+
+  for (const [roomId, roomActivity] of roomActivityByRoom.entries()) {
+    const activity = roomActivity.get(userId);
+    if (activity?.socketId === socket.id) {
+      return { roomId, roomActivity, activity };
+    }
+  }
+
+  return null;
 }
 
 function serializeRoomActivity(roomId) {
@@ -670,6 +694,7 @@ function roomDto(db, room, userId) {
     integrations: publicRoomIntegrations(room),
     inviteCode: isMember(room, userId) ? room.inviteCode : null,
     channels: normalizeChannels(room.channels),
+    channelLayout: normalizeRoomChannelLayout(room.channelLayout, room.channels),
     owner: publicUser(owner),
     members,
     isOwner: room.ownerId === userId,
@@ -691,11 +716,46 @@ function messageDto(db, message) {
   };
 }
 
+function getEffectiveResourceType(resource) {
+  const detectedResourceType = detectResourceType(
+    resource?.mimeType,
+    resource?.originalName || resource?.storageName || resource?.title,
+  );
+  return ["pdf", "docx", "pptx", "image"].includes(resource?.resourceType)
+    ? resource.resourceType
+    : detectedResourceType;
+}
+
 function resourceDto(db, resource) {
+  const resourceType = getEffectiveResourceType(resource);
+  const isOfficeResource = resourceType === "docx" || resourceType === "pptx";
+  const hasCurrentOfficePdf =
+    isOfficeResource &&
+    Boolean(resource?.pdfPath) &&
+    resource?.pdfConversionVersion === OFFICE_PDF_CONVERSION_VERSION;
+  const storedConversionStatus = ["pending", "done", "failed", "not-needed"].includes(resource?.conversionStatus)
+    ? resource.conversionStatus
+    : "not-needed";
+  const conversionStatus = hasCurrentOfficePdf
+    ? "done"
+    : isOfficeResource && storedConversionStatus === "done"
+      ? "pending"
+      : storedConversionStatus;
+  const fileUrl = resource?.storageName ? uploadUrl(resource.storageName) : resource?.url || null;
+  const pdfUrl = hasCurrentOfficePdf
+    ? uploadUrl(resource.pdfPath)
+    : resourceType === "pdf"
+      ? fileUrl
+      : null;
+
   return {
     ...resource,
     folder: resource.folder || "General",
+    conversionStatus,
+    fileUrl,
     metadata: resource.metadata || {},
+    pdfUrl,
+    resourceType,
     uploader: publicUser(db.users.find((user) => user.id === resource.uploaderId)),
   };
 }
@@ -1423,8 +1483,202 @@ function normalizeChannel(value) {
 }
 
 function normalizeChannels(value) {
-  const channels = Array.isArray(value) ? value : [];
-  return [...new Set(["general", ...channels.map(normalizeChannel)])].slice(0, 20);
+  const seen = new Set();
+  const result = [];
+  const general = { name: "general", type: "text", resourceId: "" };
+  result.push(general);
+  seen.add("general");
+
+  for (const channel of Array.isArray(value) ? value : []) {
+    const name = normalizeChannel(typeof channel === "string" ? channel : channel?.name);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    result.push({
+      name,
+      type: typeof channel === "object" && channel?.type === "document" ? "document" : "text",
+      resourceId: typeof channel === "object" ? String(channel?.resourceId || "") : "",
+    });
+  }
+
+  return result.slice(0, 20);
+}
+
+const DEFAULT_CHANNEL_LAYOUT_CATEGORY_ID = "default-text-channels";
+
+function normalizeLayoutChannelName(value) {
+  const raw = String(value || "").trim();
+  return raw ? normalizeChannel(raw) : "";
+}
+
+function normalizeRoomChannelLayout(layout, channels = []) {
+  const channelNames = normalizeChannels(channels).map((channel) => channel.name);
+  const channelSet = new Set(channelNames);
+  const seenChannels = new Set();
+  const categories = Array.isArray(layout)
+    ? layout
+        .filter((category) => category && typeof category === "object" && category.id && category.name)
+        .map((category) => ({
+          id: String(category.id).slice(0, 80),
+          name: String(category.name).trim().slice(0, 80) || "Text Channels",
+          channels: Array.isArray(category.channels)
+            ? category.channels
+                .map(normalizeLayoutChannelName)
+                .filter((channel) => {
+                  if (!channelSet.has(channel) || seenChannels.has(channel)) return false;
+                  seenChannels.add(channel);
+                  return true;
+                })
+            : [],
+        }))
+    : [];
+
+  const uncategorized = channelNames.filter((channel) => !seenChannels.has(channel));
+  const defaultIndex = categories.findIndex((category) => category.id === DEFAULT_CHANNEL_LAYOUT_CATEGORY_ID);
+
+  if (defaultIndex >= 0) {
+    categories[defaultIndex] = {
+      ...categories[defaultIndex],
+      channels: [...categories[defaultIndex].channels, ...uncategorized],
+    };
+  } else {
+    categories.unshift({
+      id: DEFAULT_CHANNEL_LAYOUT_CATEGORY_ID,
+      name: "Text Channels",
+      channels: uncategorized,
+    });
+  }
+
+  return categories;
+}
+
+function renameChannelInRoomLayout(layout, channels, oldChannel, newChannel) {
+  return normalizeRoomChannelLayout(layout, channels).map((category) => ({
+    ...category,
+    channels: category.channels.map((channel) => (channel === oldChannel ? newChannel : channel)),
+  }));
+}
+
+function findNormalizedRoomChannel(room, value) {
+  const channel = normalizeChannel(value);
+  return normalizeChannels(room?.channels).find((candidate) => candidate.name === channel) || null;
+}
+
+function normalizePlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeAnnotationType(value) {
+  return ["question", "key-point", "definition", "mistake", "insight", "general"].includes(value)
+    ? value
+    : "general";
+}
+
+function getAnnotationAuthorId(annotation) {
+  return String(annotation?.author?.id || "");
+}
+
+function normalizeAnnotationReply(reply) {
+  return {
+    id: String(reply?.id || createId("annr")),
+    author: normalizePlainObject(reply?.author),
+    comment: String(reply?.comment || "").slice(0, 4000),
+    createdAt: reply?.createdAt || new Date().toISOString(),
+  };
+}
+
+function annotationDto(annotation) {
+  const createdAt = annotation.createdAt || new Date().toISOString();
+  return {
+    id: annotation.id,
+    roomId: annotation.roomId,
+    channel: normalizeChannel(annotation.channel),
+    resourceId: String(annotation.resourceId || ""),
+    position: normalizePlainObject(annotation.position),
+    content: normalizePlainObject(annotation.content),
+    comment: String(annotation.comment || ""),
+    annotationType: normalizeAnnotationType(annotation.annotationType),
+    resolved: Boolean(annotation.resolved),
+    author: normalizePlainObject(annotation.author),
+    replies: Array.isArray(annotation.replies) ? annotation.replies.map(normalizeAnnotationReply) : [],
+    createdAt,
+    updatedAt: annotation.updatedAt || createdAt,
+  };
+}
+
+function createAnnotationRecord(room, channel, user, body = {}) {
+  const now = new Date().toISOString();
+  return annotationDto({
+    id: createId("ann"),
+    roomId: room.id,
+    channel: channel.name,
+    resourceId: channel.resourceId || "",
+    position: normalizePlainObject(body.position),
+    content: normalizePlainObject(body.content),
+    comment: String(body.comment || "").trim().slice(0, 4000),
+    annotationType: normalizeAnnotationType(body.annotationType),
+    resolved: false,
+    author: publicUser(user),
+    replies: [],
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function findAnnotationForChannel(db, room, channel, annotationId) {
+  const id = String(annotationId || "");
+  return db.annotations.find(
+    (annotation) =>
+      annotation.id === id &&
+      annotation.roomId === room.id &&
+      normalizeChannel(annotation.channel) === channel.name,
+  );
+}
+
+function updateAnnotationRecord(annotation, user, body = {}) {
+  const ownsAnnotation = getAnnotationAuthorId(annotation) === user.id;
+  const hasComment = Object.prototype.hasOwnProperty.call(body, "comment");
+  const hasAnnotationType = Object.prototype.hasOwnProperty.call(body, "annotationType");
+  const hasResolved = Object.prototype.hasOwnProperty.call(body, "resolved");
+
+  if ((hasComment || hasAnnotationType) && !ownsAnnotation) {
+    return { status: 403, message: "You can only edit your own annotation notes." };
+  }
+
+  let changed = false;
+  if (hasComment) {
+    annotation.comment = String(body.comment || "").trim().slice(0, 4000);
+    changed = true;
+  }
+
+  if (hasAnnotationType) {
+    annotation.annotationType = normalizeAnnotationType(body.annotationType);
+    changed = true;
+  }
+
+  if (hasResolved) {
+    annotation.resolved = Boolean(body.resolved);
+    changed = true;
+  }
+
+  if (changed) annotation.updatedAt = new Date().toISOString();
+  return { annotation: annotationDto(annotation) };
+}
+
+function addAnnotationReply(annotation, user, body = {}) {
+  const comment = String(body.comment || "").trim().slice(0, 4000);
+  if (!comment) {
+    return { status: 400, message: "Reply comment is required." };
+  }
+
+  const reply = {
+    id: createId("annr"),
+    author: publicUser(user),
+    comment,
+    createdAt: new Date().toISOString(),
+  };
+  annotation.replies = [...(Array.isArray(annotation.replies) ? annotation.replies : []), reply];
+  annotation.updatedAt = reply.createdAt;
+  return { annotation: annotationDto(annotation), reply };
 }
 
 function normalizeMessageAttachments(value) {
@@ -1472,6 +1726,199 @@ function getResourceExtension(resource) {
   } catch {
     return path.extname(source).toLowerCase();
   }
+}
+
+function detectResourceType(mimeType, filename) {
+  const mime = String(mimeType || "").toLowerCase();
+  const extension = String(filename || "").split(".").pop()?.toLowerCase() || "";
+
+  if (mime === "application/pdf" || extension === "pdf") return "pdf";
+  if (
+    mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    mime === "application/msword" ||
+    extension === "docx" ||
+    extension === "doc"
+  ) {
+    return "docx";
+  }
+  if (
+    mime === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    mime === "application/vnd.ms-powerpoint" ||
+    extension === "pptx" ||
+    extension === "ppt"
+  ) {
+    return "pptx";
+  }
+  if (mime.startsWith("image/")) return "image";
+  return "other";
+}
+
+function uploadUrl(relativePath) {
+  const normalized = String(relativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized) return null;
+  return `/uploads/${normalized.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+async function convertToPdf(inputPath) {
+  const outputDir = path.dirname(inputPath);
+  const baseName = path.basename(inputPath, path.extname(inputPath));
+  const outputPath = path.join(outputDir, `${baseName}.pdf`);
+  if (fs.existsSync(outputPath)) {
+    await fs.promises.unlink(outputPath);
+  }
+
+  const libreOfficeBinary = process.env.LIBREOFFICE_BIN || "libreoffice";
+  await execFileAsync(
+    libreOfficeBinary,
+    ["--headless", "--norestore", "--nolockcheck", "--convert-to", "pdf", "--outdir", outputDir, inputPath],
+    {
+      timeout: 180_000,
+      windowsHide: true,
+      env: { ...process.env, HOME: process.env.HOME || serverRootDir },
+    },
+  );
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("LibreOffice did not produce a PDF output file.");
+  }
+  return outputPath;
+}
+
+function relativeUploadPath(filePath) {
+  return path.relative(uploadDir, filePath).replace(/\\/g, "/");
+}
+
+const activeResourceConversions = new Set();
+const OFFICE_PDF_CONVERSION_VERSION = "office-fonts-v2";
+
+function startResourcePdfConversion({ resourceId, roomId, storageName }) {
+  if (activeResourceConversions.has(resourceId)) return;
+  activeResourceConversions.add(resourceId);
+  const inputPath = safeUploadPath(storageName);
+
+  convertToPdf(inputPath)
+    .then(async (pdfPath) => {
+      const db = await readDb();
+      const resource = db.resources.find((candidate) => candidate.id === resourceId);
+      if (!resource) return;
+
+      resource.pdfPath = relativeUploadPath(pdfPath);
+      resource.pdfConversionVersion = OFFICE_PDF_CONVERSION_VERSION;
+      resource.conversionStatus = "done";
+      await writeDb(db);
+
+      io.to(`room:${roomId}`).emit("resource:conversion-done", {
+        roomId,
+        resourceId,
+        pdfUrl: uploadUrl(resource.pdfPath),
+        conversionStatus: "done",
+      });
+    })
+    .catch(async (error) => {
+      console.error("Resource PDF conversion failed:", error);
+      const db = await readDb();
+      const resource = db.resources.find((candidate) => candidate.id === resourceId);
+      if (!resource) return;
+
+      resource.pdfPath = "";
+      resource.pdfConversionVersion = "";
+      resource.conversionStatus = "failed";
+      await writeDb(db);
+
+      io.to(`room:${roomId}`).emit("resource:conversion-done", {
+        roomId,
+        resourceId,
+        conversionStatus: "failed",
+      });
+    })
+    .finally(() => {
+      activeResourceConversions.delete(resourceId);
+    });
+}
+
+async function ensureOfficeResourceConversion(db, resource) {
+  const resourceType = getEffectiveResourceType(resource);
+  if (resourceType !== "docx" && resourceType !== "pptx") return false;
+
+  let changed = false;
+  if (resource.resourceType !== resourceType) {
+    resource.resourceType = resourceType;
+    changed = true;
+  }
+
+  if (resource.pdfPath) {
+    if (resource.pdfConversionVersion === OFFICE_PDF_CONVERSION_VERSION) {
+      if (resource.conversionStatus !== "done") {
+        resource.conversionStatus = "done";
+        changed = true;
+      }
+      return changed;
+    }
+
+    if (resource.conversionStatus !== "pending") {
+      resource.conversionStatus = "pending";
+      changed = true;
+    }
+    if (resource.pdfConversionVersion) {
+      resource.pdfConversionVersion = "";
+      changed = true;
+    }
+  } else if (resource.conversionStatus === "done") {
+    resource.conversionStatus = "pending";
+    changed = true;
+  }
+
+  if (!resource.storageName || resource.deletedAt) return changed;
+  if (resource.conversionStatus === "failed") return changed;
+  if (resource.conversionStatus === "pending" && activeResourceConversions.has(resource.id)) {
+    return changed;
+  }
+
+  if (resource.conversionStatus !== "pending") {
+    resource.conversionStatus = "pending";
+    changed = true;
+  }
+
+  startResourcePdfConversion({
+    resourceId: resource.id,
+    roomId: resource.roomId,
+    storageName: resource.storageName,
+  });
+  return changed;
+}
+
+const documentChannelMimePatterns = [
+  /^application\/pdf\b/i,
+  /^application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document\b/i,
+  /^application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation\b/i,
+  /^image\/png\b/i,
+  /^image\/jpe?g\b/i,
+  /^image\/webp\b/i,
+];
+const documentChannelExtensions = new Set([".pdf", ".docx", ".pptx", ".png", ".jpg", ".jpeg", ".webp"]);
+const documentChannelFileTypeMessage =
+  "Document channels support PDF, DOCX, PPTX, PNG, JPG, JPEG, or WEBP files only.";
+
+function isDocumentChannelUploadFile(file) {
+  if (!file) return false;
+  const mimeType = String(file.mimetype || "").toLowerCase();
+  const extension = path.extname(file.originalname || "").toLowerCase();
+
+  return (
+    documentChannelMimePatterns.some((pattern) => pattern.test(mimeType)) ||
+    documentChannelExtensions.has(extension)
+  );
+}
+
+function isDocumentChannelResource(resource) {
+  if (!resource || resource.deletedAt || resource.type !== "file") return false;
+  const mimeType = String(resource.mimeType || "").toLowerCase();
+  const extension = getResourceExtension(resource);
+
+  return (
+    documentChannelMimePatterns.some((pattern) => pattern.test(mimeType)) ||
+    documentChannelExtensions.has(extension)
+  );
 }
 
 function isChatbotDocument(resource) {
@@ -2200,6 +2647,15 @@ function refreshLiveUserProfile(user) {
   return profile;
 }
 
+async function emitRoomUpdated(db, room) {
+  const roomKey = `room:${room.id}`;
+  io.sockets.sockets.forEach((socket) => {
+    if (socket.rooms.has(roomKey)) {
+      socket.emit("room:updated", roomDto(db, room, socket.user?.id));
+    }
+  });
+}
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "5mb" }));
 app.use("/uploads", express.static(uploadDir));
@@ -2354,6 +2810,7 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
     background: String(req.body.background || "aurora"),
     worldConfig: normalizeWorldConfig(req.body.worldConfig),
     channels: ["general"],
+    channelLayout: normalizeRoomChannelLayout([], ["general"]),
     passwordHash:
       visibility === "private" ? await bcrypt.hash(password.trim(), 10) : null,
     ownerId: req.user.id,
@@ -2422,7 +2879,7 @@ app.patch("/api/rooms/:roomId", requireAuth, async (req, res) => {
   room.updatedAt = new Date().toISOString();
 
   await writeDb(db);
-  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  await emitRoomUpdated(db, room);
   res.json({ room: roomDto(db, room, req.user.id) });
 });
 
@@ -2436,11 +2893,30 @@ app.post("/api/rooms/:roomId/channels", requireAuth, async (req, res) => {
   }
 
   const channel = normalizeChannel(req.body.name);
-  room.channels = normalizeChannels([...(room.channels || []), channel]);
+  const type = req.body.type === "document" ? "document" : "text";
+  const resourceId = type === "document" ? String(req.body.resourceId || "") : "";
+  if (type === "document") {
+    if (!resourceId) {
+      return res.status(400).json({ message: "Choose a supported document for this channel." });
+    }
+
+    const resource = db.resources.find((candidate) => candidate.id === resourceId && candidate.roomId === room.id);
+    if (!resource) return res.status(404).json({ message: "Resource not found." });
+    if (!isDocumentChannelResource(resource)) {
+      return res.status(400).json({
+        message: documentChannelFileTypeMessage,
+      });
+    }
+    await ensureOfficeResourceConversion(db, resource);
+  }
+
+  const newChannel = { name: channel, type, resourceId };
+  room.channels = normalizeChannels([...(room.channels || []), newChannel]);
+  room.channelLayout = normalizeRoomChannelLayout(room.channelLayout, room.channels);
   room.updatedAt = new Date().toISOString();
 
   await writeDb(db);
-  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  await emitRoomUpdated(db, room);
   res.status(201).json({ room: roomDto(db, room, req.user.id), channel });
 });
 
@@ -2461,17 +2937,24 @@ app.patch("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res) 
     return res.status(400).json({ message: "The general channel cannot be renamed." });
   }
 
-  if (!channels.includes(currentChannel)) {
+  if (!channels.some((channel) => channel.name === currentChannel)) {
     return res.status(404).json({ message: "Channel not found." });
   }
 
-  if (channels.includes(nextChannel) && nextChannel !== currentChannel) {
+  if (channels.some((channel) => channel.name === nextChannel) && nextChannel !== currentChannel) {
     return res.status(409).json({ message: "A channel with that name already exists." });
   }
 
-  room.channels = normalizeChannels(
-    channels.map((channel) => (channel === currentChannel ? nextChannel : channel)),
+  const renamedChannels = normalizeChannels(
+    channels.map((channel) =>
+      channel.name === currentChannel ? { ...channel, name: nextChannel } : channel,
+    ),
   );
+  room.channelLayout = normalizeRoomChannelLayout(
+    renameChannelInRoomLayout(room.channelLayout, channels, currentChannel, nextChannel),
+    renamedChannels,
+  );
+  room.channels = renamedChannels;
   room.updatedAt = new Date().toISOString();
 
   db.messages = db.messages.map((message) =>
@@ -2479,9 +2962,14 @@ app.patch("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res) 
       ? { ...message, channel: nextChannel }
       : message,
   );
+  db.annotations = db.annotations.map((annotation) =>
+    annotation.roomId === room.id && normalizeChannel(annotation.channel) === currentChannel
+      ? { ...annotation, channel: nextChannel, updatedAt: new Date().toISOString() }
+      : annotation,
+  );
 
   await writeDb(db);
-  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  await emitRoomUpdated(db, room);
   res.json({ room: roomDto(db, room, req.user.id), channel: nextChannel });
 });
 
@@ -2501,19 +2989,159 @@ app.delete("/api/rooms/:roomId/channels/:channel", requireAuth, async (req, res)
     return res.status(400).json({ message: "The general channel cannot be deleted." });
   }
 
-  if (!channels.includes(channel)) {
+  if (!channels.some((candidate) => candidate.name === channel)) {
     return res.status(404).json({ message: "Channel not found." });
   }
 
-  room.channels = normalizeChannels(channels.filter((candidate) => candidate !== channel));
+  room.channels = normalizeChannels(channels.filter((candidate) => candidate.name !== channel));
+  room.channelLayout = normalizeRoomChannelLayout(room.channelLayout, room.channels);
   room.updatedAt = new Date().toISOString();
   db.messages = db.messages.filter(
     (message) => message.roomId !== room.id || normalizeChannel(message.channel) !== channel,
   );
+  db.annotations = db.annotations.filter(
+    (annotation) => annotation.roomId !== room.id || normalizeChannel(annotation.channel) !== channel,
+  );
 
   await writeDb(db);
-  io.to(`room:${room.id}`).emit("room:updated", roomDto(db, room, req.user.id));
+  await emitRoomUpdated(db, room);
   res.json({ room: roomDto(db, room, req.user.id), channel: "general" });
+});
+
+app.patch("/api/rooms/:roomId/channel-layout", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  if (room.ownerId !== req.user.id) {
+    return res.status(403).json({ message: "Only the room owner can manage channels." });
+  }
+
+  room.channelLayout = normalizeRoomChannelLayout(
+    req.body?.channelLayout ?? req.body?.layout,
+    room.channels,
+  );
+  room.updatedAt = new Date().toISOString();
+
+  await writeDb(db);
+  await emitRoomUpdated(db, room);
+  res.json({ room: roomDto(db, room, req.user.id) });
+});
+
+app.get("/api/rooms/:roomId/channels/:channel/annotations", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = findNormalizedRoomChannel(room, req.params.channel);
+  if (!channel) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  const annotations = db.annotations
+    .filter(
+      (annotation) =>
+        annotation.roomId === room.id &&
+        normalizeChannel(annotation.channel) === channel.name,
+    )
+    .map(annotationDto);
+
+  res.json({ annotations });
+});
+
+app.post("/api/rooms/:roomId/channels/:channel/annotations", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = findNormalizedRoomChannel(room, req.params.channel);
+  if (!channel) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  const annotation = createAnnotationRecord(room, channel, req.user, req.body);
+  db.annotations.push(annotation);
+  await writeDb(db);
+
+  io.to(`room:${room.id}`).emit("annotation:new", annotation);
+  res.status(201).json({ annotation });
+});
+
+app.patch("/api/rooms/:roomId/channels/:channel/annotations/:annotationId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = findNormalizedRoomChannel(room, req.params.channel);
+  if (!channel) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  const annotation = findAnnotationForChannel(db, room, channel, req.params.annotationId);
+  if (!annotation) {
+    return res.status(404).json({ message: "Annotation not found." });
+  }
+
+  const result = updateAnnotationRecord(annotation, req.user, req.body);
+  if (result.status) {
+    return res.status(result.status).json({ message: result.message });
+  }
+
+  await writeDb(db);
+  io.to(`room:${room.id}`).emit("annotation:updated", result.annotation);
+  res.json({ annotation: result.annotation });
+});
+
+app.delete("/api/rooms/:roomId/channels/:channel/annotations/:annotationId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = findNormalizedRoomChannel(room, req.params.channel);
+  if (!channel) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  const annotation = findAnnotationForChannel(db, room, channel, req.params.annotationId);
+  if (!annotation) {
+    return res.status(404).json({ message: "Annotation not found." });
+  }
+
+  if (getAnnotationAuthorId(annotation) !== req.user.id && room.ownerId !== req.user.id) {
+    return res.status(403).json({ message: "Only the annotation author or room owner can delete it." });
+  }
+
+  db.annotations = db.annotations.filter((candidate) => candidate.id !== annotation.id);
+  await writeDb(db);
+
+  const payload = { id: annotation.id, channel: channel.name };
+  io.to(`room:${room.id}`).emit("annotation:deleted", payload);
+  res.json(payload);
+});
+
+app.post("/api/rooms/:roomId/channels/:channel/annotations/:annotationId/replies", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const channel = findNormalizedRoomChannel(room, req.params.channel);
+  if (!channel) {
+    return res.status(404).json({ message: "Channel not found." });
+  }
+
+  const annotation = findAnnotationForChannel(db, room, channel, req.params.annotationId);
+  if (!annotation) {
+    return res.status(404).json({ message: "Annotation not found." });
+  }
+
+  const result = addAnnotationReply(annotation, req.user, req.body);
+  if (result.status) {
+    return res.status(result.status).json({ message: result.message });
+  }
+
+  await writeDb(db);
+  io.to(`room:${room.id}`).emit("annotation:updated", result.annotation);
+  res.status(201).json({ annotation: result.annotation, reply: result.reply });
 });
 
 app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
@@ -2535,6 +3163,7 @@ app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
   db.rooms = db.rooms.filter((candidate) => candidate.id !== room.id);
   db.messages = db.messages.filter((message) => message.roomId !== room.id);
   db.resources = db.resources.filter((resource) => resource.roomId !== room.id);
+  db.annotations = db.annotations.filter((annotation) => annotation.roomId !== room.id);
   db.sessions = db.sessions.filter((session) => session.roomId !== room.id);
   db.coordinatePolls = db.coordinatePolls.filter((poll) => poll.roomId !== room.id);
   db.coordinateResponses = db.coordinateResponses.filter((response) => response.roomId !== room.id);
@@ -2645,12 +3274,22 @@ app.get("/api/rooms/:roomId/resources", requireAuth, async (req, res) => {
 
   const includeDeleted = req.query.includeDeleted === "true";
   const deletedOnly = req.query.deleted === "true";
-  const resources = db.resources
-    .filter((resource) => {
-      if (resource.roomId !== room.id) return false;
-      if (deletedOnly) return Boolean(resource.deletedAt);
-      return includeDeleted || !resource.deletedAt;
-    })
+  const roomResources = db.resources.filter((resource) => {
+    if (resource.roomId !== room.id) return false;
+    if (deletedOnly) return Boolean(resource.deletedAt);
+    return includeDeleted || !resource.deletedAt;
+  });
+  let conversionStateChanged = false;
+  for (const resource of roomResources) {
+    if (await ensureOfficeResourceConversion(db, resource)) {
+      conversionStateChanged = true;
+    }
+  }
+  if (conversionStateChanged) {
+    await writeDb(db);
+  }
+
+  const resources = roomResources
     .map((resource) => resourceDto(db, resource))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 
@@ -2708,7 +3347,13 @@ app.post(
     await ensureRoomResourceFileMetadata(db, room);
 
     const uploadedPath = safeUploadPath(req.file.filename);
+    if (req.body.purpose === "document-channel" && !isDocumentChannelUploadFile(req.file)) {
+      fs.rmSync(uploadedPath, { force: true });
+      return res.status(400).json({ message: documentChannelFileTypeMessage });
+    }
+
     const contentHash = await hashUploadedFile(uploadedPath);
+    const resourceType = detectResourceType(req.file.mimetype, req.file.originalname);
     const existingResource = db.resources.find(
       (resource) =>
         resource.roomId === room.id &&
@@ -2721,12 +3366,19 @@ app.post(
       // The new bytes are redundant, so remove only the temporary duplicate upload.
       fs.rmSync(uploadedPath, { force: true });
       const wasDeleted = Boolean(existingResource.deletedAt);
+      let existingChanged = false;
       if (wasDeleted) {
         // Re-uploading an identical deleted file restores the canonical record
         // instead of creating a hidden duplicate with the same content hash.
         existingResource.deletedAt = "";
         existingResource.folder = normalizeFolder(req.body.folder);
         existingResource.updatedAt = new Date().toISOString();
+        existingChanged = true;
+      }
+      if (await ensureOfficeResourceConversion(db, existingResource)) {
+        existingChanged = true;
+      }
+      if (existingChanged) {
         await writeDb(db);
       }
       return res.status(200).json({
@@ -2750,6 +3402,9 @@ app.post(
       mimeType: req.file.mimetype,
       size: req.file.size,
       contentHash,
+      pdfPath: "",
+      conversionStatus: resourceType === "docx" || resourceType === "pptx" ? "pending" : "not-needed",
+      resourceType,
       metadata: buildResourceMetadata({
         room,
         title: req.file.originalname || title,
@@ -2764,9 +3419,51 @@ app.post(
 
     db.resources.push(resource);
     await writeDb(db);
+
+    if (resourceType === "docx" || resourceType === "pptx") {
+      res.status(201).json({ resource: resourceDto(db, resource) });
+      startResourcePdfConversion({
+        resourceId: resource.id,
+        roomId: room.id,
+        storageName: resource.storageName,
+      });
+      return;
+    }
+
     res.status(201).json({ resource: resourceDto(db, resource) });
   },
 );
+
+app.get("/api/resources/:resourceId/file", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const resource = db.resources.find((candidate) => candidate.id === req.params.resourceId);
+
+  if (!resource || resource.deletedAt || resource.type !== "file" || !resource.storageName) {
+    return res.status(404).json({ message: "Resource not found." });
+  }
+
+  const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
+  if (!room) {
+    return res.status(404).json({ message: "Resource not found." });
+  }
+
+  if (!isMember(room, req.user.id)) {
+    return res.status(403).json({ message: "Join the room to access this area." });
+  }
+
+  const filePath = safeUploadPath(resource.storageName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ message: "Resource file not found." });
+  }
+
+  const filename =
+    String(resource.originalName || resource.title || resource.storageName)
+      .replace(/[\r\n"]/g, "")
+      .trim() || "document";
+  res.type(resource.mimeType || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  return res.sendFile(filePath);
+});
 
 app.delete("/api/resources/:resourceId", requireAuth, async (req, res) => {
   const db = await readDb();
@@ -3531,22 +4228,45 @@ io.on("connection", (socket) => {
   socket.on("room:activity:set", async (payload, ack) => {
     try {
       const db = await readDb();
-      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+      const existingRoomActivity = findSocketRoomActivity(socket);
+      const requestedRoomId = payload?.roomId || existingRoomActivity?.roomId;
+      const room = db.rooms.find((candidate) => candidate.id === requestedRoomId);
 
       if (!room || !isMember(room, socket.user.id)) {
         ack?.({ ok: false, message: "Join the room before updating activity." });
         return;
       }
 
-      const tabId = normalizeRoomActivityTab(payload?.tabId);
+      const roomActivity = getRoomActivity(room.id);
+      const previousActivity =
+        existingRoomActivity?.roomId === room.id
+          ? existingRoomActivity.activity
+          : roomActivity.get(socket.user.id);
+      const tabId = normalizeRoomActivityTab(payload?.tabId) || previousActivity?.tabId;
       if (!tabId) {
         ack?.({ ok: false, message: "Room activity tab is invalid." });
         return;
       }
 
-      const profileStatus = normalizeProfileStatus(payload?.profileStatus);
-      const roomActivity = getRoomActivity(room.id);
-      roomActivity.set(socket.user.id, {
+      const profileStatus =
+        payload?.profileStatus === undefined
+          ? previousActivity?.profileStatus || "online"
+          : normalizeProfileStatus(payload?.profileStatus);
+      const hasDocumentChannel = Object.prototype.hasOwnProperty.call(payload || {}, "documentChannel");
+      const hasDocumentPage = Object.prototype.hasOwnProperty.call(payload || {}, "documentPage");
+      const rawDocumentChannel = String(payload?.documentChannel || "").trim();
+      const documentChannel = hasDocumentChannel
+        ? rawDocumentChannel
+          ? normalizeChannel(rawDocumentChannel)
+          : ""
+        : previousActivity?.documentChannel;
+      const documentPage = hasDocumentPage
+        ? payload?.documentPage == null || payload?.documentPage === ""
+          ? null
+          : normalizeDocumentPage(payload?.documentPage, previousActivity?.documentPage)
+        : previousActivity?.documentPage;
+      const nextActivity = {
+        ...previousActivity,
         profileStatus,
         roomId: room.id,
         userId: socket.user.id,
@@ -3554,7 +4274,17 @@ io.on("connection", (socket) => {
         tabId,
         socketId: socket.id,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      if (tabId === "chat" && documentChannel && Number.isFinite(documentPage)) {
+        nextActivity.documentChannel = documentChannel;
+        nextActivity.documentPage = documentPage;
+      } else {
+        delete nextActivity.documentChannel;
+        delete nextActivity.documentPage;
+      }
+
+      roomActivity.set(socket.user.id, nextActivity);
 
       socket.join(`room:${room.id}`);
       updateSocketSpaceProfileStatus(socket, room.id, profileStatus);
@@ -3815,6 +4545,107 @@ io.on("connection", (socket) => {
       ack?.({ ok: true });
     } catch {
       ack?.({ ok: false, message: "Unable to relay meeting signal right now." });
+    }
+  });
+
+  socket.on("annotation:create", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before annotating documents." });
+        return;
+      }
+
+      const channel = findNormalizedRoomChannel(room, payload?.channel);
+      if (!channel) {
+        ack?.({ ok: false, message: "Channel not found." });
+        return;
+      }
+
+      const annotation = createAnnotationRecord(room, channel, socket.user, payload);
+      db.annotations.push(annotation);
+      await writeDb(db);
+
+      io.to(`room:${room.id}`).emit("annotation:new", annotation);
+      ack?.({ ok: true, annotation });
+    } catch {
+      ack?.({ ok: false, message: "Unable to create the annotation right now." });
+    }
+  });
+
+  socket.on("annotation:update", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before updating annotations." });
+        return;
+      }
+
+      const channel = findNormalizedRoomChannel(room, payload?.channel);
+      if (!channel) {
+        ack?.({ ok: false, message: "Channel not found." });
+        return;
+      }
+
+      const annotation = findAnnotationForChannel(db, room, channel, payload?.annotationId);
+      if (!annotation) {
+        ack?.({ ok: false, message: "Annotation not found." });
+        return;
+      }
+
+      const result = updateAnnotationRecord(annotation, socket.user, payload);
+      if (result.status) {
+        ack?.({ ok: false, message: result.message });
+        return;
+      }
+
+      await writeDb(db);
+      io.to(`room:${room.id}`).emit("annotation:updated", result.annotation);
+      ack?.({ ok: true, annotation: result.annotation });
+    } catch {
+      ack?.({ ok: false, message: "Unable to update the annotation right now." });
+    }
+  });
+
+  socket.on("annotation:delete", async (payload, ack) => {
+    try {
+      const db = await readDb();
+      const room = db.rooms.find((candidate) => candidate.id === payload?.roomId);
+
+      if (!room || !isMember(room, socket.user.id)) {
+        ack?.({ ok: false, message: "Join the room before deleting annotations." });
+        return;
+      }
+
+      const channel = findNormalizedRoomChannel(room, payload?.channel);
+      if (!channel) {
+        ack?.({ ok: false, message: "Channel not found." });
+        return;
+      }
+
+      const annotation = findAnnotationForChannel(db, room, channel, payload?.annotationId);
+      if (!annotation) {
+        ack?.({ ok: false, message: "Annotation not found." });
+        return;
+      }
+
+      if (getAnnotationAuthorId(annotation) !== socket.user.id && room.ownerId !== socket.user.id) {
+        ack?.({ ok: false, message: "Only the annotation author or room owner can delete it." });
+        return;
+      }
+
+      db.annotations = db.annotations.filter((candidate) => candidate.id !== annotation.id);
+      await writeDb(db);
+
+      const deleted = { id: annotation.id, channel: channel.name };
+      io.to(`room:${room.id}`).emit("annotation:deleted", deleted);
+      ack?.({ ok: true, ...deleted });
+    } catch {
+      ack?.({ ok: false, message: "Unable to delete the annotation right now." });
     }
   });
 

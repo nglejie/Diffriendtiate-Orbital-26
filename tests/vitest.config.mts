@@ -3,6 +3,14 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "react-pdf-highlighter-extended": new URL(
+        "./mocks/reactPdfHighlighterExtended.tsx",
+        import.meta.url,
+      ).pathname,
+    },
+  },
   test: {
     // Unit and component tests render React components, so they need jsdom plus
     // Testing Library matchers and browser API shims from the setup file.

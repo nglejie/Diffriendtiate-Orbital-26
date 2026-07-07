@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   Box,
-  ChevronDown,
   ChevronRight,
   DoorOpen,
   Eraser,
@@ -32,6 +31,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.ts";
 import { getBackground } from "../../../constants.ts";
+import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
 import { AvatarPreview } from "../profile/AvatarPreview.tsx";
 import { normalizeLimeetsAvatarPreset } from "../profile/avatarPresets.ts";
 import { normalizeProfileStatus } from "../profile/UserProfileControls.tsx";
@@ -963,48 +963,19 @@ function LayerButton({ active, children, disabled = false, layer, onClick }) {
 }
 
 function FieldSelectMenu({ label, onChange, options, value }) {
-  const [open, setOpen] = useState(false);
   const selectedOption = options.find((option) => option.value === value) || options[0];
-
-  function chooseOption(option) {
-    onChange(option.value);
-    setOpen(false);
-  }
 
   return (
     <label className="limeets-gather-field">
       <span>{label}</span>
-      <div
+      <AppSelectMenu
+        ariaLabel={label}
         className="field-select-menu academic-term-select limeets-gather-select-menu"
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-      >
-        <button
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          onClick={() => setOpen((current) => !current)}
-          type="button"
-        >
-          {selectedOption?.label || "Select"}
-          <ChevronDown size={17} />
-        </button>
-
-        {open ? (
-          <div className="custom-option-list field-option-list" role="listbox">
-            {options.map((option) => (
-              <button
-                className={option.value === value ? "active" : ""}
-                key={option.value}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => chooseOption(option)}
-                role="option"
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+        onChange={onChange}
+        options={options}
+        placeholder={selectedOption?.label || "Select"}
+        value={value}
+      />
     </label>
   );
 }

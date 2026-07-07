@@ -17,6 +17,55 @@ type ResourceQueryOptions = {
   deletedOnly?: boolean;
 };
 
+type CreateChannelBody = {
+  name: string;
+  type?: string;
+  resourceId?: string;
+};
+
+type AnnotationBody = {
+  position?: any;
+  content?: any;
+  comment?: string;
+  annotationType?: string;
+  resolved?: boolean;
+};
+
+type AnnotationReplyBody = {
+  comment: string;
+};
+
+export function resolveServerAssetUrl(url: string | null | undefined) {
+  const value = String(url || "");
+  if (!value) return "";
+  if (/^(?:https?:|data:|blob:)/i.test(value)) return value;
+  if (!API_BASE || !value.startsWith("/uploads/")) return value;
+  return `${API_BASE.replace(/\/$/, "")}${value}`;
+}
+
+function normalizeResourceUrls(resource) {
+  if (!resource || typeof resource !== "object") return resource;
+
+  return {
+    ...resource,
+    fileUrl: resolveServerAssetUrl(resource.fileUrl),
+    pdfUrl: resolveServerAssetUrl(resource.pdfUrl),
+    url: resolveServerAssetUrl(resource.url),
+  };
+}
+
+function normalizeResourcePayload(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+
+  return {
+    ...payload,
+    resource: normalizeResourceUrls(payload.resource),
+    resources: Array.isArray(payload.resources)
+      ? payload.resources.map(normalizeResourceUrls)
+      : payload.resources,
+  };
+}
+
 export function getAuthToken() {
   return authToken;
 }
@@ -153,7 +202,7 @@ export const api = {
   joinRoom: (roomId) => request(`/api/rooms/${roomId}/join`, { method: "POST" }),
   joinInvite: (inviteCode, body) =>
     request(`/api/invites/${inviteCode}/join`, { method: "POST", body }),
-  createChannel: (roomId, body) =>
+  createChannel: (roomId: string, body: CreateChannelBody) =>
     request(`/api/rooms/${roomId}/channels`, { method: "POST", body }),
   renameChannel: (roomId, channel, body) =>
     request(`/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}`, {
@@ -164,25 +213,62 @@ export const api = {
     request(`/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}`, {
       method: "DELETE",
     }),
+  updateChannelLayout: (roomId: string, channelLayout: any[]) =>
+    request(`/api/rooms/${roomId}/channel-layout`, {
+      method: "PATCH",
+      body: { channelLayout },
+    }),
+  getAnnotations: (roomId: string, channel: string) =>
+    request(`/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations`),
+  createAnnotation: (roomId: string, channel: string, body: AnnotationBody) =>
+    request(`/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations`, {
+      method: "POST",
+      body,
+    }),
+  updateAnnotation: (
+    roomId: string,
+    channel: string,
+    annotationId: string,
+    body: AnnotationBody,
+  ) =>
+    request(
+      `/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations/${encodeURIComponent(annotationId)}`,
+      { method: "PATCH", body },
+    ),
+  deleteAnnotation: (roomId: string, channel: string, annotationId: string) =>
+    request(
+      `/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations/${encodeURIComponent(annotationId)}`,
+      { method: "DELETE" },
+    ),
+  addAnnotationReply: (
+    roomId: string,
+    channel: string,
+    annotationId: string,
+    body: AnnotationReplyBody,
+  ) =>
+    request(
+      `/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations/${encodeURIComponent(annotationId)}/replies`,
+      { method: "POST", body },
+    ),
   getMessages: (roomId) => request(`/api/rooms/${roomId}/messages`),
   getResources: (roomId, options: ResourceQueryOptions = {}) => {
     const params = new URLSearchParams();
     if (options.includeDeleted) params.set("includeDeleted", "true");
     if (options.deletedOnly) params.set("deleted", "true");
     const query = params.toString();
-    return request(`/api/rooms/${roomId}/resources${query ? `?${query}` : ""}`);
+    return request(`/api/rooms/${roomId}/resources${query ? `?${query}` : ""}`).then(normalizeResourcePayload);
   },
   addUrlResource: (roomId, body) =>
-    request(`/api/rooms/${roomId}/resources/url`, { method: "POST", body }),
+    request(`/api/rooms/${roomId}/resources/url`, { method: "POST", body }).then(normalizeResourcePayload),
   uploadFileResource: (roomId, formData) =>
     request(`/api/rooms/${roomId}/resources/file`, {
       method: "POST",
       body: formData,
-    }),
+    }).then(normalizeResourcePayload),
   deleteResource: (resourceId) =>
     request(`/api/resources/${resourceId}`, { method: "DELETE" }),
   restoreResource: (resourceId) =>
-    request(`/api/resources/${resourceId}/restore`, { method: "PATCH" }),
+    request(`/api/resources/${resourceId}/restore`, { method: "PATCH" }).then(normalizeResourcePayload),
   deleteResourcePermanently: (resourceId) =>
     request(`/api/resources/${resourceId}/permanent`, { method: "DELETE" }),
   getBuddyHealth: (roomId) => request(`/api/rooms/${roomId}/buddy/health`),

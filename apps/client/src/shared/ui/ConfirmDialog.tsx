@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Reusable destructive-action confirmation modal.
@@ -15,12 +16,17 @@ function ConfirmDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
     setSubmitting(false);
   }
 
-  return (
+  const dialog = (
     <div
       className="modal-backdrop room-form-modal-backdrop"
       onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
     >
-      <section className="room-form-modal compact-dialog" role="alertdialog" aria-modal="true">
+      <section
+        aria-label={title}
+        aria-modal="true"
+        className="room-form-modal compact-dialog"
+        role="alertdialog"
+      >
         <header>
           <h2>{title}</h2>
           <button onClick={onCancel} type="button">
@@ -44,6 +50,8 @@ function ConfirmDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
       </section>
     </div>
   );
+
+  return createPortal(dialog, document.body);
 }
 
 export default ConfirmDialog;

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.ts";
-import { AvatarPreview } from "../profile/AvatarPreview.tsx";
+import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
 import {
   formatTimeOnly,
   getInitial,
@@ -1625,29 +1625,27 @@ function MeetupWindowDialog({ editing, form, onCancel, onChange, onDelete, onSub
           <div className="coordinate-time-range-fields">
             <label className="field">
               <span>Starts</span>
-              <select
-                value={Number(form.dayStartMinutes)}
-                onChange={(event) => updateField("dayStartMinutes", Number(event.target.value))}
-              >
-                {timeOptions.slice(0, -1).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <AppSelectMenu
+                ariaLabel="Starts"
+                onChange={(value) => updateField("dayStartMinutes", Number(value))}
+                options={timeOptions.slice(0, -1).map((option) => ({
+                  label: option.label,
+                  value: String(option.value),
+                }))}
+                value={String(Number(form.dayStartMinutes))}
+              />
             </label>
             <label className="field">
               <span>Ends</span>
-              <select
-                value={Number(form.dayEndMinutes)}
-                onChange={(event) => updateField("dayEndMinutes", Number(event.target.value))}
-              >
-                {timeOptions.slice(1).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <AppSelectMenu
+                ariaLabel="Ends"
+                onChange={(value) => updateField("dayEndMinutes", Number(value))}
+                options={timeOptions.slice(1).map((option) => ({
+                  label: option.label,
+                  value: String(option.value),
+                }))}
+                value={String(Number(form.dayEndMinutes))}
+              />
             </label>
           </div>
         </section>
@@ -2326,14 +2324,6 @@ function ThemedDatePicker({ maxDate, minDate, onSelect, setVisibleMonth, value, 
 function MemberAvatar({ member }) {
   if (member.avatarUrl) {
     return <img alt="" className="coordinate-member-avatar" src={member.avatarUrl} />;
-  }
-
-  if (member.avatarPreset) {
-    return (
-      <span className="coordinate-member-avatar rendered" aria-hidden="true">
-        <AvatarPreview avatar={member.avatarPreset} size="tiny" />
-      </span>
-    );
   }
 
   return <span className="coordinate-member-avatar">{member.initial || getInitial(member.name)}</span>;
