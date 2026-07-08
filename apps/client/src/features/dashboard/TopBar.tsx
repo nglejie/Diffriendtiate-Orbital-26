@@ -6,18 +6,28 @@ import {
   UserRound,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { THEME_MODES, normaliseThemeMode } from "../../theme.ts";
+import { getInitial } from "../../shared/utils/room.ts";
+import {
+  EditProfileDialog,
+  getProfileAvatarUrl,
+  getProfileDisplayName,
+} from "../room/profile/UserProfileControls.tsx";
 
 /**
  * Dashboard navigation bar. Account actions live here so the dashboard no longer
  * needs a separate sidebar just to sign out or create a room.
  */
-/** Top-level dashboard actions: account menu and room creation entry point. */
-function TopBar({ onCreateRoom, onLogout, onThemeChange, themeMode }) {
+/** Top-level dashboard actions: account menu and world creation entry point. */
+function TopBar({ onCreateRoom, onLogout, onThemeChange, onUserUpdated, themeMode, user }) {
   const [accountOpen, setAccountOpen] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const accountMenuRef = useRef(null);
   const activeThemeMode = normaliseThemeMode(themeMode);
   const isLightMode = activeThemeMode === THEME_MODES.light;
+  const profileName = getProfileDisplayName(user, "Account");
+  const profilePhoto = getProfileAvatarUrl(user);
 
   // Close the account menu when the user clicks elsewhere, matching the modal/dropdown
   // behaviour used across the rest of the app.
@@ -48,13 +58,15 @@ function TopBar({ onCreateRoom, onLogout, onThemeChange, themeMode }) {
       <div className="top-bar-actions">
         <div className="account-menu-shell" ref={accountMenuRef}>
           <button
+            aria-label={`Account menu for ${profileName}`}
             aria-expanded={accountOpen}
             className="top-account-button"
             onClick={() => setAccountOpen((current) => !current)}
             type="button"
           >
-            <UserRound size={18} />
-            Account
+            <span className="dashboard-account-avatar" aria-hidden="true">
+              {profilePhoto ? <img alt="" src={profilePhoto} /> : getInitial(profileName)}
+            </span>
           </button>
           {accountOpen ? (
             <div className="account-menu" role="menu" aria-label="Account menu">
@@ -77,11 +89,18 @@ function TopBar({ onCreateRoom, onLogout, onThemeChange, themeMode }) {
                   <i aria-hidden="true" />
                 </button>
               </div>
-              <button role="menuitem" type="button">
+              <button
+                onClick={() => {
+                  setAccountOpen(false);
+                  setProfileEditorOpen(true);
+                }}
+                role="menuitem"
+                type="button"
+              >
                 <UserRound size={18} />
                 Profile
               </button>
-              <button role="menuitem" type="button">
+              <button aria-disabled="true" disabled role="menuitem" type="button">
                 <Settings size={18} />
                 Settings
               </button>
@@ -97,9 +116,18 @@ function TopBar({ onCreateRoom, onLogout, onThemeChange, themeMode }) {
           onClick={onCreateRoom}
           type="button"
         >
-          Create Room
+          Create Domain
         </button>
       </div>
+
+      {profileEditorOpen ? createPortal(
+        <EditProfileDialog
+          onClose={() => setProfileEditorOpen(false)}
+          onProfileUpdated={onUserUpdated}
+          user={user}
+        />,
+        document.body,
+      ) : null}
     </header>
   );
 }

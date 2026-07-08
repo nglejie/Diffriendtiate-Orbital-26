@@ -344,7 +344,7 @@ function SelectionTip({
       <textarea
         autoFocus
         onChange={(event) => setComment(event.target.value)}
-        placeholder="Add context for the world..."
+        placeholder="Add context for the domain..."
         rows={3}
         value={comment}
       />

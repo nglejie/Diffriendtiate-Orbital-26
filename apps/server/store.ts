@@ -156,6 +156,9 @@ function normalizeDb(db) {
       ...resource,
       folder: resource.folder || "General",
       contentHash: resource.contentHash || "",
+      updatedAt: resource.updatedAt || resource.createdAt || new Date().toISOString(),
+      originalFolder: resource.originalFolder || "",
+      deletedById: resource.deletedById || "",
       deletedAt: resource.deletedAt || "",
       pdfPath: String(resource.pdfPath || ""),
       pdfConversionVersion: String(resource.pdfConversionVersion || ""),
@@ -322,7 +325,10 @@ async function initPostgres() {
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       url TEXT NOT NULL,
       deleted_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      original_folder TEXT NOT NULL DEFAULT '',
+      deleted_by_id TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS annotations (
@@ -546,6 +552,21 @@ async function initPostgres() {
       ADD COLUMN IF NOT EXISTS resource_type TEXT NOT NULL DEFAULT 'other'
   `);
 
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `);
+
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS original_folder TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS deleted_by_id TEXT NOT NULL DEFAULT ''
+  `);
+
   // Existing databases need the content_hash column before Postgres can parse this index.
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_resources_room_hash
@@ -681,7 +702,10 @@ export async function readDb() {
         metadata,
         url,
         deleted_at AS "deletedAt",
-        created_at AS "createdAt"
+        created_at AS "createdAt",
+        updated_at AS "updatedAt",
+        original_folder AS "originalFolder",
+        deleted_by_id AS "deletedById"
       FROM resources
       ORDER BY created_at ASC
     `),
@@ -787,6 +811,7 @@ export async function readDb() {
     resources: resources.rows.map((resource) => ({
       ...resource,
       createdAt: toIso(resource.createdAt),
+      updatedAt: toIso(resource.updatedAt),
       deletedAt: toIso(resource.deletedAt),
     })),
     annotations: annotations.rows.map((annotation) => ({
@@ -946,9 +971,14 @@ async function writePostgresDb(db) {
           INSERT INTO resources (
             id, room_id, uploader_id, type, title, folder, original_name, storage_name,
             mime_type, size, content_hash, pdf_path, pdf_conversion_version,
-            conversion_status, resource_type, metadata, url, deleted_at, created_at
+            conversion_status, resource_type, metadata, url, deleted_at, created_at,
+            updated_at, original_folder, deleted_by_id
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19,
+            $20, $21, $22
+          )
         `,
         [
           resource.id,
@@ -970,6 +1000,9 @@ async function writePostgresDb(db) {
           resource.url,
           resource.deletedAt || null,
           resource.createdAt,
+          resource.updatedAt || resource.createdAt,
+          resource.originalFolder || "",
+          resource.deletedById || "",
         ],
       );
     }

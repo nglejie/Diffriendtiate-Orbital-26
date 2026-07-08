@@ -196,7 +196,7 @@ describe("DocumentChannelPanel annotation composer", () => {
     const tip = within(screen.getByTestId("selection-tip"));
     await user.click(tip.getByLabelText(/annotation type/i));
     await user.click(screen.getByRole("option", { name: "Question" }));
-    await user.type(tip.getByPlaceholderText(/add context for the world/i), "Can someone explain this paragraph?");
+    await user.type(tip.getByPlaceholderText(/add context for the domain/i), "Can someone explain this paragraph?");
     await user.click(tip.getByRole("button", { name: /save annotation/i }));
 
     expect(onCreateAnnotation).toHaveBeenCalledWith(

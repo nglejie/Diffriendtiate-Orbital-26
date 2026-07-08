@@ -5,28 +5,49 @@ on:
     branches: [main]
     paths:
       - "apps/**"
+      - "services/**"
       - "tests/**"
+      - "docker-compose*.yaml"
+      - "docker-compose*.yml"
+      - ".dockerignore"
+      - ".env.example"
       - "package.json"
       - "package-lock.json"
-      - ".github/workflows/docker-compose-test.yml"
-      - ".github/workflows/qa-tests.yml"
+      - ".github/workflows/**"
       - "render.yaml"
   push:
     branches: [main]
     paths:
       - "apps/**"
+      - "services/**"
       - "tests/**"
+      - "docker-compose*.yaml"
+      - "docker-compose*.yml"
+      - ".dockerignore"
+      - ".env.example"
       - "package.json"
       - "package-lock.json"
-      - ".github/workflows/docker-compose-test.yml"
-      - ".github/workflows/qa-tests.yml"
+      - ".github/workflows/**"
       - "render.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: app-qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   app-qa:
-    name: Build, Test, and Browser UAT
+    name: Build, Test, Browser UAT, and Docker Compose
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
+
+    env:
+      CHROMA_DIR: /app/chroma_db
+      GEMINI_API_KEY: ci-placeholder
+      GEMINI_MODEL: gemini-3.1-flash-lite
+      GEMINI_EMBED_MODEL: models/gemini-embedding-2
+      INTELLIGRATE_GPU_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout repository
@@ -35,7 +56,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -65,6 +86,37 @@ jobs:
       - name: End-to-end UAT tests
         run: npm run test:e2e
 
+      - name: Build Docker Compose images
+        run: docker compose -f docker-compose.yaml build client server server-chatbot
+
+      - name: Start Docker Compose app stack
+        run: docker compose -f docker-compose.yaml up -d db server-chatbot server client
+
+      - name: Wait for Docker Compose app
+        run: |
+          for i in {1..90}; do
+            if curl --fail --silent --show-error http://127.0.0.1:4000/ >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:4000/api/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yaml ps
+          docker compose -f docker-compose.yaml logs --tail=200
+          exit 1
+
+      - name: Check Docker Compose chatbot health
+        run: |
+          docker compose -f docker-compose.yaml exec -T server-chatbot python - <<'PY'
+          import json
+          import urllib.request
+
+          with urllib.request.urlopen("http://127.0.0.1:5000/health", timeout=10) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+
+          assert payload.get("message") == "Success", payload
+          PY
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v6
@@ -72,3 +124,22 @@ jobs:
           name: playwright-report
           path: tests/.tmp/playwright-report
           if-no-files-found: ignore
+
+      - name: Print Docker Compose logs on failure
+        if: failure()
+        run: |
+          mkdir -p tests/.tmp
+          docker compose -f docker-compose.yaml ps | tee tests/.tmp/docker-compose-logs.txt
+          docker compose -f docker-compose.yaml logs --tail=300 | tee -a tests/.tmp/docker-compose-logs.txt
+
+      - name: Upload Docker Compose logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-compose-logs
+          path: tests/.tmp/docker-compose-logs.txt
+          if-no-files-found: ignore
+
+      - name: Stop Docker Compose app stack
+        if: always()
+        run: docker compose -f docker-compose.yaml down -v --remove-orphans

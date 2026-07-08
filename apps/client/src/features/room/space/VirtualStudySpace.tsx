@@ -1,9 +1,11 @@
 import {
   ArrowLeft,
   Box,
+  ChevronDown,
   ChevronRight,
   DoorOpen,
   Eraser,
+  ExternalLink,
   Eye,
   EyeOff,
   Grid2X2,
@@ -12,11 +14,13 @@ import {
   Layers,
   Lock,
   MapPin,
+  MapPinned,
   Maximize2,
   Minimize2,
   Minus,
   MoreHorizontal,
   MousePointer,
+  Move,
   Navigation,
   Paintbrush,
   Plus,
@@ -26,6 +30,8 @@ import {
   Settings2,
   Trash2,
   Undo2,
+  VectorSquare,
+  Video,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -54,6 +60,7 @@ import type { LimeetsLayer } from "./limeetsAssetCatalog.ts";
 import {
   AVATAR_RUN_MULTIPLIER,
   AVATAR_SPEED_PX_PER_SECOND,
+  clampAvatarWorldPoint,
   getAvatarFrame,
   getDirectionFromDelta,
   findTilePath,
@@ -68,6 +75,7 @@ const FIT_WORLD_PADDING_PX = 56;
 const EDITOR_FIT_RESERVED_WIDTH_PX = 536;
 const MOVE_EMIT_INTERVAL_MS = 120;
 const PAN_DRAG_THRESHOLD_PX = 5;
+const AREA_ACTION_TOOLTIP_WIDTH = 224;
 const EXPLORE_NOTICE_TEXT = "How about we explore the area ahead of us later?";
 const MAP_OVERLAY_SELECTOR =
   ".limeets-gather-editor, .limeets-gather-toolbar, .limeets-gather-controls, .limeets-gather-open-editor, .limeets-gather-current-action";
@@ -79,18 +87,18 @@ const EDITOR_PANEL_COPY = {
   },
   hand: {
     title: "Move Around",
-    description: "Pan the world without moving your avatar.",
+    description: "Pan the domain without moving your avatar.",
   },
   inspect: {
     title: "Inspect Tile",
     description: "Select a tile or object on the map to review what is placed there.",
   },
   objects: {
-    title: "Add Object to Your World",
+    title: "Add Object to Your Domain",
     description: "Search, choose an object, then stamp it on the map.",
   },
   rooms: {
-    title: "World Setup & Zones",
+    title: "Setup & Zones",
     description: "Create zones, then set each zone's size, spawn, and background.",
   },
   special: {
@@ -122,7 +130,7 @@ const SPECIAL_TILES = [
     id: "private",
     title: "Meeting Area",
     description: "Draw an area that can auto-join voice and video.",
-    icon: Grid2X2,
+    icon: Video,
   },
 ];
 
@@ -137,38 +145,57 @@ const DEFAULT_AREA_EFFECTS = {
 const NAVIGATION_AREA_OPTIONS = WORLD_ZONE_PRESETS.filter((preset) => preset.tabId !== "focus");
 const DEFAULT_NAVIGATION_TAB = "chat";
 
+const OPEN_LINK_INTERACTION_OPTIONS = [
+  { value: "action", label: "Show Action Prompt" },
+  { value: "enter", label: "Open When Entering" },
+];
+
 const AREA_PROPERTY_OPTIONS = [
   {
     id: "meeting",
+    group: "session",
     title: "Meeting Area",
     description: "Join Limeets voice/video when a member enters.",
-    icon: Grid2X2,
+    icon: Video,
   },
   {
     id: "entryExit",
+    group: "action",
     title: "Navigate",
     description: "Send members to a tab when they stop in this area.",
     icon: Navigation,
   },
   {
     id: "openLink",
+    group: "action",
     title: "Open Link",
     description: "Attach a link interaction to the area.",
-    icon: Navigation,
+    icon: ExternalLink,
   },
   {
     id: "teleport",
+    group: "movement",
     title: "Teleport",
     description: "Move members to another zone tile.",
     icon: DoorOpen,
   },
   {
     id: "impassable",
+    group: "movement",
     title: "Block Movement",
     description: "Make the whole selected area impassable.",
     icon: Lock,
   },
 ];
+
+export function getFirstEnabledAreaPropertyId(effects = {}, preferredId = "") {
+  if (preferredId && effects?.[preferredId]) return preferredId;
+  return AREA_PROPERTY_OPTIONS.find((option) => effects?.[option.id])?.id || "";
+}
+
+export function getEnabledAreaPropertyIds(effects = {}) {
+  return AREA_PROPERTY_OPTIONS.filter((option) => effects?.[option.id]).map((option) => option.id);
+}
 
 const ERASER_TARGETS = [
   { id: "all", label: "Everything", icon: Trash2 },
@@ -219,6 +246,10 @@ function getAreaTriggerStorageKey(roomId) {
   return roomId ? `diffriendtiate:room:${roomId}:limeets-area-trigger` : "";
 }
 
+function getMeetingAreaVisibilityStorageKey(roomId) {
+  return roomId ? `diffriendtiate:room:${roomId}:limeets-meeting-area-visibility` : "";
+}
+
 function readAreaTriggerStorage(roomId) {
   const storageKey = getAreaTriggerStorageKey(roomId);
   if (!storageKey || typeof window === "undefined") return "";
@@ -236,6 +267,29 @@ function writeAreaTriggerStorage(roomId, areaId) {
 
   try {
     if (areaId) window.localStorage.setItem(storageKey, areaId);
+    else window.localStorage.removeItem(storageKey);
+  } catch {
+    // Local UI state should never break the world if storage is unavailable.
+  }
+}
+
+function readMeetingAreaVisibilityStorage(roomId) {
+  const storageKey = getMeetingAreaVisibilityStorageKey(roomId);
+  if (!storageKey || typeof window === "undefined") return false;
+
+  try {
+    return window.localStorage.getItem(storageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeMeetingAreaVisibilityStorage(roomId, visible) {
+  const storageKey = getMeetingAreaVisibilityStorageKey(roomId);
+  if (!storageKey || typeof window === "undefined") return;
+
+  try {
+    if (visible) window.localStorage.setItem(storageKey, "true");
     else window.localStorage.removeItem(storageKey);
   } catch {
     // Local UI state should never break the world if storage is unavailable.
@@ -296,8 +350,23 @@ function getRoomFromWorld(world) {
   return (
     world.rooms.find((room) => room.id === world.activeRoomId) ||
     world.rooms[0] ||
-    { id: CUSTOM_WORLD_MAP_ID, name: "World", tilemap: {} }
+    { id: CUSTOM_WORLD_MAP_ID, name: "Domain", tilemap: {} }
   );
+}
+
+function getRoomBoundsForWorldPoint(world, worldRoomId) {
+  const room =
+    world.rooms.find((candidate) => candidate.id === worldRoomId) ||
+    getRoomFromWorld(world);
+  return {
+    columns: Number(room?.columns || world.columns || 1),
+    rows: Number(room?.rows || world.rows || 1),
+  };
+}
+
+function clampPointToWorldRoom(point, world, worldRoomId = world?.activeRoomId) {
+  const { columns, rows } = getRoomBoundsForWorldPoint(world, worldRoomId);
+  return clampAvatarWorldPoint(point, columns, rows, world.tileSize);
 }
 
 function getBackgroundCss(room, world) {
@@ -554,9 +623,10 @@ function getInitialPlayer(world, worldRoom, room) {
         Number.isFinite(saved.x) &&
         Number.isFinite(saved.y)
       ) {
+        const point = clampPointToWorldRoom(saved, world, worldRoom.id);
         return {
-          x: clamp(saved.x, 0, getWorldSize(world).width),
-          y: clamp(saved.y, 0, getWorldSize(world).height),
+          x: point.x,
+          y: point.y,
           direction: saved.direction || "down",
           frame: getAvatarFrame(saved.direction || "down", false, 0),
           moving: false,
@@ -572,7 +642,7 @@ function getInitialPlayer(world, worldRoom, room) {
     world.spawnpoint?.roomId === worldRoom.id
       ? { x: world.spawnpoint.x, y: world.spawnpoint.y }
       : { x: Math.floor(world.columns / 2), y: Math.floor(world.rows / 2) };
-  const point = tileToWorldPoint(spawn, world.tileSize);
+  const point = clampPointToWorldRoom(tileToWorldPoint(spawn, world.tileSize), world, worldRoom.id);
   return {
     ...point,
     direction: "down",
@@ -583,14 +653,15 @@ function getInitialPlayer(world, worldRoom, room) {
 }
 
 function serializePlayerPosition(player, world, worldRoom) {
-  const tile = worldPointToTile(player, world.columns, world.rows, world.tileSize);
+  const point = clampPointToWorldRoom(player, world, worldRoom.id);
+  const tile = worldPointToTile(point, world.columns, world.rows, world.tileSize);
   return {
     mapId: CUSTOM_WORLD_MAP_ID,
     worldRoomId: worldRoom.id,
     col: tile.x,
     row: tile.y,
-    x: Number(player.x.toFixed(2)),
-    y: Number(player.y.toFixed(2)),
+    x: Number(point.x.toFixed(2)),
+    y: Number(point.y.toFixed(2)),
     direction: player.direction,
     moving: Boolean(player.moving),
   };
@@ -611,6 +682,8 @@ function normalizePresencePosition(presence, world) {
     y = point.y;
   }
 
+  const worldRoomId = String(raw.worldRoomId || CUSTOM_WORLD_MAP_ID);
+  const point = clampPointToWorldRoom({ x, y }, world, worldRoomId);
   const direction = ["down", "left", "right", "up"].includes(raw.direction)
     ? raw.direction
     : "down";
@@ -618,12 +691,12 @@ function normalizePresencePosition(presence, world) {
   return {
     ...presence,
     position: {
-      x,
-      y,
+      x: point.x,
+      y: point.y,
       direction,
       frame: getAvatarFrame(direction, Boolean(raw.moving), performance.now()),
       moving: Boolean(raw.moving),
-      worldRoomId: raw.worldRoomId || CUSTOM_WORLD_MAP_ID,
+      worldRoomId,
     },
   };
 }
@@ -655,6 +728,11 @@ function rectangleTiles(start, end) {
   }
 
   return tiles;
+}
+
+export function usesRectangleTileAction(activeTool, paintMode) {
+  const tool = String(activeTool || "");
+  return tool === "select" || tool === "erase" || paintMode === "rectangle";
 }
 
 function getAreaRectFromPoints(start, end, world) {
@@ -700,6 +778,109 @@ function getPrivateAreaBounds(area) {
   return { col, row, width, height };
 }
 
+export function normalizeExternalAreaUrl(value) {
+  const rawUrl = String(value || "").trim();
+  if (!rawUrl) return "";
+  if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+  if (/^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}(?:[/?#].*)?$/i.test(rawUrl)) {
+    return `https://${rawUrl}`;
+  }
+  return "";
+}
+
+export function getAreaRectFromBounds(bounds, world) {
+  if (!bounds || !world) return null;
+  const col = clamp(Math.round(Number(bounds.col) || 0), 0, Math.max(0, world.columns - 1));
+  const row = clamp(Math.round(Number(bounds.row) || 0), 0, Math.max(0, world.rows - 1));
+  const width = clamp(Math.round(Number(bounds.width) || 1), 1, Math.max(1, world.columns - col));
+  const height = clamp(Math.round(Number(bounds.height) || 1), 1, Math.max(1, world.rows - row));
+  const endCol = col + width - 1;
+  const endRow = row + height - 1;
+
+  return {
+    bounds: { col, row, width, height },
+    pixel: {
+      x: col * world.tileSize,
+      y: row * world.tileSize,
+      width: width * world.tileSize,
+      height: height * world.tileSize,
+    },
+    tiles: rectangleTiles({ x: col, y: row }, { x: endCol, y: endRow }),
+  };
+}
+
+export function getAreaEditModeAtPoint(point, area, world) {
+  const bounds = getPrivateAreaBounds(area);
+  const areaRect = getAreaRectFromBounds(bounds, world);
+  if (!point || !areaRect?.pixel) return "";
+
+  const { x, y, width, height } = areaRect.pixel;
+  const right = x + width;
+  const bottom = y + height;
+  if (point.x < x || point.x > right || point.y < y || point.y > bottom) return "";
+
+  const handleSize = clamp(world.tileSize * 0.35, 8, 18);
+  const nearLeft = Math.abs(point.x - x) <= handleSize;
+  const nearRight = Math.abs(point.x - right) <= handleSize;
+  const nearTop = Math.abs(point.y - y) <= handleSize;
+  const nearBottom = Math.abs(point.y - bottom) <= handleSize;
+
+  if (nearTop && nearLeft) return "nw";
+  if (nearTop && nearRight) return "ne";
+  if (nearBottom && nearLeft) return "sw";
+  if (nearBottom && nearRight) return "se";
+  if (nearTop) return "n";
+  if (nearRight) return "e";
+  if (nearBottom) return "s";
+  if (nearLeft) return "w";
+  return "move";
+}
+
+export function getAreaCursorClass(mode) {
+  const normalizedMode = String(mode || "").trim().toLowerCase();
+  const supportedModes = new Set(["draw", "move", "n", "e", "s", "w", "ne", "nw", "se", "sw"]);
+  return supportedModes.has(normalizedMode) ? `limeets-area-cursor-${normalizedMode}` : "";
+}
+
+export function getAreaRectFromEditDrag(drag, point, world) {
+  if (!drag?.startBounds || !drag?.startPoint || !point || !world) return null;
+
+  const deltaCols = Math.round((point.x - drag.startPoint.x) / world.tileSize);
+  const deltaRows = Math.round((point.y - drag.startPoint.y) / world.tileSize);
+  const start = drag.startBounds;
+  let col = start.col;
+  let row = start.row;
+  let width = start.width;
+  let height = start.height;
+
+  if (drag.mode === "move") {
+    col = clamp(start.col + deltaCols, 0, Math.max(0, world.columns - start.width));
+    row = clamp(start.row + deltaRows, 0, Math.max(0, world.rows - start.height));
+    return getAreaRectFromBounds({ col, row, width, height }, world);
+  }
+
+  if (drag.mode.includes("w")) {
+    const originalRight = start.col + start.width;
+    col = clamp(start.col + deltaCols, 0, originalRight - 1);
+    width = originalRight - col;
+  }
+  if (drag.mode.includes("e")) {
+    const nextRight = clamp(start.col + start.width + deltaCols, start.col + 1, world.columns);
+    width = nextRight - start.col;
+  }
+  if (drag.mode.includes("n")) {
+    const originalBottom = start.row + start.height;
+    row = clamp(start.row + deltaRows, 0, originalBottom - 1);
+    height = originalBottom - row;
+  }
+  if (drag.mode.includes("s")) {
+    const nextBottom = clamp(start.row + start.height + deltaRows, start.row + 1, world.rows);
+    height = nextBottom - start.row;
+  }
+
+  return getAreaRectFromBounds({ col, row, width, height }, world);
+}
+
 function getAreaEffects(area) {
   return {
     ...DEFAULT_AREA_EFFECTS,
@@ -721,6 +902,39 @@ function getAreaNavigationTarget(area) {
   return NAVIGATION_AREA_OPTIONS.some((option) => option.tabId === target)
     ? target
     : DEFAULT_NAVIGATION_TAB;
+}
+
+export function getAreaOpenLinkOptions(area) {
+  const interaction = String(area?.openLinkInteraction || "").trim();
+  return {
+    interaction: OPEN_LINK_INTERACTION_OPTIONS.some((option) => option.value === interaction)
+      ? interaction
+      : "action",
+    newTab: Boolean(area?.openLinkNewTab),
+  };
+}
+
+export function openAreaLink(url, newTab = true) {
+  const safeUrl = normalizeExternalAreaUrl(url);
+  if (!safeUrl || typeof window === "undefined") return false;
+  if (newTab) {
+    window.open(safeUrl, "_blank", "noopener,noreferrer");
+  } else {
+    window.location.assign(safeUrl);
+  }
+  return true;
+}
+
+export function shouldRunLandingEffect({
+  idleActionKey = "",
+  lastIdleActionKey = "",
+  moving = false,
+  triggeredAreaId = "",
+  triggerAreaId = "",
+} = {}) {
+  if (moving || !idleActionKey) return false;
+  if (triggerAreaId && triggeredAreaId === triggerAreaId) return false;
+  return idleActionKey !== lastIdleActionKey;
 }
 
 function getNavigationPreset(tabId) {
@@ -750,12 +964,20 @@ function getAreaCenterTile(area, world) {
   };
 }
 
-function buildAreaProperties(area) {
+export function buildAreaProperties(area) {
   const effects = getAreaEffects(area);
   const properties = [];
   if (effects.meeting) properties.push({ type: "meetingArea" });
   if (effects.entryExit) properties.push({ type: "navigate", tabId: getAreaNavigationTarget(area) });
-  if (effects.openLink) properties.push({ type: "openWebsite", url: area?.linkUrl || "" });
+  if (effects.openLink) {
+    const openLink = getAreaOpenLinkOptions(area);
+    properties.push({
+      type: "openWebsite",
+      newTab: openLink.newTab,
+      trigger: openLink.interaction,
+      url: normalizeExternalAreaUrl(area?.linkUrl),
+    });
+  }
   if (effects.teleport) properties.push({ type: "teleport", destination: area?.destination || null });
   if (effects.impassable) properties.push({ type: "impassable" });
   return properties;
@@ -808,7 +1030,8 @@ function materializeAreaTileEffects(worldConfig, area, previousArea = null) {
         label: navigationPreset.label,
       };
     }
-    if (effects.openLink && area.linkUrl) entry.openUrl = area.linkUrl;
+    const openUrl = normalizeExternalAreaUrl(area.linkUrl);
+    if (effects.openLink && openUrl) entry.openUrl = openUrl;
     if (effects.teleport) entry.teleporter = destination;
     if (effects.impassable) entry.impassable = true;
     if (Object.keys(entry).length) room.tilemap[key] = entry;
@@ -940,7 +1163,6 @@ function ToolButton({ active, children, disabled = false, label, onClick }) {
       className={active ? "active" : ""}
       disabled={disabled}
       onClick={onClick}
-      title={label}
       type="button"
     >
       {children}
@@ -1055,6 +1277,8 @@ function TileSprite({ assetId, layer, tileSize }) {
 }
 
 export function VirtualStudySpace({
+  currentMeetingArea = null,
+  isActive = true,
   onMeetingAreaChange,
   onNavigate,
   onWorldChanged,
@@ -1064,11 +1288,11 @@ export function VirtualStudySpace({
   room,
   roomActivityMembers = [],
   socket,
-  spaceContext,
   teleportTarget = null,
   user,
 }) {
   const currentProfileStatus = normalizeProfileStatus(profileStatus);
+  const currentMeetingAreaId = String(currentMeetingArea?.id || currentMeetingArea?.areaId || "");
   const viewportRef = useRef(null);
   const worldRef = useRef(null);
   const worldRoomRef = useRef(null);
@@ -1085,8 +1309,12 @@ export function VirtualStudySpace({
   const lastSpaceJoinRetryRef = useRef(0);
   const lastReturnToSpawnSignalRef = useRef(0);
   const lastTeleportTargetRef = useRef("");
+  const playerInitKeyRef = useRef("");
+  const initialCameraKeyRef = useRef("");
   const panRef = useRef(null);
   const areaDragRef = useRef(null);
+  const areaEditDragRef = useRef(null);
+  const activeAreaLinkKeyRef = useRef("");
   const dragTileRef = useRef(null);
   const followPlayerRef = useRef(true);
   const socketRef = useRef(socket);
@@ -1108,6 +1336,11 @@ export function VirtualStudySpace({
   const [areaPreview, setAreaPreview] = useState(null);
   const [dragPreview, setDragPreview] = useState(null);
   const [notice, setNotice] = useState("");
+  const [activeAreaLink, setActiveAreaLink] = useState(null);
+  const [activeMeetingAreaId, setActiveMeetingAreaId] = useState("");
+  const [showMeetingAreas, setShowMeetingAreas] = useState(() => readMeetingAreaVisibilityStorage(room?.id));
+  const [areaActionTooltip, setAreaActionTooltip] = useState(null);
+  const [areaCursorMode, setAreaCursorMode] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPanel, setEditorPanel] = useState("objects");
   const [activeTool, setActiveTool] = useState("select");
@@ -1122,6 +1355,7 @@ export function VirtualStudySpace({
   const [selectedPlacement, setSelectedPlacement] = useState(null);
   const [selectedTileKeys, setSelectedTileKeys] = useState([]);
   const [selectedAreaId, setSelectedAreaId] = useState("");
+  const [collapsedAreaPropertyIds, setCollapsedAreaPropertyIds] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
   const [teleportDraft, setTeleportDraft] = useState({ roomId: CUSTOM_WORLD_MAP_ID, x: 0, y: 0 });
   const [worldSizeDraft, setWorldSizeDraft] = useState({ columns: "", rows: "" });
@@ -1140,6 +1374,7 @@ export function VirtualStudySpace({
   }, [draftWorld]);
 
   const worldRoom = useMemo(() => getRoomFromWorld(world), [world]);
+  const worldRoomDisplayName = worldRoom.name === "World" ? "Domain" : worldRoom.name;
   const worldBackground = useMemo(() => getBackgroundCss(room, world), [room, world]);
   const blockedTiles = useMemo(() => getBlockedTiles(world, worldRoom), [world, worldRoom]);
   const assetCategoryTree = useMemo(() => buildAssetCategoryTree(LIMEETS_OBJECT_ASSETS), []);
@@ -1173,6 +1408,14 @@ export function VirtualStudySpace({
   const selectedArea = useMemo(
     () => worldAreas.find((area) => area?.id === selectedAreaId) || null,
     [selectedAreaId, worldAreas],
+  );
+  const meetingAreas = useMemo(
+    () => worldAreas.filter((area) => getAreaEffects(area).meeting),
+    [worldAreas],
+  );
+  const activeMeetingArea = useMemo(
+    () => meetingAreas.find((area) => area?.id === activeMeetingAreaId) || null,
+    [activeMeetingAreaId, meetingAreas],
   );
   const selectedAreaEffects = useMemo(() => getAreaEffects(selectedArea), [selectedArea]);
   const selectedPlacementInfo = useMemo(() => {
@@ -1269,6 +1512,8 @@ export function VirtualStudySpace({
     setSelectedSpecial("");
     setSelectedAreaId("");
     setAreaPreview(null);
+    setActiveMeetingAreaId("");
+    setShowMeetingAreas(readMeetingAreaVisibilityStorage(room?.id));
     setEditorPanel("objects");
     meetingAreaRef.current = "";
     activeAreaRef.current = "";
@@ -1298,6 +1543,30 @@ export function VirtualStudySpace({
   }, [selectedArea, selectedAreaId]);
 
   useEffect(() => {
+    if (activeMeetingAreaId && !activeMeetingArea) setActiveMeetingAreaId("");
+  }, [activeMeetingArea, activeMeetingAreaId]);
+
+  useEffect(() => {
+    meetingAreaRef.current = currentMeetingAreaId;
+    setActiveMeetingAreaId(currentMeetingAreaId);
+  }, [currentMeetingAreaId]);
+
+  const toggleMeetingAreaVisibility = useCallback(() => {
+    setShowMeetingAreas((current) => {
+      const next = !current;
+      writeMeetingAreaVisibilityStorage(roomIdRef.current || room?.id, next);
+      return next;
+    });
+  }, [room?.id]);
+
+  useEffect(() => {
+    if (!selectedArea) {
+      setCollapsedAreaPropertyIds({});
+      return;
+    }
+  }, [selectedAreaId, selectedArea]);
+
+  useEffect(() => {
     setWorldSizeDraft({
       columns: String(world.columns),
       rows: String(world.rows),
@@ -1324,6 +1593,7 @@ export function VirtualStudySpace({
   }, [camera]);
 
   useEffect(() => {
+    if (!isActive) return undefined;
     if (!viewportRef.current) return undefined;
 
     const observer = new ResizeObserver((entries) => {
@@ -1337,7 +1607,7 @@ export function VirtualStudySpace({
 
     observer.observe(viewportRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [isActive]);
 
   const constrainCamera = useCallback(
     (nextCamera) => {
@@ -1388,16 +1658,17 @@ export function VirtualStudySpace({
   );
 
   useEffect(() => {
+    const initKey = `${room?.id || ""}:${worldRoom.id}:${world.columns}:${world.rows}:${world.tileSize}`;
+    if (playerInitKeyRef.current === initKey && playerRef.current) return;
+
+    playerInitKeyRef.current = initKey;
+    initialCameraKeyRef.current = "";
     const nextPlayer = getInitialPlayer(world, worldRoom, room);
     playerRef.current = nextPlayer;
     setPlayer(nextPlayer);
-    if (viewportSize.width && viewportSize.height) centerCameraOn(nextPlayer, fitScale);
   }, [
-    centerCameraOn,
-    fitScale,
     room?.id,
-    viewportSize.height,
-    viewportSize.width,
+    room?.worldConfig,
     world.columns,
     world.rows,
     world.tileSize,
@@ -1405,7 +1676,15 @@ export function VirtualStudySpace({
   ]);
 
   useEffect(() => {
-    if (viewportSize.width && viewportSize.height && playerRef.current) {
+    const initKey = playerInitKeyRef.current;
+    if (
+      initKey &&
+      initialCameraKeyRef.current !== initKey &&
+      viewportSize.width &&
+      viewportSize.height &&
+      playerRef.current
+    ) {
+      initialCameraKeyRef.current = initKey;
       centerCameraOn(playerRef.current, fitScale);
     }
   }, [centerCameraOn, fitScale, viewportSize.height, viewportSize.width]);
@@ -1563,7 +1842,11 @@ export function VirtualStudySpace({
       currentWorld.rooms.find((candidate) => candidate.id === spawn.roomId) ||
       currentWorld.rooms[0] ||
       worldRoomRef.current;
-    const point = tileToWorldPoint({ x: spawn.x, y: spawn.y }, currentWorld.tileSize);
+    const point = clampPointToWorldRoom(
+      tileToWorldPoint({ x: spawn.x, y: spawn.y }, currentWorld.tileSize),
+      currentWorld,
+      spawnRoom?.id || currentWorld.activeRoomId,
+    );
     const nextPlayer = {
       ...currentPlayer,
       ...point,
@@ -1578,6 +1861,7 @@ export function VirtualStudySpace({
     setPlayer(nextPlayer);
     followPlayerRef.current = true;
     meetingAreaRef.current = "";
+    setActiveMeetingAreaId("");
     activeAreaRef.current = "";
     triggeredAreaRef.current = "";
     lastIdleActionKeyRef.current = "";
@@ -1618,7 +1902,11 @@ export function VirtualStudySpace({
         x: clamp(Math.round(Number(target.x ?? target.col) || 0), 0, Math.max(0, destinationColumns - 1)),
         y: clamp(Math.round(Number(target.y ?? target.row) || 0), 0, Math.max(0, destinationRows - 1)),
       };
-      const point = tileToWorldPoint(tile, currentWorld.tileSize);
+      const point = clampPointToWorldRoom(
+        tileToWorldPoint(tile, currentWorld.tileSize),
+        currentWorld,
+        destinationRoom?.id || destinationRoomId,
+      );
       const nextPlayer = {
         ...currentPlayer,
         ...point,
@@ -1691,6 +1979,11 @@ export function VirtualStudySpace({
   }, [movePlayerToTeleportTarget, playerReady, teleportTarget]);
 
   useEffect(() => {
+    if (!isActive) {
+      keysRef.current.clear();
+      return undefined;
+    }
+
     let animationFrame = 0;
     let lastTick = performance.now();
     let walkingElapsedMs = 0;
@@ -1723,7 +2016,7 @@ export function VirtualStudySpace({
         currentPlayer.path = [];
         followPlayerRef.current = true;
       } else if (currentPlayer.path?.length) {
-        const target = currentPlayer.path[0];
+        const target = clampPointToWorldRoom(currentPlayer.path[0], currentWorld, currentWorldRoom.id);
         const dx = target.x - currentPlayer.x;
         const dy = target.y - currentPlayer.y;
         const distance = Math.hypot(dx, dy);
@@ -1748,8 +2041,13 @@ export function VirtualStudySpace({
         const unitY = vectorY / length;
         const nextX = currentPlayer.x + unitX * speed * deltaSeconds;
         const nextY = currentPlayer.y + unitY * speed * deltaSeconds;
-        const nextTile = worldPointToTile(
+        const nextPoint = clampPointToWorldRoom(
           { x: nextX, y: nextY },
+          currentWorld,
+          currentWorldRoom.id,
+        );
+        const nextTile = worldPointToTile(
+          nextPoint,
           currentWorld.columns,
           currentWorld.rows,
           currentWorld.tileSize,
@@ -1757,8 +2055,8 @@ export function VirtualStudySpace({
         const nextKey = makeTileKey(nextTile.x, nextTile.y);
 
         if (!blocked.has(nextKey)) {
-          currentPlayer.x = clamp(nextX, 0, currentWorld.width);
-          currentPlayer.y = clamp(nextY, 0, currentWorld.height);
+          currentPlayer.x = nextPoint.x;
+          currentPlayer.y = nextPoint.y;
         } else {
           currentPlayer.path = [];
         }
@@ -1783,12 +2081,21 @@ export function VirtualStudySpace({
       const currentArea = getAreaAtPoint(currentPlayer, currentWorld, currentWorldRoom.id);
       const currentAreaId = currentArea?.id || "";
       const currentAreaEffects = getAreaEffects(currentArea);
+      const currentAreaOpenLinkOptions = getAreaOpenLinkOptions(currentArea);
+      const areaOpenUrl = currentAreaEffects.openLink
+        ? normalizeExternalAreaUrl(currentArea?.linkUrl)
+        : "";
+      const tileOpenUrl = normalizeExternalAreaUrl(tileData?.openUrl);
+      const openUrl = areaOpenUrl || tileOpenUrl;
+      const effectiveOpenLinkOptions = areaOpenUrl
+        ? currentAreaOpenLinkOptions
+        : { interaction: "action", newTab: true };
       const currentAreaHasIdleEffect = Boolean(
         currentArea &&
           (currentAreaEffects.meeting ||
             currentAreaEffects.entryExit ||
             currentAreaEffects.teleport ||
-            currentAreaEffects.openLink),
+            openUrl),
       );
       const triggerAreaId = currentAreaHasIdleEffect ? currentAreaId : "";
       const nextMeetingAreaId = currentAreaEffects.meeting ? currentAreaId : tileData?.privateAreaId || "";
@@ -1806,7 +2113,9 @@ export function VirtualStudySpace({
       }
 
       if (moving) {
+        activeAreaLinkKeyRef.current = "";
         lastIdleActionKeyRef.current = "";
+        setActiveAreaLink(null);
       } else {
         const idleActionKey = [
           currentWorldRoom.id,
@@ -1816,14 +2125,18 @@ export function VirtualStudySpace({
             ? `${tileData.teleporter.roomId}:${tileData.teleporter.x}:${tileData.teleporter.y}`
             : "",
           tileData?.portal?.tabId || "",
-          tileData?.openUrl || "",
+          openUrl,
         ].join("|");
 
-        const areaActionAlreadyTriggered = Boolean(
-          triggerAreaId && triggeredAreaRef.current === triggerAreaId,
-        );
+        const shouldRunEffect = shouldRunLandingEffect({
+          idleActionKey,
+          lastIdleActionKey: lastIdleActionKeyRef.current,
+          moving,
+          triggeredAreaId: triggeredAreaRef.current,
+          triggerAreaId,
+        });
 
-        if (areaActionAlreadyTriggered) {
+        if (!shouldRunEffect) {
           lastIdleActionKeyRef.current = idleActionKey;
         } else if (lastIdleActionKeyRef.current !== idleActionKey) {
           if (triggerAreaId) {
@@ -1833,8 +2146,29 @@ export function VirtualStudySpace({
 
           lastIdleActionKeyRef.current = idleActionKey;
 
+          const nextAreaLinkKey = openUrl
+            ? `${currentWorldRoom.id}:${currentTileKey}:${openUrl}:${effectiveOpenLinkOptions.interaction}:${effectiveOpenLinkOptions.newTab ? "new" : "same"}`
+            : "";
+
+          activeAreaLinkKeyRef.current = nextAreaLinkKey;
+          if (openUrl && effectiveOpenLinkOptions.interaction === "enter" && !editorOpen) {
+            openAreaLink(openUrl, effectiveOpenLinkOptions.newTab);
+            setActiveAreaLink(null);
+          } else {
+            setActiveAreaLink(
+              openUrl && effectiveOpenLinkOptions.interaction === "action"
+                ? {
+                    label: currentArea?.name || currentArea?.label || "Area Link",
+                    newTab: effectiveOpenLinkOptions.newTab,
+                    url: openUrl,
+                  }
+                : null,
+            );
+          }
+
           if (meetingAreaRef.current !== nextMeetingAreaId) {
             meetingAreaRef.current = nextMeetingAreaId;
+            setActiveMeetingAreaId(nextMeetingAreaId);
             onMeetingAreaChange?.(
               nextMeetingAreaId
                 ? {
@@ -1859,7 +2193,11 @@ export function VirtualStudySpace({
             const destinationRoom =
               currentWorld.rooms.find((candidate) => candidate.id === destination.roomId) ||
               currentWorldRoom;
-            const point = tileToWorldPoint(destination, currentWorld.tileSize);
+            const point = clampPointToWorldRoom(
+              tileToWorldPoint(destination, currentWorld.tileSize),
+              currentWorld,
+              destinationRoom.id,
+            );
             currentPlayer.x = point.x;
             currentPlayer.y = point.y;
             currentPlayer.path = [];
@@ -1902,9 +2240,14 @@ export function VirtualStudySpace({
 
     animationFrame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [applyWorldUpdate, editorOpen, isOwner, onMeetingAreaChange, onNavigate, persistAndBroadcast, setCameraState]);
+  }, [applyWorldUpdate, editorOpen, isActive, isOwner, onMeetingAreaChange, onNavigate, persistAndBroadcast, setCameraState]);
 
   useEffect(() => {
+    if (!isActive) {
+      keysRef.current.clear();
+      return undefined;
+    }
+
     function handleKeyDown(event) {
       const key = getKeyboardKey(event);
       const code = String(event.code || "").toLowerCase();
@@ -1940,7 +2283,7 @@ export function VirtualStudySpace({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [editorOpen, redoWorld, undoWorld]);
+  }, [editorOpen, isActive, redoWorld, undoWorld]);
 
   useEffect(() => {
     if (!socket || !room?.id || !playerReady) return undefined;
@@ -2073,6 +2416,70 @@ export function VirtualStudySpace({
     },
     [getTileFromEvent],
   );
+
+  const updateAreaCursorFromEvent = useCallback(
+    (event) => {
+      if (!editorOpen || !isOwner || activeTool !== "area") {
+        setAreaCursorMode("");
+        return;
+      }
+
+      if (event.target.closest(MAP_OVERLAY_SELECTOR)) {
+        setAreaCursorMode("");
+        return;
+      }
+
+      const activeEditDrag = areaEditDragRef.current;
+      if (activeEditDrag?.mode) {
+        setAreaCursorMode(activeEditDrag.mode);
+        return;
+      }
+
+      if (areaDragRef.current) {
+        setAreaCursorMode("draw");
+        return;
+      }
+
+      const point = getPointFromEvent(event);
+      const editMode = selectedArea ? getAreaEditModeAtPoint(point, selectedArea, world) : "";
+      setAreaCursorMode(editMode || "draw");
+    },
+    [activeTool, editorOpen, getPointFromEvent, isOwner, selectedArea, world],
+  );
+
+  const showAreaActionTooltip = useCallback((option, target) => {
+    const editor = target.closest(".limeets-gather-editor");
+    if (!editor) return;
+
+    const editorRect = editor.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const idealLeft =
+      targetRect.left + targetRect.width / 2 - editorRect.left - AREA_ACTION_TOOLTIP_WIDTH / 2;
+    const left = clamp(
+      idealLeft,
+      10,
+      Math.max(10, editorRect.width - AREA_ACTION_TOOLTIP_WIDTH - 10),
+    );
+    const top = clamp(targetRect.bottom - editorRect.top + 10, 10, Math.max(10, editorRect.height - 108));
+    const arrowLeft = clamp(
+      targetRect.left + targetRect.width / 2 - editorRect.left - left,
+      16,
+      AREA_ACTION_TOOLTIP_WIDTH - 16,
+    );
+
+    setAreaActionTooltip({
+      arrowLeft,
+      description: option.description,
+      id: option.id,
+      left,
+      title: option.title,
+      top,
+    });
+  }, []);
+
+  const hideAreaActionTooltip = useCallback(() => {
+    setAreaActionTooltip(null);
+  }, []);
 
   const placeSingleTile = useCallback(
     (tile, privateAreaId = "") => {
@@ -2342,21 +2749,60 @@ export function VirtualStudySpace({
     [applyWorldUpdate, isOwner, selectedAreaId],
   );
 
-  const toggleSelectedAreaProperty = useCallback(
+  const addSelectedAreaProperty = useCallback(
     (propertyId) => {
+      hideAreaActionTooltip();
+      setCollapsedAreaPropertyIds((current) => ({
+        ...current,
+        [propertyId]: false,
+      }));
+      if (selectedAreaEffects[propertyId]) return;
+
       updateSelectedArea((area) => {
-        const effects = getAreaEffects(area);
-        return {
+        const nextArea = {
           ...area,
           effects: {
-            ...effects,
-            [propertyId]: !effects[propertyId],
+            ...getAreaEffects(area),
+            [propertyId]: true,
           },
         };
+
+        if (propertyId === "openLink") {
+          const openLink = getAreaOpenLinkOptions(area);
+          nextArea.openLinkInteraction = openLink.interaction;
+          nextArea.openLinkNewTab = openLink.newTab;
+        }
+
+        return nextArea;
       });
+    },
+    [hideAreaActionTooltip, selectedAreaEffects, updateSelectedArea],
+  );
+
+  const removeSelectedAreaProperty = useCallback(
+    (propertyId) => {
+      setCollapsedAreaPropertyIds((current) => {
+        const next = { ...current };
+        delete next[propertyId];
+        return next;
+      });
+      updateSelectedArea((area) => ({
+        ...area,
+        effects: {
+          ...getAreaEffects(area),
+          [propertyId]: false,
+        },
+      }));
     },
     [updateSelectedArea],
   );
+
+  const toggleSelectedAreaPropertyCollapse = useCallback((propertyId) => {
+    setCollapsedAreaPropertyIds((current) => ({
+      ...current,
+      [propertyId]: !current[propertyId],
+    }));
+  }, []);
 
   const deleteSelectedArea = useCallback(() => {
     if (!selectedAreaId || !isOwner) return;
@@ -2495,10 +2941,12 @@ export function VirtualStudySpace({
       const start = worldPointToTile(playerRef.current, world.columns, world.rows, world.tileSize);
       const path = findTilePath(start, tile, blockedTiles, world.columns, world.rows);
       if (!path.length) return;
-      playerRef.current.path = path.slice(1).map((step) => tileToWorldPoint(step, world.tileSize));
+      playerRef.current.path = path
+        .slice(1)
+        .map((step) => clampPointToWorldRoom(tileToWorldPoint(step, world.tileSize), world, worldRoom.id));
       followPlayerRef.current = true;
     },
-    [blockedTiles, world.columns, world.rows, world.tileSize],
+    [blockedTiles, world, worldRoom.id],
   );
 
   const handleViewportPointerDown = useCallback(
@@ -2517,8 +2965,42 @@ export function VirtualStudySpace({
         event.button === 0 &&
         activeTool === "area"
       ) {
-        areaDragRef.current = point;
-        setAreaPreview({ x: point.x, y: point.y, width: world.tileSize, height: world.tileSize });
+        const editMode = selectedArea ? getAreaEditModeAtPoint(point, selectedArea, world) : "";
+        if (editMode) {
+          const bounds = getPrivateAreaBounds(selectedArea);
+          const areaRect = getAreaRectFromBounds(bounds, world);
+          areaEditDragRef.current = {
+            areaId: selectedArea.id,
+            mode: editMode,
+            startBounds: bounds,
+            startPoint: point,
+          };
+          setAreaCursorMode(editMode);
+          if (areaRect) {
+            setAreaPreview({
+              ...areaRect.pixel,
+              label: editMode === "move" ? "Move area" : "Resize area",
+            });
+          }
+          dragTileRef.current = null;
+          panRef.current = null;
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+          event.preventDefault();
+          return;
+        }
+
+        const clickedArea = getAreaAtPoint(point, world, worldRoom.id);
+        if (!clickedArea) {
+          areaDragRef.current = point;
+          setAreaCursorMode("draw");
+          setAreaPreview({
+            x: point.x,
+            y: point.y,
+            width: world.tileSize,
+            height: world.tileSize,
+            label: "New area",
+          });
+        }
       }
       dragTileRef.current = tile;
       panRef.current = {
@@ -2531,12 +3013,40 @@ export function VirtualStudySpace({
       };
       event.currentTarget.setPointerCapture?.(event.pointerId);
     },
-    [activeTool, editorOpen, getPointFromEvent, getTileFromEvent, isOwner, world.tileSize],
+    [
+      activeTool,
+      editorOpen,
+      getPointFromEvent,
+      getTileFromEvent,
+      isOwner,
+      selectedArea,
+      world,
+      worldRoom.id,
+    ],
   );
 
   const handleViewportPointerMove = useCallback(
     (event) => {
       updateHover(event);
+      updateAreaCursorFromEvent(event);
+
+      const editDrag = areaEditDragRef.current;
+      if (
+        editDrag &&
+        editorOpen &&
+        activeTool === "area"
+      ) {
+        const point = getPointFromEvent(event);
+        const areaRect = getAreaRectFromEditDrag(editDrag, point, world);
+        if (areaRect) {
+          setAreaPreview({
+            ...areaRect.pixel,
+            label: editDrag.mode === "move" ? "Move area" : "Resize area",
+          });
+        }
+        event.preventDefault();
+        return;
+      }
 
       const areaStart = areaDragRef.current;
       if (
@@ -2560,7 +3070,7 @@ export function VirtualStudySpace({
         currentTile &&
         editorOpen &&
         activeTool !== "area" &&
-        paintMode === "rectangle" &&
+        usesRectangleTileAction(activeTool, paintMode) &&
         !forceSinglePreview &&
         selectedSpecial !== "private"
       ) {
@@ -2599,6 +3109,7 @@ export function VirtualStudySpace({
       selectedLayer,
       selectedSpecial,
       setCameraState,
+      updateAreaCursorFromEvent,
       updateHover,
       world,
     ],
@@ -2608,17 +3119,48 @@ export function VirtualStudySpace({
     (event) => {
       const pan = panRef.current;
       const areaStart = areaDragRef.current;
+      const areaEditDrag = areaEditDragRef.current;
       const startTile = dragTileRef.current;
       const endTile = getTileFromEvent(event);
       const endPoint = getPointFromEvent(event);
       panRef.current = null;
       areaDragRef.current = null;
+      areaEditDragRef.current = null;
       dragTileRef.current = null;
       setDragPreview(null);
       setAreaPreview(null);
+      if (editorOpen && isOwner && activeTool === "area") {
+        const nextEditMode = selectedArea ? getAreaEditModeAtPoint(endPoint, selectedArea, world) : "";
+        setAreaCursorMode(nextEditMode || "draw");
+      } else {
+        setAreaCursorMode("");
+      }
       event.currentTarget.releasePointerCapture?.(event.pointerId);
 
       if (event.target.closest(MAP_OVERLAY_SELECTOR)) {
+        return;
+      }
+      if (areaEditDrag && editorOpen && isOwner && activeTool === "area") {
+        const nextRect = getAreaRectFromEditDrag(areaEditDrag, endPoint, world);
+        const sameBounds =
+          nextRect &&
+          areaEditDrag.startBounds &&
+          nextRect.bounds.col === areaEditDrag.startBounds.col &&
+          nextRect.bounds.row === areaEditDrag.startBounds.row &&
+          nextRect.bounds.width === areaEditDrag.startBounds.width &&
+          nextRect.bounds.height === areaEditDrag.startBounds.height;
+
+        if (nextRect && !sameBounds) {
+          if (areaRectContainsSpawn(nextRect, draftWorldRef.current)) {
+            setNotice("Areas cannot include the spawn tile.");
+            window.setTimeout(() => setNotice(""), 1800);
+          } else {
+            updateSelectedArea((area) => ({
+              ...area,
+              bounds: nextRect.bounds,
+            }));
+          }
+        }
         return;
       }
       if (pan?.dragged || event.button !== 0) return;
@@ -2657,16 +3199,12 @@ export function VirtualStudySpace({
           return;
         }
         if (activeTool === "erase") {
-          const tiles = paintMode === "rectangle" ? rectangleTiles(startTile, endTile) : [endTile];
+          const tiles = rectangleTiles(startTile, endTile);
           applyTileAction(tiles);
           return;
         }
         if (activeTool === "select") {
-          if (
-            paintMode === "rectangle" &&
-            startTile &&
-            (startTile.x !== endTile.x || startTile.y !== endTile.y)
-          ) {
+          if (startTile && (startTile.x !== endTile.x || startTile.y !== endTile.y)) {
             const tiles = rectangleTiles(startTile, endTile);
             setSelectedPlacement(null);
             setSelectedTileKey("");
@@ -2699,8 +3237,10 @@ export function VirtualStudySpace({
       isOwner,
       paintMode,
       selectedAsset,
+      selectedArea,
       selectedLayer,
       selectedSpecial,
+      updateSelectedArea,
       world,
       worldRoom.id,
       worldRoom.tilemap,
@@ -2814,7 +3354,7 @@ export function VirtualStudySpace({
       window.setTimeout(() => setSaveState("idle"), 1200);
     } catch (error) {
       setSaveState("error");
-      setNotice(error?.message || "Unable to save this world right now.");
+      setNotice(error?.message || "Unable to save this domain right now.");
       window.setTimeout(() => setSaveState("idle"), 2200);
     }
   }, [isOwner, onWorldChanged, room?.id]);
@@ -3000,7 +3540,7 @@ export function VirtualStudySpace({
               width: `${areaPreview.width}px`,
             }}
           >
-            <span>New area</span>
+            <span>{areaPreview.label || "New area"}</span>
           </div>
         ) : null}
         {configuredAreas.map((area) => {
@@ -3018,6 +3558,17 @@ export function VirtualStudySpace({
               }}
             >
               <span>{area.name || area.label || "Meeting Area"}</span>
+              {area.id === selectedAreaId ? (
+                <>
+                  {["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((handle) => (
+                    <i className={`limeets-gather-area-resize-handle ${handle}`} key={handle} />
+                  ))}
+                  <div className="limeets-gather-area-gizmo-hint">
+                    <Move size={12} />
+                    Move or resize
+                  </div>
+                </>
+              ) : null}
             </div>
           );
         })}
@@ -3163,6 +3714,10 @@ export function VirtualStudySpace({
   const renderEditorPanel = () => {
     if (!editorOpen || !isOwner) return null;
     const hasCategory = editorPanel === "objects" && selectedCategoryPath;
+    const isEditingArea = editorPanel === "special" && Boolean(selectedArea);
+    const enabledAreaProperties = isEditingArea
+      ? AREA_PROPERTY_OPTIONS.filter((option) => selectedAreaEffects[option.id])
+      : [];
     const panelCopy = hasCategory
       ? {
           title: selectedCategory.label,
@@ -3189,6 +3744,17 @@ export function VirtualStudySpace({
               <ArrowLeft size={16} />
               Back
             </button>
+          ) : isEditingArea ? (
+            <div className="limeets-gather-area-editor-heading">
+              <button
+                className="limeets-gather-back"
+                onClick={() => setSelectedAreaId("")}
+                type="button"
+              >
+                <ArrowLeft size={16} />
+                All Areas
+              </button>
+            </div>
           ) : (
             <div>
               <h2>{panelCopy.title}</h2>
@@ -3196,6 +3762,10 @@ export function VirtualStudySpace({
             </div>
           )}
         </header>
+
+        <div className="limeets-gather-editor-action-slot">
+          {renderCurrentActionPanel("in-editor")}
+        </div>
 
         <div className="limeets-gather-editor-main">
         {editorPanel === "objects" ? (
@@ -3248,27 +3818,76 @@ export function VirtualStudySpace({
 
           {editorPanel === "special" ? (
             <section className="limeets-gather-section limeets-gather-section-first limeets-gather-area-editor">
-              <div className="limeets-gather-area-intro">
-                <h3>{selectedArea ? "Area Properties" : "Draw an Area"}</h3>
-                <p className="limeets-gather-muted">
-                  {selectedArea
-                    ? "Click a property to add or remove it from the selected region."
-                    : "Drag directly on the map to create a region, or click an existing region to edit it."}
-                </p>
-                <button
-                  className="limeets-gather-inline-toggle"
-                  onClick={() => setShowGizmos((visible) => !visible)}
-                  type="button"
-                >
-                  {showGizmos ? <EyeOff size={16} /> : <Eye size={16} />}
-                  {showGizmos ? "Hide Special Layers" : "Show Special Layers"}
-                </button>
-              </div>
+              {!selectedArea ? (
+                <div className="limeets-gather-area-toolbar">
+                  <button
+                    className="limeets-gather-inline-toggle"
+                    onClick={() => setShowGizmos((visible) => !visible)}
+                    type="button"
+                  >
+                    {showGizmos ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showGizmos ? "Hide Special Layers" : "Show Special Layers"}
+                  </button>
+                </div>
+              ) : null}
 
               {selectedArea ? (
-                <>
+                <div className="limeets-gather-area-selected">
+                  <div className="limeets-gather-area-action-grid selected-area-actions" aria-label="Area Functions">
+                    {AREA_PROPERTY_OPTIONS.map((option) => {
+                      const Icon = option.icon;
+                      const propertyId = option.id as keyof typeof DEFAULT_AREA_EFFECTS;
+                      const active = Boolean(selectedAreaEffects[propertyId]);
+                      return (
+                        <button
+                          aria-label={`${option.title}. ${option.description}`}
+                          className={active ? "active" : ""}
+                          key={option.id}
+                          onBlur={hideAreaActionTooltip}
+                          onClick={() => addSelectedAreaProperty(propertyId)}
+                          onFocus={(event) => showAreaActionTooltip(option, event.currentTarget)}
+                          onPointerEnter={(event) => showAreaActionTooltip(option, event.currentTarget)}
+                          onPointerLeave={hideAreaActionTooltip}
+                          type="button"
+                        >
+                          <Icon size={19} />
+                        </button>
+                      );
+                    })}
+                    <button
+                      aria-label="Delete Area. Remove this area from the domain."
+                      className="danger"
+                      onBlur={hideAreaActionTooltip}
+                      onClick={deleteSelectedArea}
+                      onFocus={(event) =>
+                        showAreaActionTooltip(
+                          {
+                            description: "Remove this area from the domain.",
+                            id: "deleteArea",
+                            title: "Delete Area",
+                          },
+                          event.currentTarget,
+                        )
+                      }
+                      onPointerEnter={(event) =>
+                        showAreaActionTooltip(
+                          {
+                            description: "Remove this area from the domain.",
+                            id: "deleteArea",
+                            title: "Delete Area",
+                          },
+                          event.currentTarget,
+                        )
+                      }
+                      onPointerLeave={hideAreaActionTooltip}
+                      type="button"
+                    >
+                      <Trash2 size={19} />
+                    </button>
+                  </div>
+
                   <label className="limeets-gather-field">
-                    <span>Area name</span>
+                    <span>Area Name</span>
                     <input
                       onChange={(event) =>
                         updateSelectedArea(
@@ -3281,175 +3900,197 @@ export function VirtualStudySpace({
                     />
                   </label>
 
-                  <div className="limeets-gather-area-property-palette" aria-label="Area Properties">
-                    {AREA_PROPERTY_OPTIONS.map((option) => {
-                      const Icon = option.icon;
-                      const propertyId = option.id as keyof typeof DEFAULT_AREA_EFFECTS;
-                      const active = Boolean(selectedAreaEffects[propertyId]);
-                      return (
-                        <button
-                          className={active ? "active" : ""}
-                          key={option.id}
-                          onClick={() => toggleSelectedAreaProperty(propertyId)}
-                          type="button"
-                        >
-                          <Icon size={18} />
-                          <span>
-                            <strong>{option.title}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {enabledAreaProperties.length ? (
+                    <div className="limeets-gather-area-property-stack" aria-label="Enabled Area Functions">
+                      {enabledAreaProperties.map((property) => {
+                        const PropertyIcon = property.icon;
+                        const propertyId = property.id as keyof typeof DEFAULT_AREA_EFFECTS;
+                        const hasPropertyBody =
+                          property.id === "entryExit" || property.id === "openLink" || property.id === "teleport";
+                        const collapsed = Boolean(collapsedAreaPropertyIds[propertyId]);
+                        const areaDestination = getAreaDestination(selectedArea, world.activeRoomId);
+                        const openLink = getAreaOpenLinkOptions(selectedArea);
+                        return (
+                          <article className="limeets-gather-area-property-card stacked" data-property={property.id} key={property.id}>
+                            <header className="limeets-gather-area-property-card-header">
+                              {hasPropertyBody ? (
+                                <button
+                                  aria-expanded={!collapsed}
+                                  className="limeets-gather-area-property-collapse"
+                                  onClick={() => toggleSelectedAreaPropertyCollapse(propertyId)}
+                                  type="button"
+                                >
+                                  <PropertyIcon size={18} />
+                                  <span>
+                                    <strong>{property.title}</strong>
+                                  </span>
+                                  {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                                </button>
+                              ) : (
+                                <div className="limeets-gather-area-property-collapse static">
+                                  <PropertyIcon size={18} />
+                                  <span>
+                                    <strong>{property.title}</strong>
+                                  </span>
+                                </div>
+                              )}
+                              <button
+                                aria-label={`Remove ${property.title}`}
+                                className="limeets-gather-area-property-remove"
+                                onClick={() => removeSelectedAreaProperty(property.id)}
+                                type="button"
+                              >
+                                <X size={16} />
+                              </button>
+                            </header>
 
-                  <div className="limeets-gather-area-details">
-                    {selectedAreaEffects.meeting ? (
-                      <article className="limeets-gather-area-property-card">
-                        <Grid2X2 size={17} />
-                        <div>
-                          <strong>Meeting Area</strong>
-                          <span>Members entering this region will join the Limeets voice/video session.</span>
-                        </div>
-                      </article>
-                    ) : null}
+                            {hasPropertyBody && !collapsed ? (
+                              <div className="limeets-gather-area-property-body">
+                                {property.id === "entryExit" ? (
+                                  <FieldSelectMenu
+                                    label="Destination"
+                                    onChange={(value) =>
+                                      updateSelectedArea((area) => ({
+                                        ...area,
+                                        tabId: value,
+                                      }))
+                                    }
+                                    options={navigationOptions}
+                                    value={getAreaNavigationTarget(selectedArea)}
+                                  />
+                                ) : null}
 
-                    {selectedAreaEffects.entryExit ? (
-                      <article className="limeets-gather-area-property-card stacked">
-                        <div>
-                          <strong>Navigate</strong>
-                          <span>Choose the tab members open when they stop moving in this area.</span>
-                        </div>
-                        <FieldSelectMenu
-                          label="Destination"
-                          onChange={(value) =>
-                            updateSelectedArea((area) => ({
-                              ...area,
-                              tabId: value,
-                            }))
-                          }
-                          options={navigationOptions}
-                          value={getAreaNavigationTarget(selectedArea)}
-                        />
-                      </article>
-                    ) : null}
+                                {property.id === "openLink" ? (
+                                  <>
+                                    <FieldSelectMenu
+                                      label="Interaction"
+                                      onChange={(value) =>
+                                        updateSelectedArea((area) => ({
+                                          ...area,
+                                          openLinkInteraction: value,
+                                        }))
+                                      }
+                                      options={OPEN_LINK_INTERACTION_OPTIONS}
+                                      value={openLink.interaction}
+                                    />
+                                    <label className="limeets-gather-field">
+                                      <span>Link URL</span>
+                                      <input
+                                        onChange={(event) =>
+                                          updateSelectedArea(
+                                            (area) => ({ ...area, linkUrl: event.target.value }),
+                                            { snapshot: false },
+                                          )
+                                        }
+                                        placeholder="https://..."
+                                        value={selectedArea.linkUrl || ""}
+                                      />
+                                    </label>
+                                    <div className="limeets-gather-open-link-options">
+                                      <label className="limeets-gather-check-row">
+                                        <input
+                                          checked={openLink.newTab}
+                                          onChange={(event) =>
+                                            updateSelectedArea((area) => ({
+                                              ...area,
+                                              openLinkNewTab: event.target.checked,
+                                            }))
+                                          }
+                                          type="checkbox"
+                                        />
+                                        <span>Open in new tab</span>
+                                      </label>
+                                    </div>
+                                  </>
+                                ) : null}
 
-                    {selectedAreaEffects.openLink ? (
-                      <article className="limeets-gather-area-property-card stacked">
-                        <div>
-                          <strong>Open Link</strong>
-                          <span>Attach a URL interaction to this region.</span>
-                        </div>
-                        <label className="limeets-gather-field">
-                          <span>URL</span>
-                          <input
-                            onChange={(event) =>
-                              updateSelectedArea(
-                                (area) => ({ ...area, linkUrl: event.target.value }),
-                                { snapshot: false },
-                              )
-                            }
-                            placeholder="https://..."
-                            value={selectedArea.linkUrl || ""}
-                          />
-                        </label>
-                      </article>
-                    ) : null}
-
-                    {selectedAreaEffects.teleport ? (
-                      <article className="limeets-gather-area-property-card stacked">
-                        <div>
-                          <strong>Teleport</strong>
-                          <span>Send members to another zone tile when they enter this region.</span>
-                        </div>
-                        <FieldSelectMenu
-                          label="Zone"
-                          onChange={(value) =>
-                            updateSelectedArea((area) => ({
-                              ...area,
-                              destination: {
-                                ...getAreaDestination(area, world.activeRoomId),
-                                roomId: value,
-                              },
-                            }))
-                          }
-                          options={zoneOptions}
-                          value={getAreaDestination(selectedArea, world.activeRoomId).roomId}
-                        />
-                        <div className="limeets-gather-two-cols">
-                          <label className="limeets-gather-field">
-                            <span>X</span>
-                            <input
-                              max={world.columns - 1}
-                              min={0}
-                              onChange={(event) =>
-                                updateSelectedArea((area) => ({
-                                  ...area,
-                                  destination: {
-                                    ...getAreaDestination(area, world.activeRoomId),
-                                    x: Number(event.target.value) || 0,
-                                  },
-                                }))
-                              }
-                              type="number"
-                              value={getAreaDestination(selectedArea, world.activeRoomId).x}
-                            />
-                          </label>
-                          <label className="limeets-gather-field">
-                            <span>Y</span>
-                            <input
-                              max={world.rows - 1}
-                              min={0}
-                              onChange={(event) =>
-                                updateSelectedArea((area) => ({
-                                  ...area,
-                                  destination: {
-                                    ...getAreaDestination(area, world.activeRoomId),
-                                    y: Number(event.target.value) || 0,
-                                  },
-                                }))
-                              }
-                              type="number"
-                              value={getAreaDestination(selectedArea, world.activeRoomId).y}
-                            />
-                          </label>
-                        </div>
-                      </article>
-                    ) : null}
-
-                    {selectedAreaEffects.impassable ? (
-                      <article className="limeets-gather-area-property-card">
-                        <Lock size={17} />
-                        <div>
-                          <strong>Block Movement</strong>
-                          <span>Members cannot walk through this selected region.</span>
-                        </div>
-                      </article>
-                    ) : null}
-                  </div>
-
-                  <button className="limeets-gather-danger" onClick={deleteSelectedArea} type="button">
-                    <Trash2 size={16} />
-                    Delete Area
-                  </button>
-                </>
-              ) : (
-                <div className="limeets-gather-area-list">
-                  {worldAreas.map((area) => (
-                    <button key={area.id} onClick={() => setSelectedAreaId(area.id)} type="button">
-                      <Grid2X2 size={17} />
-                      <span>
-                        <strong>{area.name || area.label || "Area"}</strong>
-                        <small>
-                          {getAreaTiles(area, world).length} tiles - {buildAreaProperties(area).length || "No"} properties
-                        </small>
-                      </span>
-                      <ChevronRight size={16} />
-                    </button>
-                  ))}
-                  {!worldAreas.length ? (
-                    <p className="limeets-gather-empty">No Areas Yet. Drag on the map to create one.</p>
+                                {property.id === "teleport" ? (
+                                  <>
+                                    <FieldSelectMenu
+                                      label="Zone"
+                                      onChange={(value) =>
+                                        updateSelectedArea((area) => ({
+                                          ...area,
+                                          destination: {
+                                            ...getAreaDestination(area, world.activeRoomId),
+                                            roomId: value,
+                                          },
+                                        }))
+                                      }
+                                      options={zoneOptions}
+                                      value={areaDestination.roomId}
+                                    />
+                                    <div className="limeets-gather-two-cols">
+                                      <label className="limeets-gather-field">
+                                        <span>X</span>
+                                        <input
+                                          max={world.columns - 1}
+                                          min={0}
+                                          onChange={(event) =>
+                                            updateSelectedArea((area) => ({
+                                              ...area,
+                                              destination: {
+                                                ...getAreaDestination(area, world.activeRoomId),
+                                                x: Number(event.target.value) || 0,
+                                              },
+                                            }))
+                                          }
+                                          type="number"
+                                          value={areaDestination.x}
+                                        />
+                                      </label>
+                                      <label className="limeets-gather-field">
+                                        <span>Y</span>
+                                        <input
+                                          max={world.rows - 1}
+                                          min={0}
+                                          onChange={(event) =>
+                                            updateSelectedArea((area) => ({
+                                              ...area,
+                                              destination: {
+                                                ...getAreaDestination(area, world.activeRoomId),
+                                                y: Number(event.target.value) || 0,
+                                              },
+                                            }))
+                                          }
+                                          type="number"
+                                          value={areaDestination.y}
+                                        />
+                                      </label>
+                                    </div>
+                                  </>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                    </div>
                   ) : null}
+                </div>
+              ) : (
+                <div className="limeets-gather-area-list-card">
+                  <div className="limeets-gather-area-list-heading">
+                    <strong>Existing Areas</strong>
+                    <span>{worldAreas.length} {worldAreas.length === 1 ? "area" : "areas"}</span>
+                  </div>
+                  <div className="limeets-gather-area-list">
+                    {worldAreas.map((area) => (
+                      <button key={area.id} onClick={() => setSelectedAreaId(area.id)} type="button">
+                        <Grid2X2 size={17} />
+                        <span>
+                          <strong>{area.name || area.label || "Area"}</strong>
+                          <small>
+                            {getAreaTiles(area, world).length} tiles - {buildAreaProperties(area).length || "No"} properties
+                          </small>
+                        </span>
+                        <ChevronRight size={16} />
+                      </button>
+                    ))}
+                    {!worldAreas.length ? (
+                      <p className="limeets-gather-empty">No Areas Yet. Drag on the map to create one.</p>
+                    ) : null}
+                  </div>
                 </div>
               )}
             </section>
@@ -3471,7 +4112,7 @@ export function VirtualStudySpace({
                   ? `${selectedPlacementInfo.asset.label} at ${selectedPlacementInfo.origin.x},${selectedPlacementInfo.origin.y}`
                   : selectedTileKeys.length > 1
                     ? "Rectangle selection is active. Use clear selected tiles to remove everything inside it."
-                    : selectedTileKey || "Use the select tool, then click a tile or object on the map."}
+                    : selectedTileKey || "Click a tile or drag a rectangle to inspect the map."}
               </p>
 
               {selectedPlacementInfo ? (
@@ -3604,19 +4245,30 @@ export function VirtualStudySpace({
 
           {editorPanel === "erase" ? (
             <section className="limeets-gather-section limeets-gather-section-first">
-              <h3>Eraser</h3>
-              <p className="limeets-gather-muted">
-                Click a tile to clear it, or enable rectangle mode to clear a dragged area.
-              </p>
+              <div className="limeets-gather-editor-control-card">
+                <strong>Erase Target</strong>
+                <div className="limeets-gather-eraser-targets compact" aria-label="Erase target">
+                  {ERASER_TARGETS.map((target) => {
+                    const Icon = target.icon;
+                    return (
+                      <button
+                        className={eraserTarget === target.id ? "active" : ""}
+                        key={target.id}
+                        onClick={() => setEraserTarget(target.id)}
+                        type="button"
+                      >
+                        <Icon size={15} />
+                        {target.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </section>
           ) : null}
 
           {editorPanel === "hand" ? (
             <section className="limeets-gather-section limeets-gather-section-first">
-              <h3>Hand Tool</h3>
-              <p className="limeets-gather-muted">
-                Drag the world to pan around without placing tiles or moving your avatar.
-              </p>
             </section>
           ) : null}
 
@@ -3715,11 +4367,26 @@ export function VirtualStudySpace({
 
         </div>
 
+        {areaActionTooltip ? (
+          <div
+            className="limeets-gather-area-action-tooltip"
+            role="tooltip"
+            style={{
+              "--limeets-area-tooltip-arrow-left": `${areaActionTooltip.arrowLeft}px`,
+              left: `${areaActionTooltip.left}px`,
+              top: `${areaActionTooltip.top}px`,
+            }}
+          >
+            <strong>{areaActionTooltip.title}</strong>
+            <small>{areaActionTooltip.description}</small>
+          </div>
+        ) : null}
+
         <footer className="limeets-gather-savebar">
-          <span>{worldSaved ? "Saved" : "Unsaved World Changes"}</span>
+          <span>{worldSaved ? "Saved" : "Unsaved Domain Changes"}</span>
           <button disabled={saveState === "saving"} onClick={saveWorld} type="button">
             <Save size={16} />
-            {saveState === "saving" ? "Saving" : "Save World"}
+            {saveState === "saving" ? "Saving" : "Save Domain"}
           </button>
         </footer>
       </aside>
@@ -3773,193 +4440,186 @@ export function VirtualStudySpace({
     </div>
   );
 
-  const renderCurrentActionPanel = () => {
+  const renderCurrentActionPanel = (variant = "") => {
     if (!editorOpen || !isOwner) return null;
 
-    const selectedSpecialTile = SPECIAL_TILES.find((item) => item.id === selectedSpecial);
-    const SelectedSpecialIcon = selectedSpecialTile?.icon;
-    const eraserTargetConfig = ERASER_TARGETS.find((target) => target.id === eraserTarget) || ERASER_TARGETS[0];
-    const EraserTargetIcon = eraserTargetConfig.icon;
-    const showSelectMode = activeTool === "select" && editorPanel === "inspect";
     const assetSupportsRectangle =
       Boolean(selectedAsset) &&
       activeTool === "paint" &&
       canAssetUseLayer(selectedAsset, selectedLayer) &&
       selectedLayer !== "object";
-    const specialSupportsRectangle = selectedSpecial === "impassable";
-    const showAreaMode = activeTool === "area" && editorPanel === "special";
 
-    if (!selectedAsset && !selectedSpecialTile && activeTool !== "erase" && !showSelectMode && !showAreaMode) return null;
+    if (!selectedAsset || activeTool !== "paint") return null;
 
     return (
-      <div className="limeets-gather-current-action" aria-live="polite">
-        {showAreaMode ? (
-          <>
-            <Grid2X2 className="limeets-gather-current-icon" size={22} />
-            <div className="limeets-gather-current-copy">
-              <strong>{selectedArea ? selectedArea.name || selectedArea.label || "Selected Area" : "Area Editor"}</strong>
-              <span>
-                {selectedArea
-                  ? "Add properties from the right panel, or drag a new region."
-                  : "Drag to create an area, or click an existing one to edit it."}
-              </span>
-            </div>
-            {selectedArea ? (
+      <div className={`limeets-gather-current-action${variant ? ` ${variant}` : ""}`} aria-live="polite">
+        <AssetPreview asset={selectedAsset} className="limeets-gather-current-thumb" />
+        <div className="limeets-gather-current-copy">
+          <strong>{selectedAsset.baseLabel}</strong>
+          <span>
+            {selectedAsset.variantName ? `${selectedAsset.variantName}${selectedAsset.direction ? ` - ${selectedAsset.direction}` : ""}. ` : ""}
+            Placing on {LAYER_LABELS[selectedLayer].toLowerCase()}.
+          </span>
+        </div>
+        <button
+          className="limeets-gather-current-close"
+          onClick={() => {
+            setSelectedAsset(null);
+            setSelectedSpecial("");
+          }}
+          title="Clear Selected Asset"
+          type="button"
+        >
+          <X size={16} />
+        </button>
+        {renderLayerTargetControls()}
+        {assetSupportsRectangle ? renderPaintModeControls("Placement Mode") : null}
+        {selectedColorOptions.length > 1 ? (
+          <div className="limeets-gather-option-row" aria-label="Asset Colours">
+            {selectedColorOptions.map((option) => (
               <button
-                className="limeets-gather-current-close"
-                onClick={() => setSelectedAreaId("")}
-                title="Deselect area"
+                aria-label={option.variantName || option.variantHex || "Variant"}
+                className={option.variantKey === selectedAsset.variantKey ? "selected" : ""}
+                key={`${option.id}-color`}
+                onClick={() => {
+                  const matchingDirection = getAssetDirectionOptions(option).find(
+                    (candidate) => candidate.direction === selectedAsset.direction,
+                  );
+                  handleSelectAsset(matchingDirection || option);
+                }}
+                title={option.variantName || option.variantHex || "Variant"}
                 type="button"
               >
-                <X size={16} />
+                <span
+                  className="limeets-gather-swatch"
+                  style={{ background: option.variantHex || "rgba(255, 255, 255, 0.72)" }}
+                />
               </button>
-            ) : null}
-          </>
+            ))}
+          </div>
         ) : null}
-
-        {showSelectMode ? (
-          <>
-            <MousePointer className="limeets-gather-current-icon" size={22} />
-            <div className="limeets-gather-current-copy">
-              <strong>Select</strong>
-              <span>{paintMode === "rectangle" ? "Drag to select tiles." : "Click to inspect a tile or asset."}</span>
-            </div>
-            {renderPaintModeControls("Select Mode")}
-          </>
-        ) : null}
-
-        {selectedAsset && activeTool === "paint" ? (
-          <>
-            <AssetPreview asset={selectedAsset} className="limeets-gather-current-thumb" />
-            <div className="limeets-gather-current-copy">
-              <strong>{selectedAsset.baseLabel}</strong>
-              <span>
-                {selectedAsset.variantName ? `${selectedAsset.variantName}${selectedAsset.direction ? ` - ${selectedAsset.direction}` : ""}. ` : ""}
-                Placing on {LAYER_LABELS[selectedLayer].toLowerCase()}.
-              </span>
-            </div>
-            <button
-              className="limeets-gather-current-close"
-              onClick={() => {
-                setSelectedAsset(null);
-                setSelectedSpecial("");
-              }}
-                title="Clear Selected Asset"
-              type="button"
-            >
-              <X size={16} />
-            </button>
-            {renderLayerTargetControls()}
-            {assetSupportsRectangle ? renderPaintModeControls("Placement Mode") : null}
-            {selectedColorOptions.length > 1 ? (
-              <div className="limeets-gather-option-row" aria-label="Asset Colours">
-                {selectedColorOptions.map((option) => (
-                  <button
-                    aria-label={option.variantName || option.variantHex || "Variant"}
-                    className={option.variantKey === selectedAsset.variantKey ? "selected" : ""}
-                    key={`${option.id}-color`}
-                    onClick={() => {
-                      const matchingDirection = getAssetDirectionOptions(option).find(
-                        (candidate) => candidate.direction === selectedAsset.direction,
-                      );
-                      handleSelectAsset(matchingDirection || option);
-                    }}
-                    title={option.variantName || option.variantHex || "Variant"}
-                    type="button"
-                  >
-                    <span
-                      className="limeets-gather-swatch"
-                      style={{ background: option.variantHex || "rgba(255, 255, 255, 0.72)" }}
-                    />
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {selectedDirectionOptions.length > 1 ? (
-              <div className="limeets-gather-direction-row" aria-label="Asset Direction">
-                {selectedDirectionOptions.map((option) => (
-                  <button
-                    className={option.direction === selectedAsset.direction ? "selected" : ""}
-                    key={`${option.id}-direction`}
-                    onClick={() => handleSelectAsset(option)}
-                    type="button"
-                  >
-                    {option.direction || "Default"}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </>
-        ) : null}
-
-        {selectedSpecialTile && SelectedSpecialIcon && activeTool === "paint" ? (
-          <>
-            <SelectedSpecialIcon className="limeets-gather-current-icon" size={22} />
-            <div className="limeets-gather-current-copy">
-              <strong>{selectedSpecialTile.title}</strong>
-              <span>{selectedSpecialTile.description}</span>
-            </div>
-            <button
-              className="limeets-gather-current-close"
-              onClick={() => setSelectedSpecial("")}
-              title="Clear special tile"
-              type="button"
-            >
-              <X size={16} />
-            </button>
-            {specialSupportsRectangle ? renderPaintModeControls("Special Tile Mode") : null}
-          </>
-        ) : null}
-
-        {activeTool === "erase" ? (
-          <>
-            <EraserTargetIcon className="limeets-gather-current-icon" size={22} />
-            <div className="limeets-gather-current-copy">
-              <strong>Erase {eraserTargetConfig.label}</strong>
-              <span>{paintMode === "rectangle" ? "Drag to clear a rectangle." : "Click a tile to clear it."}</span>
-            </div>
-            <button
-              className="limeets-gather-current-close"
-              onClick={() => {
-                setActiveTool("select");
-                setEditorPanel("inspect");
-              }}
-              title="Stop erasing"
-              type="button"
-            >
-              <X size={16} />
-            </button>
-            {renderPaintModeControls("Erase Mode")}
-            <div className="limeets-gather-eraser-targets compact" aria-label="Erase target">
-              {ERASER_TARGETS.map((target) => {
-                const Icon = target.icon;
-                return (
-                  <button
-                    className={eraserTarget === target.id ? "active" : ""}
-                    key={target.id}
-                    onClick={() => setEraserTarget(target.id)}
-                    type="button"
-                  >
-                    <Icon size={15} />
-                    {target.label}
-                  </button>
-                );
-              })}
-            </div>
-          </>
+        {selectedDirectionOptions.length > 1 ? (
+          <div className="limeets-gather-direction-row" aria-label="Asset Direction">
+            {selectedDirectionOptions.map((option) => (
+              <button
+                className={option.direction === selectedAsset.direction ? "selected" : ""}
+                key={`${option.id}-direction`}
+                onClick={() => handleSelectAsset(option)}
+                type="button"
+              >
+                {option.direction || "Default"}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
     );
   };
 
+  const renderAreaLinkPrompt = () => {
+    if (!activeAreaLink || editorOpen) return null;
+
+    return (
+      <div className="limeets-gather-current-action limeets-gather-link-action" aria-live="polite">
+        <ExternalLink className="limeets-gather-current-icon" size={22} />
+        <div className="limeets-gather-current-copy">
+          <strong>{activeAreaLink.label || "Open Link"}</strong>
+          <span>This area has a linked page.</span>
+        </div>
+        <button
+          className="limeets-gather-link-open"
+          onClick={() => openAreaLink(activeAreaLink.url, activeAreaLink.newTab)}
+          type="button"
+        >
+          Open Link
+        </button>
+      </div>
+    );
+  };
+
+  const renderMeetingAreaSpotlight = () => {
+    if (editorOpen || !activeMeetingArea) return null;
+
+    const areaRect = getAreaRectFromBounds(getPrivateAreaBounds(activeMeetingArea), world);
+    const rect = areaRect?.pixel;
+    if (!rect) return null;
+
+    const right = rect.x + rect.width;
+    const bottom = rect.y + rect.height;
+    const segments = [
+      { id: "top", left: 0, top: 0, width: world.width, height: rect.y },
+      { id: "bottom", left: 0, top: bottom, width: world.width, height: Math.max(0, world.height - bottom) },
+      { id: "left", left: 0, top: rect.y, width: rect.x, height: rect.height },
+      { id: "right", left: right, top: rect.y, width: Math.max(0, world.width - right), height: rect.height },
+    ].filter((segment) => segment.width > 0 && segment.height > 0);
+
+    return (
+      <div className="limeets-gather-meeting-spotlight" aria-hidden="true">
+        {segments.map((segment) => (
+          <span
+            key={segment.id}
+            style={{
+              height: `${segment.height}px`,
+              left: `${segment.left}px`,
+              top: `${segment.top}px`,
+              width: `${segment.width}px`,
+            }}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  const renderMeetingAreaVisibilityLayer = () => {
+    if (editorOpen || (!showMeetingAreas && !activeMeetingAreaId) || !meetingAreas.length) return null;
+
+    return (
+      <div className="limeets-gather-meeting-areas-layer" aria-hidden="true">
+        {meetingAreas.map((area) => {
+          const areaRect = getAreaRectFromBounds(getPrivateAreaBounds(area), world);
+          const rect = areaRect?.pixel;
+          if (!rect) return null;
+
+          return (
+            <span
+              className={`limeets-gather-meeting-area-highlight${
+                area.id === activeMeetingAreaId ? " active" : ""
+              }`}
+              key={area.id}
+              style={{
+                height: `${rect.height}px`,
+                left: `${rect.x}px`,
+                top: `${rect.y}px`,
+                width: `${rect.width}px`,
+              }}
+            >
+              <span>{area.name || area.label || "Meeting Area"}</span>
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const areaCursorClass = getAreaCursorClass(
+    editorOpen && isOwner && activeTool === "area" ? areaCursorMode || "draw" : "",
+  );
+  const viewportCursorClass =
+    editorOpen && isOwner && editorPanel === "inspect" && activeTool === "select"
+      ? "limeets-select-cursor"
+      : areaCursorClass;
+
   return (
     <div className={`limeets-gather-root ${editorOpen && isOwner ? "editor-open" : ""}`}>
       <div
-        className="limeets-gather-viewport"
+        className={`limeets-gather-viewport${viewportCursorClass ? ` ${viewportCursorClass}` : ""}`}
         onContextMenu={handleViewportContextMenu}
         onDoubleClick={handleViewportDoubleClick}
         onPointerDown={handleViewportPointerDown}
-        onPointerLeave={() => setHoveredTile(null)}
+        onPointerLeave={() => {
+          setHoveredTile(null);
+          setAreaCursorMode("");
+        }}
         onPointerMove={handleViewportPointerMove}
         onPointerUp={handleViewportPointerUp}
         onWheel={handleWheel}
@@ -4019,25 +4679,30 @@ export function VirtualStudySpace({
               status={currentProfileStatus}
             />
           ) : null}
+
+          {renderMeetingAreaSpotlight()}
+          {renderMeetingAreaVisibilityLayer()}
         </div>
 
         <div className="limeets-gather-hud">
-          <strong>{worldRoom.name}</strong>
+          <strong>{worldRoomDisplayName}</strong>
           <span>
             X {hoveredTile?.x ?? "-"} / Y {hoveredTile?.y ?? "-"}
           </span>
-          <span>{roomActivityMembers.length || 1} active</span>
-          <span>{spaceContext?.activeChatChannel || "#general"}</span>
         </div>
 
-        {notice ? <div className="limeets-gather-toast">{notice}</div> : null}
+        {notice ? (
+          <div className="limeets-gather-toast" role="status" aria-live="polite">
+            {notice}
+          </div>
+        ) : null}
 
-        {renderCurrentActionPanel()}
+        {renderAreaLinkPrompt()}
 
         {isOwner && !editorOpen ? (
           <button className="limeets-gather-open-editor" onClick={() => setEditorOpen(true)} type="button">
             <Settings2 size={17} />
-            Customise World
+            Customise
           </button>
         ) : null}
 
@@ -4096,9 +4761,6 @@ export function VirtualStudySpace({
               >
                 <Eraser size={20} />
               </ToolButton>
-            </div>
-
-            <div className="limeets-gather-tool-group">
               <ToolButton
                 active={editorPanel === "special" && activeTool === "area"}
                 label="Area Editor"
@@ -4112,9 +4774,12 @@ export function VirtualStudySpace({
               >
                 <Grid2X2 size={20} />
               </ToolButton>
+            </div>
+
+            <div className="limeets-gather-tool-group">
               <ToolButton
                 active={editorPanel === "rooms"}
-                label="World Setup & Zones"
+                label="Setup & Zones"
                 onClick={() => {
                   setEditorPanel("rooms");
                   setSelectedCategoryPath("");
@@ -4137,34 +4802,47 @@ export function VirtualStudySpace({
 
         <div className="limeets-gather-controls" aria-label="Limeets controls">
           <button
-            aria-label="Show my location"
+            aria-label="Go to my location"
+            data-tooltip="Go To My Location"
             onClick={() => {
               followPlayerRef.current = true;
               if (playerRef.current) centerCameraOn(playerRef.current);
             }}
-            title="Show my location"
             type="button"
           >
-            <Navigation size={18} />
+            <MapPinned size={18} />
+          </button>
+          <button
+            aria-label={showMeetingAreas ? "Hide Meeting Areas" : "Show Meeting Areas"}
+            aria-pressed={showMeetingAreas}
+            className={showMeetingAreas ? "active" : ""}
+            data-tooltip={showMeetingAreas ? "Hide Meeting Areas" : "Show Meeting Areas"}
+            onClick={toggleMeetingAreaVisibility}
+            type="button"
+          >
+            <span className={`limeets-gather-vector-icon${showMeetingAreas ? "" : " off"}`} aria-hidden="true">
+              <VectorSquare size={18} />
+            </span>
           </button>
           <button
             aria-label="Zoom in"
+            data-tooltip="Zoom In"
             onClick={() => zoomAt(cameraRef.current.scale * CAMERA_ZOOM_STEP)}
-            title="Zoom in"
             type="button"
           >
             <Plus size={18} />
           </button>
           <button
             aria-label="Zoom out"
+            data-tooltip="Zoom Out"
             onClick={() => zoomAt(cameraRef.current.scale / CAMERA_ZOOM_STEP)}
-            title="Zoom out"
             type="button"
           >
             <Minus size={18} />
           </button>
           <button
             aria-label="Fit zone"
+            data-tooltip="Fit Zone"
             onClick={() => {
               if (Math.abs(cameraRef.current.scale - fitScale) < 0.01 && playerRef.current) {
                 centerCameraOn(playerRef.current, Math.min(1.5, CAMERA_MAX_SCALE));
@@ -4178,12 +4856,18 @@ export function VirtualStudySpace({
                 setCameraState(nextCamera);
               }
             }}
-            title="Fit zone"
             type="button"
           >
             {Math.abs(camera.scale - fitScale) < 0.01 ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
           </button>
-          <button aria-label="More options" disabled title="More options" type="button">
+          <button
+            aria-disabled="true"
+            aria-label="More options"
+            className="disabled"
+            data-tooltip="More Options"
+            onClick={(event) => event.preventDefault()}
+            type="button"
+          >
             <MoreHorizontal size={18} />
           </button>
         </div>

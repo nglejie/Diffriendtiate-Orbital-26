@@ -3,6 +3,8 @@ import { makeTileKey } from "./worldConfig.ts";
 export const TILE_SIZE = 32;
 export const AVATAR_FRAME_WIDTH = 32;
 export const AVATAR_FRAME_HEIGHT = 32;
+export const AVATAR_WORLD_RENDER_WIDTH = 48;
+export const AVATAR_WORLD_RENDER_HEIGHT = 58;
 export const AVATAR_SPEED_PX_PER_SECOND = 190;
 export const AVATAR_RUN_MULTIPLIER = 1.8;
 export const AVATAR_ANIMATION_FPS = 10;
@@ -44,6 +46,26 @@ export function worldPointToTile(point, columns, rows, tileSize = TILE_SIZE) {
   return {
     x: Math.min(columns - 1, Math.max(0, Math.floor(point.x / tileSize))),
     y: Math.min(rows - 1, Math.max(0, Math.floor(point.y / tileSize))),
+  };
+}
+
+export function clampAvatarWorldPoint(point, columns, rows, tileSize = TILE_SIZE) {
+  const safeColumns = Math.max(1, Number(columns) || 1);
+  const safeRows = Math.max(1, Number(rows) || 1);
+  const safeTileSize = Math.max(1, Number(tileSize) || TILE_SIZE);
+  const worldWidth = safeColumns * safeTileSize;
+  const worldHeight = safeRows * safeTileSize;
+  const halfAvatarWidth = AVATAR_WORLD_RENDER_WIDTH / 2;
+  const minX = Math.min(worldWidth / 2, halfAvatarWidth);
+  const maxX = Math.max(minX, worldWidth - halfAvatarWidth);
+  const minY = Math.min(worldHeight, AVATAR_WORLD_RENDER_HEIGHT);
+  const maxY = Math.max(minY, worldHeight);
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+
+  return {
+    x: Math.min(maxX, Math.max(minX, Number.isFinite(x) ? x : minX)),
+    y: Math.min(maxY, Math.max(minY, Number.isFinite(y) ? y : minY)),
   };
 }
 

@@ -664,6 +664,10 @@ function removeSocketMeetingPresence(socket, targetRoomId = null, targetAreaId =
 }
 
 function canViewRoom(room, userId) {
+  return isMember(room, userId);
+}
+
+function canDiscoverRoom(room, userId) {
   return room.visibility === "public" || isMember(room, userId);
 }
 
@@ -752,10 +756,12 @@ function resourceDto(db, resource) {
     ...resource,
     folder: resource.folder || "General",
     conversionStatus,
+    deletedBy: publicUser(db.users.find((user) => user.id === resource.deletedById)),
     fileUrl,
     metadata: resource.metadata || {},
     pdfUrl,
     resourceType,
+    updatedAt: resource.updatedAt || resource.createdAt,
     uploader: publicUser(db.users.find((user) => user.id === resource.uploaderId)),
   };
 }
@@ -780,6 +786,7 @@ function publicRoomIntegrations(room) {
           connectedAt: canvas.connectedAt || "",
           lastSyncedAt: canvas.lastSyncedAt || "",
           importedDeadlineCount: Number(canvas.importedDeadlineCount) || 0,
+          importedFileCount: Number(canvas.importedFileCount) || 0,
         }
       : null,
   };
@@ -1106,9 +1113,15 @@ function normalizeWorldPrivateArea(value, index, columns, rows) {
     },
     properties,
     linkUrl: String(value.linkUrl || value.url || "").trim().slice(0, 500),
+    openLinkInteraction: normalizeWorldOpenLinkInteraction(value.openLinkInteraction),
+    openLinkNewTab: value.openLinkNewTab === true,
     tabId: normalizeWorldAreaTabId(value.tabId || value.targetTabId || value.portal?.tabId),
     destination: destination || { roomId, x: 0, y: 0 },
   };
+}
+
+function normalizeWorldOpenLinkInteraction(value) {
+  return String(value || "").trim() === "enter" ? "enter" : "action";
 }
 
 function normalizeWorldAreaTabId(value) {
@@ -1359,8 +1372,59 @@ function normalizeWorldConfig(value) {
 }
 
 function normalizeFolder(value) {
-  const folder = String(value || "General").trim();
-  return folder.slice(0, 48) || "General";
+  const folder = String(value || "General")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("/");
+  return folder.slice(0, 180) || "General";
+}
+
+function normalizeOptionalFolder(value) {
+  return String(value || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("/")
+    .slice(0, 180);
+}
+
+function isCanvasFolderPath(value) {
+  const folder = normalizeOptionalFolder(value);
+  return folder === "Canvas" || folder.startsWith("Canvas/");
+}
+
+function isCanvasSyncedResource(resource) {
+  return resource?.metadata?.source === "canvas-file" || isCanvasFolderPath(resource?.folder);
+}
+
+const RESOURCE_FILE_SIZE_LIMIT = 12 * 1024 * 1024;
+const resourceFileSizeLabel = "12 MB";
+const blockedResourceUploadExtensions = new Set([
+  ".app",
+  ".bat",
+  ".cmd",
+  ".com",
+  ".cpl",
+  ".dll",
+  ".dmg",
+  ".exe",
+  ".hta",
+  ".jar",
+  ".js",
+  ".jse",
+  ".msi",
+  ".ps1",
+  ".scr",
+  ".sh",
+  ".vb",
+  ".vbs",
+  ".wsf",
+]);
+
+function isBlockedResourceUpload(file) {
+  const extension = path.extname(file?.originalname || "").toLowerCase();
+  return blockedResourceUploadExtensions.has(extension);
 }
 
 const resourceTypeRules = [
@@ -2147,6 +2211,63 @@ function safeUploadPath(storageName) {
   return targetPath;
 }
 
+function canManageResource(room, resource, userId) {
+  return Boolean(room && resource && (room.ownerId === userId || resource.uploaderId === userId));
+}
+
+function emitResourceEvent(db, roomId, event, resource) {
+  io.to(`room:${roomId}`).emit(event, {
+    roomId,
+    resource: resource ? resourceDto(db, resource) : null,
+  });
+}
+
+async function purgeExpiredDeletedResources(db) {
+  const now = Date.now();
+  const beforeCount = db.resources.length;
+
+  db.resources = db.resources.filter((resource) => {
+    if (!resource.deletedAt) return true;
+    const deletedAtMs = Date.parse(resource.deletedAt);
+    if (!Number.isFinite(deletedAtMs)) return true;
+
+    const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
+    const retentionDays = Math.min(
+      365,
+      Math.max(1, Number(room?.resourceDeleteRetentionDays || 30) || 30),
+    );
+    if (now - deletedAtMs < retentionDays * 24 * 60 * 60 * 1000) return true;
+
+    if (resource.type === "file") {
+      if (resource.storageName) fs.rmSync(safeUploadPath(resource.storageName), { force: true });
+      if (resource.pdfPath) fs.rmSync(safeUploadPath(resource.pdfPath), { force: true });
+    }
+    return false;
+  });
+
+  return db.resources.length !== beforeCount;
+}
+
+function sanitizeResourceMetadataPatch(value) {
+  const metadata = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const patch: any = {};
+
+  if (metadata.resourceType != null || metadata.type != null) {
+    const resourceType = String(metadata.resourceType || metadata.type || "Reference").trim().slice(0, 60);
+    patch.resourceType = resourceType || "Reference";
+    patch.type = patch.resourceType;
+  }
+  if (metadata.topic != null) patch.topic = String(metadata.topic || "").trim().slice(0, 120);
+  if (Array.isArray(metadata.tags)) {
+    patch.tags = metadata.tags
+      .map((tag) => String(tag || "").trim())
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+
+  return patch;
+}
+
 /**
  * Backfills hashes/metadata for older file resources before dedupe checks run.
  * This keeps existing rooms compatible without requiring a one-off migration script.
@@ -2591,6 +2712,107 @@ async function fetchCanvasJson(host, accessToken, pathname, params = {}) {
   }
 }
 
+async function fetchCanvasJsonPages(host, accessToken, pathname, params = {}) {
+  const pages = [];
+  let nextUrl = new URL(`https://${host}${pathname}`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value != null && value !== "") nextUrl.searchParams.set(key, String(value));
+  });
+
+  for (let page = 0; page < 30 && nextUrl; page += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 18_000);
+
+    try {
+      const response = await fetch(nextUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const error = new Error(payload?.message || "Canvas did not return a successful response.") as Error & {
+          status?: number;
+        };
+        error.status = response.status === 401 || response.status === 403 ? 401 : 502;
+        throw error;
+      }
+
+      if (Array.isArray(payload)) pages.push(...payload);
+      else if (payload) pages.push(payload);
+
+      const linkHeader = response.headers.get("link") || "";
+      const nextMatch = linkHeader
+        .split(",")
+        .map((part) => part.trim())
+        .find((part) => /rel="?next"?/i.test(part))
+        ?.match(/<([^>]+)>/);
+      nextUrl = nextMatch ? new URL(nextMatch[1]) : null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return pages;
+}
+
+function canvasFolderName(folder) {
+  return String(folder?.name || folder?.full_name || "Folder")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "Folder";
+}
+
+async function fetchCanvasCourseFiles(host, accessToken, courseId) {
+  const rootFolder = await fetchCanvasJson(
+    host,
+    accessToken,
+    `/api/v1/courses/${encodeURIComponent(courseId)}/folders/root`,
+  );
+  const files = [];
+
+  async function visitFolder(folder, parts) {
+    const folderId = String(folder?.id || "");
+    if (!folderId) return;
+
+    const [folderFiles, childFolders] = await Promise.all([
+      fetchCanvasJsonPages(host, accessToken, `/api/v1/folders/${encodeURIComponent(folderId)}/files`, {
+        per_page: 100,
+      }),
+      fetchCanvasJsonPages(host, accessToken, `/api/v1/folders/${encodeURIComponent(folderId)}/folders`, {
+        per_page: 100,
+      }),
+    ]);
+
+    for (const file of folderFiles) {
+      const title = String(file?.display_name || file?.filename || file?.name || "Canvas File")
+        .trim()
+        .slice(0, 180);
+      const url = String(file?.url || file?.html_url || "").trim();
+      if (!title || !url) continue;
+      files.push({
+        id: String(file?.id || file?.uuid || `${parts.join("/")}:${title}`),
+        title,
+        folder: normalizeFolder(["Canvas", ...parts].join("/")),
+        url,
+        mimeType: String(file?.["content-type"] || file?.content_type || ""),
+        size: Number(file?.size) || 0,
+        updatedAt: normalizeOptionalIso(file?.updated_at || file?.modified_at) || new Date().toISOString(),
+      });
+    }
+
+    for (const childFolder of childFolders) {
+      await visitFolder(childFolder, [...parts, canvasFolderName(childFolder)]);
+    }
+  }
+
+  await visitFolder(rootFolder, []);
+  return files;
+}
+
 const storage = multer.diskStorage({
   destination: uploadDir,
   filename: (_req, file, callback) => {
@@ -2602,7 +2824,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 12 * 1024 * 1024,
+    fileSize: RESOURCE_FILE_SIZE_LIMIT,
   },
 });
 
@@ -2614,6 +2836,34 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+const activeSocketByUser = new Map();
+
+function registerSingleActiveUserSocket(socket) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  const previousSocketId = activeSocketByUser.get(userId);
+  if (previousSocketId && previousSocketId !== socket.id) {
+    const previousSocket = io.sockets.sockets.get(previousSocketId);
+    if (previousSocket) {
+      previousSocket.emit("session:replaced", {
+        message: "This account is now active in another tab or window.",
+      });
+      previousSocket.disconnect(true);
+    }
+  }
+
+  activeSocketByUser.set(userId, socket.id);
+}
+
+function clearSingleActiveUserSocket(socket) {
+  const userId = socket.user?.id;
+  if (!userId) return;
+
+  if (activeSocketByUser.get(userId) === socket.id) {
+    activeSocketByUser.delete(userId);
+  }
+}
 
 function refreshLiveUserProfile(user) {
   const profile = publicUser(user);
@@ -2653,6 +2903,29 @@ async function emitRoomUpdated(db, room) {
     if (socket.rooms.has(roomKey)) {
       socket.emit("room:updated", roomDto(db, room, socket.user?.id));
     }
+  });
+}
+
+function emitCoordinateUpdated(db, room) {
+  io.to(`room:${room.id}`).emit("coordinate:updated", {
+    roomId: room.id,
+    coordinate: coordinateDto(db, room),
+  });
+}
+
+function emitSessionsUpdated(db, room) {
+  const roomKey = `room:${room.id}`;
+  io.sockets.sockets.forEach((socket) => {
+    if (!socket.rooms.has(roomKey)) return;
+
+    socket.emit("sessions:updated", {
+      roomId: room.id,
+      sessions: db.sessions
+        .filter((session) => session.roomId === room.id)
+        .filter((session) => isSessionVisibleToUser(session, socket.user?.id))
+        .map((session) => sessionDto(db, session))
+        .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt))),
+    });
   });
 }
 
@@ -2762,7 +3035,7 @@ app.get("/api/rooms", requireAuth, async (req, res) => {
   const query = String(req.query.search || "").trim().toLowerCase();
 
   const rooms = db.rooms
-    .filter((room) => canViewRoom(room, req.user.id))
+    .filter((room) => canDiscoverRoom(room, req.user.id))
     .filter((room) => {
       if (!query) return true;
       return [
@@ -2831,7 +3104,7 @@ app.get("/api/rooms/:roomId", requireAuth, async (req, res) => {
   if (!room) return;
 
   if (!canViewRoom(room, req.user.id)) {
-    return res.status(403).json({ message: "This room is private. Use an invite link to join." });
+    return res.status(403).json({ message: "Use an invite link to join this world." });
   }
 
   res.json({ room: roomDto(db, room, req.user.id) });
@@ -3195,6 +3468,42 @@ app.post("/api/rooms/:roomId/join", requireAuth, async (req, res) => {
   res.json({ room: roomDto(db, room, req.user.id) });
 });
 
+app.post("/api/rooms/:roomId/leave", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = findRoomOr404(db, req.params.roomId, res);
+  if (!room) return;
+
+  if (room.ownerId === req.user.id) {
+    return res.status(400).json({
+      message: "World owners cannot leave their own world.",
+    });
+  }
+
+  if (!isMember(room, req.user.id)) {
+    return res.status(400).json({ message: "You are not a member of this world." });
+  }
+
+  room.memberIds = (room.memberIds || []).filter((memberId) => memberId !== req.user.id);
+  room.updatedAt = new Date().toISOString();
+  await writeDb(db);
+
+  io.sockets.sockets.forEach((socket) => {
+    if (socket.user?.id !== req.user.id) return;
+    removeSocketRoomActivity(socket, room.id);
+    removeSocketSpacePresence(socket, room.id);
+    removeSocketMeetingPresence(socket, room.id);
+    socket.leave(`room:${room.id}`);
+  });
+
+  await emitRoomUpdated(db, room);
+  io.to(`room:${room.id}`).emit("room:member-left", {
+    roomId: room.id,
+    userId: req.user.id,
+  });
+
+  res.json({ room: roomDto(db, room, req.user.id) });
+});
+
 app.post("/api/invites/:inviteCode/join", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = db.rooms.find((candidate) => candidate.inviteCode === req.params.inviteCode);
@@ -3206,11 +3515,11 @@ app.post("/api/invites/:inviteCode/join", requireAuth, async (req, res) => {
   if (room.visibility === "private" && !isMember(room, req.user.id)) {
     const password = String(req.body?.password || "");
     if (!password) {
-      return res.status(403).json({ message: "Private room password is required." });
+      return res.status(403).json({ message: "Private world password is required." });
     }
 
     if (!room.passwordHash || !(await bcrypt.compare(password, room.passwordHash))) {
-      return res.status(403).json({ message: "Incorrect private room password." });
+      return res.status(403).json({ message: "Incorrect private world password." });
     }
   }
 
@@ -3272,6 +3581,7 @@ app.get("/api/rooms/:roomId/resources", requireAuth, async (req, res) => {
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
+  const purgedExpiredResources = await purgeExpiredDeletedResources(db);
   const includeDeleted = req.query.includeDeleted === "true";
   const deletedOnly = req.query.deleted === "true";
   const roomResources = db.resources.filter((resource) => {
@@ -3287,9 +3597,12 @@ app.get("/api/rooms/:roomId/resources", requireAuth, async (req, res) => {
   }
   if (conversionStateChanged) {
     await writeDb(db);
+  } else if (purgedExpiredResources) {
+    await writeDb(db);
   }
 
   const resources = roomResources
+    .filter((resource) => db.resources.some((candidate) => candidate.id === resource.id))
     .map((resource) => resourceDto(db, resource))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 
@@ -3304,6 +3617,10 @@ app.post("/api/rooms/:roomId/resources/url", requireAuth, async (req, res) => {
   const title = String(req.body.title || "").trim();
   const url = String(req.body.url || "").trim();
   const folder = normalizeFolder(req.body.folder);
+
+  if (isCanvasFolderPath(folder)) {
+    return res.status(403).json({ message: "Canvas folders are managed by sync and cannot be changed here." });
+  }
 
   if (!title || !/^https?:\/\//i.test(url)) {
     return res.status(400).json({ message: "Provide a title and a valid http(s) URL." });
@@ -3324,10 +3641,12 @@ app.post("/api/rooms/:roomId/resources/url", requireAuth, async (req, res) => {
       url,
     }),
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 
   db.resources.push(resource);
   await writeDb(db);
+  emitResourceEvent(db, room.id, "resource:new", resource);
   res.status(201).json({ resource: resourceDto(db, resource) });
 });
 
@@ -3344,12 +3663,24 @@ app.post(
       return res.status(400).json({ message: "Choose a file to upload." });
     }
 
+    if (isCanvasFolderPath(req.body.folder)) {
+      fs.rmSync(safeUploadPath(req.file.filename), { force: true });
+      return res.status(403).json({ message: "Canvas folders are managed by sync and cannot be changed here." });
+    }
+
     await ensureRoomResourceFileMetadata(db, room);
 
     const uploadedPath = safeUploadPath(req.file.filename);
     if (req.body.purpose === "document-channel" && !isDocumentChannelUploadFile(req.file)) {
       fs.rmSync(uploadedPath, { force: true });
       return res.status(400).json({ message: documentChannelFileTypeMessage });
+    }
+    if (isBlockedResourceUpload(req.file)) {
+      fs.rmSync(uploadedPath, { force: true });
+      const extension = path.extname(req.file.originalname || "").toLowerCase() || "that file type";
+      return res.status(400).json({
+        message: `Executable or script files (${extension}) cannot be uploaded. Upload documents, images, archives, or other study materials instead.`,
+      });
     }
 
     const contentHash = await hashUploadedFile(uploadedPath);
@@ -3358,6 +3689,7 @@ app.post(
       (resource) =>
         resource.roomId === room.id &&
         resource.type === "file" &&
+        !isCanvasSyncedResource(resource) &&
         resource.contentHash &&
         resource.contentHash === contentHash,
     );
@@ -3371,7 +3703,9 @@ app.post(
         // Re-uploading an identical deleted file restores the canonical record
         // instead of creating a hidden duplicate with the same content hash.
         existingResource.deletedAt = "";
+        existingResource.deletedById = "";
         existingResource.folder = normalizeFolder(req.body.folder);
+        existingResource.originalFolder = "";
         existingResource.updatedAt = new Date().toISOString();
         existingChanged = true;
       }
@@ -3380,6 +3714,7 @@ app.post(
       }
       if (existingChanged) {
         await writeDb(db);
+        emitResourceEvent(db, room.id, "resource:updated", existingResource);
       }
       return res.status(200).json({
         resource: resourceDto(db, existingResource),
@@ -3390,6 +3725,7 @@ app.post(
     }
 
     const title = String(req.body.title || req.file.originalname).trim();
+    const now = new Date().toISOString();
     const resource = {
       id: createId("res"),
       roomId: room.id,
@@ -3414,11 +3750,15 @@ app.post(
         url: `/uploads/${req.file.filename}`,
       }),
       url: `/uploads/${req.file.filename}`,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
+      originalFolder: "",
+      deletedById: "",
     };
 
     db.resources.push(resource);
     await writeDb(db);
+    emitResourceEvent(db, room.id, "resource:new", resource);
 
     if (resourceType === "docx" || resourceType === "pptx") {
       res.status(201).json({ resource: resourceDto(db, resource) });
@@ -3465,6 +3805,78 @@ app.get("/api/resources/:resourceId/file", requireAuth, async (req, res) => {
   return res.sendFile(filePath);
 });
 
+app.patch("/api/resources/:resourceId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const resource = db.resources.find((candidate) => candidate.id === req.params.resourceId);
+
+  if (!resource || resource.deletedAt) {
+    return res.status(404).json({ message: "Resource not found." });
+  }
+
+  const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
+  if (!canManageResource(room, resource, req.user.id)) {
+    return res.status(403).json({ message: "You cannot edit this resource." });
+  }
+
+  const nextTitle = String(req.body.title ?? "").trim();
+  const nextFolder =
+    req.body.folder == null ? resource.folder || "General" : normalizeFolder(req.body.folder);
+  const metadataPatch = sanitizeResourceMetadataPatch(req.body.metadata);
+
+  if (isCanvasSyncedResource(resource) || isCanvasFolderPath(nextFolder)) {
+    return res.status(403).json({ message: "Canvas resources are managed by sync and cannot be edited or moved." });
+  }
+
+  if (req.body.title != null && !nextTitle) {
+    return res.status(400).json({ message: "Resource name cannot be empty." });
+  }
+
+  if (nextTitle) resource.title = nextTitle.slice(0, 180);
+  resource.folder = nextFolder;
+  resource.metadata = {
+    ...(resource.metadata || {}),
+    ...metadataPatch,
+  };
+  resource.updatedAt = new Date().toISOString();
+
+  await writeDb(db);
+  emitResourceEvent(db, room.id, "resource:updated", resource);
+  res.json({ resource: resourceDto(db, resource) });
+});
+
+app.patch("/api/rooms/:roomId/resources/folders", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomOwner(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const from = normalizeFolder(req.body.from);
+  const to = normalizeFolder(req.body.to);
+  if (!from || from === "General" || !to || from === to) {
+    return res.status(400).json({ message: "Choose a valid folder to move." });
+  }
+  if (isCanvasFolderPath(from) || isCanvasFolderPath(to)) {
+    return res.status(403).json({ message: "Canvas folders are managed by sync and cannot be moved." });
+  }
+
+  const now = new Date().toISOString();
+  const movedResources = [];
+  for (const resource of db.resources) {
+    if (resource.roomId !== room.id || resource.deletedAt) continue;
+    const folder = normalizeFolder(resource.folder);
+    if (folder !== from && !folder.startsWith(`${from}/`)) continue;
+    resource.folder = folder === from ? to : `${to}/${folder.slice(from.length + 1)}`;
+    resource.updatedAt = now;
+    movedResources.push(resource);
+  }
+
+  await writeDb(db);
+  io.to(`room:${room.id}`).emit("resources:updated", {
+    roomId: room.id,
+    resources: movedResources.map((resource) => resourceDto(db, resource)),
+  });
+  res.json({ resources: movedResources.map((resource) => resourceDto(db, resource)) });
+});
+
 app.delete("/api/resources/:resourceId", requireAuth, async (req, res) => {
   const db = await readDb();
   const resource = db.resources.find(
@@ -3476,13 +3888,19 @@ app.delete("/api/resources/:resourceId", requireAuth, async (req, res) => {
   }
 
   const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
-  if (!room || (room.ownerId !== req.user.id && resource.uploaderId !== req.user.id)) {
+  if (!canManageResource(room, resource, req.user.id)) {
     return res.status(403).json({ message: "You cannot delete this resource." });
   }
+  if (isCanvasSyncedResource(resource)) {
+    return res.status(403).json({ message: "Canvas resources are managed by sync and cannot be deleted." });
+  }
 
+  resource.originalFolder = resource.originalFolder || resource.folder || "General";
   resource.deletedAt = resource.deletedAt || new Date().toISOString();
+  resource.deletedById = req.user.id;
   resource.updatedAt = new Date().toISOString();
   await writeDb(db);
+  emitResourceEvent(db, room.id, "resource:updated", resource);
   res.status(204).end();
 });
 
@@ -3497,13 +3915,19 @@ app.patch("/api/resources/:resourceId/restore", requireAuth, async (req, res) =>
   }
 
   const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
-  if (!room || (room.ownerId !== req.user.id && resource.uploaderId !== req.user.id)) {
+  if (!canManageResource(room, resource, req.user.id)) {
     return res.status(403).json({ message: "You cannot restore this resource." });
+  }
+  if (isCanvasSyncedResource(resource)) {
+    return res.status(403).json({ message: "Canvas resources are managed by sync and cannot be restored here." });
   }
 
   resource.deletedAt = "";
+  resource.deletedById = "";
+  resource.originalFolder = "";
   resource.updatedAt = new Date().toISOString();
   await writeDb(db);
+  emitResourceEvent(db, room.id, "resource:updated", resource);
   res.json({ resource: resourceDto(db, resource) });
 });
 
@@ -3518,16 +3942,26 @@ app.delete("/api/resources/:resourceId/permanent", requireAuth, async (req, res)
   }
 
   const room = db.rooms.find((candidate) => candidate.id === resource.roomId);
-  if (!room || (room.ownerId !== req.user.id && resource.uploaderId !== req.user.id)) {
+  if (!canManageResource(room, resource, req.user.id)) {
     return res.status(403).json({ message: "You cannot permanently delete this resource." });
+  }
+  if (isCanvasSyncedResource(resource)) {
+    return res.status(403).json({ message: "Canvas resources are managed by sync and cannot be permanently deleted." });
   }
 
   if (resource.type === "file" && resource.storageName) {
-    fs.rmSync(path.join(uploadDir, resource.storageName), { force: true });
+    fs.rmSync(safeUploadPath(resource.storageName), { force: true });
+  }
+  if (resource.type === "file" && resource.pdfPath) {
+    fs.rmSync(safeUploadPath(resource.pdfPath), { force: true });
   }
 
   db.resources = db.resources.filter((candidate) => candidate.id !== resource.id);
   await writeDb(db);
+  io.to(`room:${room.id}`).emit("resource:removed", {
+    id: resource.id,
+    roomId: room.id,
+  });
   res.status(204).end();
 });
 
@@ -3905,6 +4339,8 @@ app.post("/api/rooms/:roomId/sessions", requireAuth, async (req, res) => {
     coordinatePoll.updatedAt = session.createdAt;
   }
   await writeDb(db);
+  emitSessionsUpdated(db, room);
+  if (coordinatePoll) emitCoordinateUpdated(db, room);
   res.status(201).json({ session: sessionDto(db, session) });
 });
 
@@ -3980,7 +4416,9 @@ app.put("/api/rooms/:roomId/coordinate/poll", requireAuth, async (req, res) => {
   }
 
   await writeDb(db);
-  res.json(coordinateDto(db, room));
+  const payload = coordinateDto(db, room);
+  emitCoordinateUpdated(db, room);
+  res.json(payload);
 });
 
 app.delete("/api/rooms/:roomId/coordinate/poll/:pollId", requireAuth, async (req, res) => {
@@ -4000,7 +4438,9 @@ app.delete("/api/rooms/:roomId/coordinate/poll/:pollId", requireAuth, async (req
   db.coordinatePolls = db.coordinatePolls.filter((candidate) => candidate.id !== poll.id);
   db.coordinateResponses = db.coordinateResponses.filter((response) => response.pollId !== poll.id);
   await writeDb(db);
-  res.json(coordinateDto(db, room));
+  const payload = coordinateDto(db, room);
+  emitCoordinateUpdated(db, room);
+  res.json(payload);
 });
 
 app.put("/api/rooms/:roomId/coordinate/availability", requireAuth, async (req, res) => {
@@ -4032,7 +4472,9 @@ app.put("/api/rooms/:roomId/coordinate/availability", requireAuth, async (req, r
     );
     poll.updatedAt = now;
     await writeDb(db);
-    return res.json(coordinateDto(db, room));
+    const payload = coordinateDto(db, room);
+    emitCoordinateUpdated(db, room);
+    return res.json(payload);
   }
 
   if (existingResponse) {
@@ -4051,7 +4493,9 @@ app.put("/api/rooms/:roomId/coordinate/availability", requireAuth, async (req, r
 
   poll.updatedAt = now;
   await writeDb(db);
-  res.json(coordinateDto(db, room));
+  const payload = coordinateDto(db, room);
+  emitCoordinateUpdated(db, room);
+  res.json(payload);
 });
 
 app.post("/api/rooms/:roomId/integrations/canvas/courses", requireAuth, async (req, res) => {
@@ -4109,6 +4553,7 @@ app.post("/api/rooms/:roomId/integrations/canvas/import", requireAuth, async (re
         per_page: 100,
       },
     );
+    const canvasFiles = await fetchCanvasCourseFiles(host, accessToken, courseId);
     const existingSourceIds = new Set(
       db.sessions
         .filter((session) => session.roomId === room.id && session.source === "canvas")
@@ -4149,6 +4594,56 @@ app.post("/api/rooms/:roomId/integrations/canvas/import", requireAuth, async (re
       existingSourceIds.add(sourceId);
     });
 
+    db.resources = db.resources.filter(
+      (resource) => !(resource.roomId === room.id && resource.metadata?.source === "canvas-file"),
+    );
+    const importedResources = canvasFiles.map((file) => {
+      const resourceType = detectResourceType(file.mimeType, file.title);
+      const sourceId = `${courseId}:${file.id}`;
+      const resource = {
+        id: createId("res"),
+        roomId: room.id,
+        uploaderId: req.user.id,
+        type: "url",
+        title: file.title,
+        folder: file.folder,
+        originalName: file.title,
+        storageName: "",
+        mimeType: file.mimeType,
+        size: file.size,
+        contentHash: "",
+        pdfPath: "",
+        pdfConversionVersion: "",
+        conversionStatus: "not-needed",
+        resourceType,
+        metadata: {
+          ...buildResourceMetadata({
+            room,
+            title: file.title,
+            sourceType: "canvas-file",
+            mimeType: file.mimeType,
+            size: file.size,
+            url: file.url,
+          }),
+          canvasHost: host,
+          courseId,
+          courseName,
+          source: "canvas-file",
+          sourceId,
+          syncedFolder: file.folder,
+          syncedAt: now,
+        },
+        url: file.url,
+        deletedAt: "",
+        deletedById: "",
+        originalFolder: "",
+        createdAt: now,
+        updatedAt: file.updatedAt || now,
+      };
+      db.resources.push(resource);
+      return resource;
+    });
+
     room.integrations = {
       ...(room.integrations || {}),
       canvas: {
@@ -4161,13 +4656,24 @@ app.post("/api/rooms/:roomId/integrations/canvas/import", requireAuth, async (re
         lastSyncedAt: now,
         importedDeadlineCount:
           Number(room.integrations?.canvas?.importedDeadlineCount || 0) + importedSessions.length,
+        importedFileCount: importedResources.length,
       },
     };
     room.updatedAt = now;
 
     await writeDb(db);
+    io.to(`room:${room.id}`).emit("resources:synced", {
+      roomId: room.id,
+      resources: db.resources
+        .filter((resource) => resource.roomId === room.id)
+        .map((resource) => resourceDto(db, resource)),
+    });
+    emitSessionsUpdated(db, room);
+    await emitRoomUpdated(db, room);
     res.status(201).json({
       imported: importedSessions.length,
+      importedResources: importedResources.length,
+      resources: importedResources.map((resource) => resourceDto(db, resource)),
       sessions: importedSessions.map((session) => sessionDto(db, session)),
       room: roomDto(db, room, req.user.id),
     });
@@ -4194,6 +4700,8 @@ app.delete("/api/sessions/:sessionId", requireAuth, async (req, res) => {
     poll.scheduledSessionId === session.id ? { ...poll, scheduledSessionId: "", updatedAt: new Date().toISOString() } : poll,
   );
   await writeDb(db);
+  emitSessionsUpdated(db, room);
+  emitCoordinateUpdated(db, room);
   res.status(204).end();
 });
 
@@ -4208,6 +4716,8 @@ io.use(async (socket, next) => {
 });
 
 io.on("connection", (socket) => {
+  registerSingleActiveUserSocket(socket);
+
   socket.on("room:join", async (roomId, ack) => {
     try {
       const db = await readDb();
@@ -4757,6 +5267,7 @@ io.on("connection", (socket) => {
     removeSocketSpacePresence(socket);
     removeSocketRoomActivity(socket);
     removeSocketMeetingPresence(socket);
+    clearSingleActiveUserSocket(socket);
   });
 });
 
@@ -4768,6 +5279,20 @@ if (fs.existsSync(clientDistDir)) {
 }
 
 app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({
+        message: `That file is too large. The current upload limit is ${resourceFileSizeLabel}.`,
+      });
+    }
+
+    return res.status(400).json({ message: error.message || "Unable to upload that file." });
+  }
+
+  if (error?.status) {
+    return res.status(error.status).json({ message: error.message || "Request failed." });
+  }
+
   console.error(error);
   res.status(500).json({ message: "Something went wrong." });
 });

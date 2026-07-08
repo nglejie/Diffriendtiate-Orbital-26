@@ -26,7 +26,7 @@ async function seedSession(roomId, token, body) {
   return expectStatus(result, 201, `create ${body.title}`);
 }
 
-test("Coordidate keeps calendar and availability interactions polished", async ({ page }) => {
+test("Coordidate keeps calendar and availability interactions polished", async ({ browser, page }) => {
   // Seed a real owner/member room through the public API so the browser test
   // can focus on Coordidate UI behavior instead of repeating auth setup clicks.
   const owner = await registerUser(API_BASE, { name: "Coordidate Owner" });
@@ -184,10 +184,39 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   await page.getByRole("button", { name: /^coordidate$/i }).click();
   await expect(page.locator(".coordinate-calendar-product")).toBeVisible();
 
+  const memberPage = await browser.newPage();
+  await memberPage.addInitScript((token) => {
+    localStorage.setItem("diffriendtiate_token", token);
+  }, member.token);
+  await memberPage.goto(`${new URL(page.url()).origin}/#/rooms/${room.id}`);
+  await memberPage.getByRole("button", { name: /^coordidate$/i }).click();
+  await expect(memberPage.locator(".coordinate-calendar-product")).toBeVisible();
+  await memberPage.getByRole("button", { name: /^availability$/i }).click();
+  await expect(memberPage.locator(".coordinate-window-list-panel")).toBeVisible();
+  await expect
+    .poll(() => memberPage.evaluate(() => Boolean((window as any).diffriendtiateSocket?.connected)))
+    .toBe(true);
+
+  const realtimePoll = await apiRequest(API_BASE, `/api/rooms/${room.id}/coordinate/poll`, {
+    method: "PUT",
+    token: owner.token,
+    body: {
+      title: "Realtime Planning",
+      rangeStart: sgIso("2026-07-11", "09:00"),
+      rangeEnd: sgIso("2026-07-12", "17:00"),
+      dayStartMinutes: 9 * 60,
+      dayEndMinutes: 17 * 60,
+      slotMinutes: 60,
+      selectedDates: ["2026-07-11", "2026-07-12"],
+    },
+  });
+  expect(realtimePoll.status).toBe(200);
+  await expect(memberPage.locator(".coordinate-window-list").getByText("Realtime Planning")).toBeVisible();
+
   const liveSidebarCard = page.locator(".mini-session-card.ongoing.joinable", { hasText: "Live World Meetup" });
   await expect(liveSidebarCard).toBeVisible();
   await expect(liveSidebarCard).toContainText("Ongoing");
-  await expect(liveSidebarCard).toContainText("Join In World");
+  await expect(liveSidebarCard).toContainText("Join In Domain");
   await expect(page.locator(".mini-session-card.deadline.soon", { hasText: "Soon Deadline" })).toBeVisible();
   await expect(page.locator(".mini-session-list").getByText("Past Sidebar Meeting")).toHaveCount(0);
   await expect(page.locator(".mini-session-list").getByText("Past Sidebar Deadline")).toHaveCount(0);
@@ -221,6 +250,7 @@ test("Coordidate keeps calendar and availability interactions polished", async (
     .poll(() => datePopover.evaluate((element) => getComputedStyle(element).backdropFilter))
     .toBe("none");
   await datePopover.getByRole("button", { name: /^today$/i }).click();
+  await page.getByRole("button", { name: /^previous$/i }).click();
 
   const timeLabels = await page
     .locator(".coordinate-heatmap-grid.calendar-mode .coordinate-grid-time")
@@ -364,45 +394,186 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   expect(manualSessionBody.startsAt).toBe(expectedManualStart);
   expect(manualSessionBody.endsAt).toBe(expectedManualEnd);
   expect(manualSessionBody.startsAt).toMatch(/Z$/);
+  await expect(manualDialog).toBeHidden();
+  if ((await page.locator(".coordinate-toolbar-title").innerText()).includes("6 Jul")) {
+    await page.getByRole("button", { name: /^previous$/i }).click();
+  }
   await expect(page.locator(".coordinate-event-block:has-text('Manual Button Item')")).toBeVisible();
 
   await page.getByRole("button", { name: /^availability$/i }).click();
   await expect(page.getByText("Project Meeting |")).toHaveCount(0);
   const availableBestSlot = page.locator(".coordinate-heat-slot").first();
   await expect(availableBestSlot).toBeVisible();
-  const availableBestBorders = await availableBestSlot.evaluate((element) => {
-    element.classList.add("own-available", "best");
-    const borders = {
-      own: getComputedStyle(element, "::before").borderColor,
-      best: getComputedStyle(element, "::after").borderColor,
-    };
-    element.classList.remove("own-available", "best");
-    return borders;
+  const bestDecoration = await availableBestSlot.evaluate((element) => {
+    element.classList.add("best");
+    const content = getComputedStyle(element, "::after").content;
+    element.classList.remove("best");
+    return content;
   });
-  expect(availableBestBorders.best).toBe(availableBestBorders.own);
+  expect(bestDecoration).toBe("none");
   await expect(page.getByText("29 Jun – 5 Jul")).toBeVisible();
   await expect(page.locator(".coordinate-availability-header").getByText("4 Jul – 12 Jul, 9 AM – 5 PM")).toBeVisible();
+  const windowListPanel = page.locator(".coordinate-window-list-panel");
+  await expect(windowListPanel).toBeVisible();
+  const newWindowButton = windowListPanel.locator(".coordinate-new-window-button");
+  await expect
+    .poll(() =>
+      windowListPanel.evaluate((panel) => {
+        const button = panel.querySelector(".coordinate-new-window-button");
+        if (!button) return false;
+        const styles = getComputedStyle(panel);
+        const contentWidth = panel.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
+        return Math.abs(button.getBoundingClientRect().width - contentWidth) <= 3;
+      }),
+    )
+    .toBe(true);
+  await expect(page.locator(".coordinate-window-detail-summary")).toHaveCount(0);
+  await expect(page.locator(".coordinate-respondent-list")).toHaveCount(0);
+  await windowListPanel.locator(".coordinate-window-select").first().click();
+  await expect(page.locator(".coordinate-window-detail-summary")).toBeVisible();
+  await expect(page.locator(".coordinate-respondent-list")).toBeVisible();
+  await expect(page.locator(".coordinate-window-detail-title em")).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page
+        .locator(".coordinate-inspector.detail-mode .coordinate-window-detail-summary")
+        .evaluate((element) => getComputedStyle(element).borderStyle),
+    )
+    .toBe("none");
+  await page.getByRole("button", { name: /^back$/i }).click();
+  await expect(windowListPanel).toBeVisible();
+  await expect(page.locator(".coordinate-respondent-list")).toHaveCount(0);
 
   // Editing availability is a draft action: Cancel must restore the original
   // response rather than leaving newly painted cells in the UI.
   const firstHeatSlot = page.locator(".coordinate-heat-slot[data-slot-start]").first();
   await firstHeatSlot.hover();
+  await expect(page.locator(".coordinate-slot-tooltip")).toBeVisible();
+  await expect(page.locator(".coordinate-hover-summary")).toHaveCount(0);
   const neutralHoverOutline = await firstHeatSlot.evaluate((element) => getComputedStyle(element).outlineColor);
   await page.getByRole("button", { name: /^edit availability$/i }).click();
-  await page.getByRole("button", { name: /^if needed$/i }).click();
+  await expect(page.locator(".coordinate-paint-toggle")).toHaveCount(0);
+  await expect(page.getByText("Group Heatmap")).toHaveCount(0);
+  await page.getByRole("button", { name: /availability colour help/i }).hover();
+  await expect(page.getByRole("tooltip")).toContainText("Available");
+  await expect(page.getByRole("tooltip")).toContainText("If Needed");
+  await expect(page.getByRole("tooltip")).toContainText("Right-click erases.");
+  await expect(page.locator(".coordinate-availability-help-content em span")).toHaveCount(2);
+  await expect
+    .poll(() => page.locator(".coordinate-availability-help-content em").evaluate((element) => getComputedStyle(element).display))
+    .toBe("grid");
+  const availabilityLegendStyles = await page
+    .locator(".field-tooltip.coordinate-availability-tooltip .availability-legend-row.available")
+    .evaluate((element) => ({
+      backgroundColor: getComputedStyle(element).backgroundColor,
+      borderLeftStyle: getComputedStyle(element).borderLeftStyle,
+      borderLeftColor: getComputedStyle(element).borderLeftColor,
+    }));
+  expect(availabilityLegendStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(availabilityLegendStyles.borderLeftStyle).toBe("solid");
+  expect(availabilityLegendStyles.borderLeftColor).not.toBe("rgba(0, 0, 0, 0)");
   await firstHeatSlot.hover();
-  const ifNeededHoverOutline = await firstHeatSlot.evaluate((element) => getComputedStyle(element).outlineColor);
-  expect(neutralHoverOutline).not.toBe(ifNeededHoverOutline);
-  await page.getByRole("button", { name: /^available$/i }).click();
+  const editingHoverOutline = await firstHeatSlot.evaluate((element) => getComputedStyle(element).outlineColor);
+  expect(neutralHoverOutline).not.toBe(editingHoverOutline);
+  const unavailableSlot = page.locator(".coordinate-heatmap-grid.editing .coordinate-grid-gap").first();
+  await expect(unavailableSlot).toBeVisible();
+  const unavailableSlotStyles = await unavailableSlot.evaluate((element) => ({
+    backgroundImage: getComputedStyle(element).backgroundImage,
+    opacity: getComputedStyle(element).opacity,
+  }));
+  const selectableSlotBackground = await firstHeatSlot.evaluate((element) => getComputedStyle(element).backgroundImage);
+  expect(unavailableSlotStyles.opacity).toBe("1");
+  expect(unavailableSlotStyles.backgroundImage).not.toBe("none");
+  expect(unavailableSlotStyles.backgroundImage).not.toBe(selectableSlotBackground);
+  await firstHeatSlot.click();
+  await expect(firstHeatSlot).toHaveClass(/own-available/);
+  await expect(firstHeatSlot.locator(".coordinate-own-slot-marker.available")).toHaveCount(0);
+  const availableDraftBackground = await firstHeatSlot.evaluate((element) => getComputedStyle(element).backgroundImage);
+  await firstHeatSlot.click();
+  await expect(firstHeatSlot).toHaveClass(/own-ifNeeded/);
+  await expect(firstHeatSlot.locator(".coordinate-own-slot-marker.ifNeeded")).toHaveCount(0);
+  const ifNeededDraftBackground = await firstHeatSlot.evaluate((element) => getComputedStyle(element).backgroundImage);
+  expect(ifNeededDraftBackground).not.toBe(availableDraftBackground);
+  await firstHeatSlot.click({ button: "right" });
+  await expect(firstHeatSlot).not.toHaveClass(/own-/);
   await firstHeatSlot.click();
   await expect(firstHeatSlot).toHaveClass(/own-available/);
   await page.getByRole("button", { name: /^cancel$/i }).click();
   await expect(firstHeatSlot).not.toHaveClass(/own-available/);
+  await page.getByRole("button", { name: /^edit availability$/i }).click();
+  await firstHeatSlot.click();
+  const saveAvailabilityRequest = page.waitForRequest((request) => (
+    request.method() === "PUT" &&
+    request.url().includes(`/api/rooms/${room.id}/coordinate/availability`) &&
+    (request.postData() || "").includes(poll.id)
+  ));
+  await page.getByRole("button", { name: /^save$/i }).click();
+  await saveAvailabilityRequest;
+  const savedOwnMarker = firstHeatSlot.locator(".coordinate-own-slot-marker.available");
+  await expect(savedOwnMarker).toBeVisible();
+  const savedOwnMarkerStyles = await savedOwnMarker.evaluate((element) => ({
+    afterContent: getComputedStyle(element, "::after").content,
+    borderColors: (() => {
+      const originalClasses = element.className;
+      const available = getComputedStyle(element).borderColor;
+      element.classList.remove("available");
+      const neutral = getComputedStyle(element).borderColor;
+      element.classList.add("ifNeeded");
+      const ifNeeded = getComputedStyle(element).borderColor;
+      element.className = originalClasses;
+      return { available, ifNeeded, neutral };
+    })(),
+    borderStyle: getComputedStyle(element).borderStyle,
+    childOpacity: Number(getComputedStyle(element.querySelector("img, span") || element).opacity),
+    opacity: Number(getComputedStyle(element).opacity),
+  }));
+  expect(savedOwnMarkerStyles.afterContent).toBe("none");
+  expect(savedOwnMarkerStyles.borderColors.available).not.toBe(savedOwnMarkerStyles.borderColors.neutral);
+  expect(savedOwnMarkerStyles.borderColors.ifNeeded).not.toBe(savedOwnMarkerStyles.borderColors.available);
+  expect(savedOwnMarkerStyles.borderStyle).toBe("solid");
+  expect(savedOwnMarkerStyles.opacity).toBe(1);
+  expect(savedOwnMarkerStyles.childOpacity).toBeLessThan(1);
+  await expect(memberPage.locator(".coordinate-window-list article", { hasText: "Project Meeting" })).toContainText(
+    "2/2 Responses",
+  );
 
-  const selectAll = page.locator(".coordinate-select-all-toggle");
-  await expect(selectAll).toContainText("Deselect All");
+  const responsesHeading = page.locator(".coordinate-inspector-heading", { hasText: "Responses" }).first();
+  const selectAll = responsesHeading.getByRole("checkbox", { name: /deselect all responses/i });
+  await expect(selectAll).toBeVisible();
+  await expect(selectAll).toBeChecked();
+  await expect(page.locator(".coordinate-select-all-toggle")).toHaveCount(0);
   await selectAll.click();
-  await expect(selectAll).toContainText("Select All");
+  await expect(responsesHeading.getByRole("checkbox", { name: /select all responses/i })).not.toBeChecked();
+  const bestTimesHeading = page.locator(".coordinate-inspector-heading", { hasText: "Best Times" }).first();
+  await expect(bestTimesHeading.getByRole("checkbox", { name: /show best times/i })).toBeVisible();
+  await expect(page.locator(".coordinate-availability-toggle-section", { hasText: "Show Best Times" })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page
+        .locator(".coordinate-respondent-list button")
+        .last()
+        .evaluate((element) => getComputedStyle(element).borderBottomStyle),
+    )
+    .toBe("none");
+  const firstRespondent = page.locator(".coordinate-respondent-list button").first();
+  const respondentIdleBackground = await firstRespondent.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await firstRespondent.hover();
+  await expect
+    .poll(() => firstRespondent.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .not.toBe(respondentIdleBackground);
+  await expect(page.locator(".coordinate-window-detail-title small").first()).toContainText(",");
+  await expect(page.locator(".coordinate-window-detail-title small").first()).not.toContainText("·");
+  await expect
+    .poll(() => page.locator(".coordinate-window-detail-title small").first().evaluate((element) => getComputedStyle(element).whiteSpace))
+    .toBe("nowrap");
+  await expect
+    .poll(() =>
+      page.locator(".coordinate-window-detail-title small").first().evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await expect
+    .poll(() => page.locator(".coordinate-respondent-list button.responded svg").first().evaluate((element) => getComputedStyle(element).color))
+    .not.toBe("rgb(56, 168, 111)");
   const editWindowButton = page.locator(".coordinate-window-edit-button").first();
   await expect
     .poll(() => editWindowButton.evaluate((element) => getComputedStyle(element).borderStyle))
@@ -429,6 +600,7 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   ]);
   await expect(editWindowDialog).toBeHidden();
 
+  await page.getByRole("button", { name: /^back$/i }).click();
   await page.getByRole("button", { name: /new window/i }).click();
   const windowDialog = page.locator(".coordinate-window-dialog");
   await expect(windowDialog).toBeVisible();
@@ -436,4 +608,20 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   await expect(windowDialog.getByText(/^To$/)).toHaveCount(0);
   await expect(windowDialog.getByRole("button", { name: /^cancel$/i })).toHaveCount(0);
   await expect(windowDialog.getByRole("button", { name: /^create window$/i })).toBeVisible();
+  await windowDialog.getByRole("button", { name: /^close meetup window$/i }).click();
+  await expect(windowDialog).toBeHidden();
+  await page.getByRole("button", { name: /new item/i }).click();
+  const finalEventDialog = page.locator(".coordinate-event-dialog").last();
+  await expect(finalEventDialog).toBeVisible();
+  const eventSaveButton = finalEventDialog.getByRole("button", { name: /^save$/i });
+  await expect
+    .poll(() =>
+      eventSaveButton.evaluate((element) => {
+        const parent = element.parentElement;
+        if (!parent) return false;
+        return Math.abs(element.getBoundingClientRect().width - parent.getBoundingClientRect().width) <= 2;
+      }),
+    )
+    .toBe(true);
+  await memberPage.close();
 });

@@ -5,6 +5,13 @@ import TopBar from "../../apps/client/src/features/dashboard/TopBar.tsx";
 import { THEME_MODES } from "../../apps/client/src/theme.ts";
 
 describe("TopBar", () => {
+  const userProfile = {
+    avatarUrl: "data:image/png;base64,iVBORw0KGgo=",
+    email: "test@example.test",
+    id: "user-1",
+    name: "Test User",
+  };
+
   // Exercises the Account popup path used by logged-in users. The test opens
   // the menu and clicks the theme toggle, proving the TopBar asks the app shell
   // to switch from dark to light mode.
@@ -18,6 +25,7 @@ describe("TopBar", () => {
         onLogout={vi.fn()}
         onThemeChange={onThemeChange}
         themeMode={THEME_MODES.dark}
+        user={userProfile}
       />,
     );
 
@@ -27,10 +35,10 @@ describe("TopBar", () => {
     expect(onThemeChange).toHaveBeenCalledWith(THEME_MODES.light);
   });
 
-  // Verifies Create Room stays as a direct dashboard action and does not get
+  // Verifies Create Domain stays as a direct dashboard action and does not get
   // hidden behind the Account menu or another wrapper. This protects the main
   // dashboard entry point after button restyling.
-  it("keeps create room as a direct dashboard action", async () => {
+  it("keeps create domain as a direct dashboard action", async () => {
     const user = userEvent.setup();
     const onCreateRoom = vi.fn();
 
@@ -40,12 +48,56 @@ describe("TopBar", () => {
         onLogout={vi.fn()}
         onThemeChange={vi.fn()}
         themeMode={THEME_MODES.light}
+        user={userProfile}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /create room/i }));
+    await user.click(screen.getByRole("button", { name: /create domain/i }));
 
     expect(onCreateRoom).toHaveBeenCalledTimes(1);
+  });
+
+  // The top bar account trigger should be just the user's profile picture, but
+  // still have an accessible label for keyboard and screen reader users.
+  it("uses the user profile picture as the account trigger", () => {
+    const { container } = render(
+      <TopBar
+        onCreateRoom={vi.fn()}
+        onLogout={vi.fn()}
+        onThemeChange={vi.fn()}
+        themeMode={THEME_MODES.light}
+        user={userProfile}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /account menu for test user/i })).toBeInTheDocument();
+    expect(container.querySelector(".dashboard-account-avatar img")).toBeInTheDocument();
+  });
+
+  // Dashboard Profile should reuse the same editor surfaced from the in-world
+  // profile controls, while Settings remains visible but disabled for now.
+  it("opens the shared profile editor and keeps settings disabled", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <TopBar
+        onCreateRoom={vi.fn()}
+        onLogout={vi.fn()}
+        onThemeChange={vi.fn()}
+        themeMode={THEME_MODES.dark}
+        user={userProfile}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    expect(screen.getByRole("menuitem", { name: /settings/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("menuitem", { name: /^profile$/i }));
+
+    const editor = screen.getByRole("dialog", { name: /edit profile/i });
+    expect(editor).toBeInTheDocument();
+    expect(editor.closest(".top-bar")).toBeNull();
+    expect(screen.getByLabelText(/display name/i)).toHaveValue("Test User");
   });
 
   // Checks outside-click dismissal for the Account popup. Popups throughout the
@@ -61,6 +113,7 @@ describe("TopBar", () => {
           onLogout={vi.fn()}
           onThemeChange={vi.fn()}
           themeMode={THEME_MODES.dark}
+          user={userProfile}
         />
         <button type="button">Outside target</button>
       </div>,

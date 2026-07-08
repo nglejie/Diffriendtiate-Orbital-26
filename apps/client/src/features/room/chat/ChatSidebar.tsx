@@ -2,7 +2,6 @@ import {
   ChevronDown,
   Edit3,
   FileText,
-  FolderPlus,
   Hash,
   MoreVertical,
   Plus,
@@ -237,12 +236,12 @@ export function ChatSidebar({
       {isOwner ? (
         <section className="chat-sidebar-section chat-sidebar-owner-actions">
           <button
-            className="chat-create-category-button"
+            className="chat-add-section-button"
             onClick={onCreateCategory}
             type="button"
           >
-            <FolderPlus size={16} />
-            New Category
+            <Plus size={16} />
+            Add Section
           </button>
         </section>
       ) : null}
@@ -454,7 +453,7 @@ export function ChatSidebar({
                     type="button"
                   >
                     <Edit3 size={16} />
-                    Rename Category
+                    Rename Section
                   </button>
                   <button
                     className="danger"
@@ -465,7 +464,7 @@ export function ChatSidebar({
                     type="button"
                   >
                     <Trash2 size={16} />
-                    Delete Category
+                    Delete Section
                   </button>
                 </>
               ) : (

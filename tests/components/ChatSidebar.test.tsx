@@ -33,21 +33,20 @@ function renderSidebar(overrides = {}) {
 describe("ChatSidebar", () => {
   // Non-owners should be able to read and enter channels, but they must not see
   // buttons that mutate room structure. This mirrors the product rule that only
-  // the room owner manages categories and channels.
-  it("hides channel and category mutation controls from non-owners", () => {
+  // the room owner manages sections and channels.
+  it("hides channel and section mutation controls from non-owners", () => {
     renderSidebar({ isOwner: false });
 
     expect(screen.queryByRole("button", { name: /create channel/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /new category/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Quick Access")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^add section$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /text channels options/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /general options/i })).not.toBeInTheDocument();
   });
 
-  // Owner-specific category controls should expose the same tooltip/menu
-  // patterns as the rest of the app. This test hovers the create button,
-  // verifies the New Channel tooltip, then opens the category menu and triggers
-  // Delete Category for a non-default category.
-  it("shows owner controls, tooltips, and category menus", async () => {
+  // Owner-specific section controls should avoid redundant tooltips on visible
+  // text buttons while keeping icon-only tooltips/menus available.
+  it("shows owner controls, tooltips, and section menus", async () => {
     const user = userEvent.setup();
     const onCreateCategory = vi.fn();
     const onCreateChannel = vi.fn();
@@ -62,7 +61,20 @@ describe("ChatSidebar", () => {
       onRequestRenameCategory,
     });
 
-    await user.click(screen.getByRole("button", { name: /new category/i }));
+    expect(screen.queryByText("Quick Access")).not.toBeInTheDocument();
+
+    const textChannelsToggle = screen.getByRole("button", { name: /^text channels$/i });
+    expect(Array.from(textChannelsToggle.children).map((child) => child.tagName.toLowerCase())).toEqual([
+      "svg",
+      "span",
+    ]);
+
+    const addSectionButton = screen.getByRole("button", { name: /^add section$/i });
+    await user.hover(addSectionButton);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    await user.unhover(addSectionButton);
+    await user.click(addSectionButton);
     expect(onCreateCategory).toHaveBeenCalledTimes(1);
 
     const createButton = screen.getByRole("button", { name: /create channel in text channels/i });
@@ -74,11 +86,11 @@ describe("ChatSidebar", () => {
     expect(onCreateChannel).toHaveBeenCalledWith(DEFAULT_CATEGORY_ID);
 
     await user.click(screen.getByRole("button", { name: /new cat options/i }));
-    await user.click(screen.getByRole("button", { name: /rename category/i }));
+    await user.click(screen.getByRole("button", { name: /rename section/i }));
     expect(onRequestRenameCategory).toHaveBeenCalledWith({ id: "cat-new", name: "New Cat" });
 
     await user.click(screen.getByRole("button", { name: /new cat options/i }));
-    await user.click(screen.getByRole("button", { name: /delete category/i }));
+    await user.click(screen.getByRole("button", { name: /delete section/i }));
     expect(onDeleteCategory).toHaveBeenCalledWith("cat-new", "New Cat");
   });
 
@@ -112,7 +124,7 @@ describe("ChatSidebar", () => {
     expect(onRequestDeleteChannel).toHaveBeenCalledWith("lectures");
   });
 
-  it("supports owner category drag reordering", () => {
+  it("supports owner section drag reordering", () => {
     const onMoveCategory = vi.fn();
     const { container } = renderSidebar({
       isOwner: true,

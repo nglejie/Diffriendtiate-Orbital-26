@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || "";
+export const API_BASE = import.meta.env.VITE_API_URL || "";
 const TOKEN_KEY = "diffriendtiate_token";
 
 let authToken = localStorage.getItem(TOKEN_KEY) || "";
@@ -200,6 +200,7 @@ export const api = {
     request(`/api/rooms/${roomId}`, { method: "PATCH", body }),
   deleteRoom: (roomId) => request(`/api/rooms/${roomId}`, { method: "DELETE" }),
   joinRoom: (roomId) => request(`/api/rooms/${roomId}/join`, { method: "POST" }),
+  leaveRoom: (roomId) => request(`/api/rooms/${roomId}/leave`, { method: "POST" }),
   joinInvite: (inviteCode, body) =>
     request(`/api/invites/${inviteCode}/join`, { method: "POST", body }),
   createChannel: (roomId: string, body: CreateChannelBody) =>
@@ -265,6 +266,10 @@ export const api = {
       method: "POST",
       body: formData,
     }).then(normalizeResourcePayload),
+  updateResource: (resourceId, body) =>
+    request(`/api/resources/${resourceId}`, { method: "PATCH", body }).then(normalizeResourcePayload),
+  moveResourceFolder: (roomId, body) =>
+    request(`/api/rooms/${roomId}/resources/folders`, { method: "PATCH", body }).then(normalizeResourcePayload),
   deleteResource: (resourceId) =>
     request(`/api/resources/${resourceId}`, { method: "DELETE" }),
   restoreResource: (resourceId) =>

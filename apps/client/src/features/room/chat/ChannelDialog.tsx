@@ -69,7 +69,7 @@ function getResourceTitle(resource: Resource) {
 }
 
 /**
- * Discord-inspired channel/category creation dialog.
+ * Discord-inspired channel/section creation dialog.
  *
  * Forum channels are still visible for product direction; document channels can
  * link a room resource so the next Convolution surface has a stable source.
@@ -96,12 +96,12 @@ export function ChannelDialog({
     normalizedName.length > 0 &&
     (mode === "category" || channelType === "text" || (channelType === "document" && Boolean(linkedResourceId)));
 
-  const title = mode === "category" ? "Create Category" : "Create Channel";
+  const title = mode === "category" ? "Create Section" : "Create Channel";
   const subtitle =
     mode === "category" ? null : `in ${categoryName || "Text Channels"}`;
 
   const namePlaceholder = useMemo(
-    () => (mode === "category" ? "New Category" : "new-channel"),
+    () => (mode === "category" ? "New Section" : "new-channel"),
     [mode],
   );
 
@@ -188,7 +188,7 @@ export function ChannelDialog({
         ) : null}
 
         <label className="chat-dialog-field">
-          <span>{mode === "category" ? "Category Name" : "Channel Name"}</span>
+          <span>{mode === "category" ? "Section Name" : "Channel Name"}</span>
           <span className="chat-dialog-input">
             {mode === "channel" ? <Hash size={20} /> : <MessageSquareText size={19} />}
             <input
@@ -245,7 +245,7 @@ export function ChannelDialog({
             Cancel
           </button>
           <button className="primary-button compact" disabled={!canSubmit} type="submit">
-            {mode === "category" ? "Create Category" : "Create Channel"}
+            {mode === "category" ? "Create Section" : "Create Channel"}
           </button>
         </footer>
       </form>

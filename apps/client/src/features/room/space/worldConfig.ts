@@ -12,7 +12,7 @@ export const SPECIAL_TILE_TYPES = [
 ];
 
 export const WORLD_ZONE_PRESETS = [
-  { tabId: "space", label: "World", description: "Virtual world" },
+  { tabId: "space", label: "Domain", description: "Virtual domain" },
   { tabId: "focus", label: "Home", description: "Room board and overview" },
   { tabId: "chat", label: "Convolution", description: "Group discussion" },
   { tabId: "resources", label: "Infilenite", description: "Library and resources" },
@@ -22,7 +22,7 @@ export const WORLD_ZONE_PRESETS = [
 
 export const DEFAULT_WORLD_ROOM = {
   id: CUSTOM_WORLD_MAP_ID,
-  name: "World",
+  name: "Domain",
   backgroundImage: "",
   columns: DEFAULT_WORLD_COLUMNS,
   rows: DEFAULT_WORLD_ROWS,
@@ -177,8 +177,8 @@ function normalizeRoom(value, index, columns, rows, backgroundImage) {
   const roomRows = clampInteger(room.rows, 10, 256, rows);
   const rawName = room.name ?? room.label;
   const name = rawName == null
-    ? (index === 0 ? "World" : `Zone ${index + 1}`)
-    : safeString(rawName).slice(0, 72);
+    ? (index === 0 ? "Domain" : `Zone ${index + 1}`)
+    : String(rawName).slice(0, 72);
 
   return {
     id,
@@ -206,6 +206,10 @@ function normalizeAreaTabId(value) {
   return WORLD_ZONE_PRESETS.some((preset) => preset.tabId === tabId && tabId !== "focus")
     ? tabId
     : "chat";
+}
+
+function normalizeOpenLinkInteraction(value) {
+  return safeString(value) === "enter" ? "enter" : "action";
 }
 
 function normalizeAreaProperties(value) {
@@ -244,6 +248,8 @@ function normalizePrivateArea(value, index, columns, rows, fallbackRoomId) {
     effects: normalizeAreaEffects(value.effects),
     properties: normalizeAreaProperties(value.properties),
     linkUrl: safeString(value.linkUrl || value.url).slice(0, 500),
+    openLinkInteraction: normalizeOpenLinkInteraction(value.openLinkInteraction),
+    openLinkNewTab: value.openLinkNewTab === true,
     tabId: normalizeAreaTabId(value.tabId || value.targetTabId || value.portal?.tabId),
     destination: destination || { roomId, x: 0, y: 0 },
   };

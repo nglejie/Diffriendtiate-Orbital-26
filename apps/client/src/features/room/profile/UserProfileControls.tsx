@@ -26,11 +26,11 @@ export const PROFILE_STATUS_OPTIONS = [
 
 export type ProfileStatusId = (typeof PROFILE_STATUS_OPTIONS)[number]["id"];
 
-function displayName(user: any, fallback = "You") {
+export function getProfileDisplayName(user: any, fallback = "You") {
   return user?.name || user?.displayName || user?.email || fallback;
 }
 
-function avatarUrl(user: any) {
+export function getProfileAvatarUrl(user: any) {
   return user?.avatarUrl || user?.avatar || user?.photoUrl || "";
 }
 
@@ -69,8 +69,8 @@ export function UserProfileControls({
   const [internalProfileStatus, setInternalProfileStatus] = useState(getStoredProfileStatus);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const name = displayName(user);
-  const photo = avatarUrl(user);
+  const name = getProfileDisplayName(user);
+  const photo = getProfileAvatarUrl(user);
   const profileStatus = normalizeProfileStatus(controlledProfileStatus || internalProfileStatus);
   const statusOption =
     PROFILE_STATUS_OPTIONS.find((option) => option.id === profileStatus) || PROFILE_STATUS_OPTIONS[0];
@@ -114,7 +114,7 @@ export function UserProfileControls({
           <i className={statusClass} />
         </span>
         <span className="room-call-copy">
-          <strong title={name}>{name}</strong>
+          <strong>{name}</strong>
           <span>{statusText}</span>
         </span>
       </button>
@@ -139,6 +139,7 @@ export function UserProfileControls({
                 setStatusOpen(false);
                 setEditorOpen(true);
               }}
+              title="Edit Profile"
               type="button"
             >
               <Edit3 size={16} />
@@ -148,6 +149,7 @@ export function UserProfileControls({
               aria-expanded={statusOpen}
               aria-label={`Set status. Current status: ${statusOption.label}`}
               onClick={() => setStatusOpen((current) => !current)}
+              title="Status"
               type="button"
             >
               <i className={`room-profile-status-dot ${statusOption.id}`} aria-hidden="true" />
@@ -164,6 +166,7 @@ export function UserProfileControls({
                       updateProfileStatus(option.id);
                       setStatusOpen(false);
                     }}
+                    title={option.label}
                     type="button"
                   >
                     <i className={option.id} />
@@ -193,13 +196,13 @@ type EditProfileDialogProps = {
   user: any;
 };
 
-function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfileDialogProps) {
+export function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfileDialogProps) {
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [draftAvatar, setDraftAvatar] = useState<LimeetsAvatarPreset>(() =>
     normalizeLimeetsAvatarPreset(user?.avatarPreset),
   );
-  const [draftName, setDraftName] = useState(displayName(user, ""));
-  const [draftPhoto, setDraftPhoto] = useState(avatarUrl(user));
+  const [draftName, setDraftName] = useState(getProfileDisplayName(user, ""));
+  const [draftPhoto, setDraftPhoto] = useState(getProfileAvatarUrl(user));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -268,10 +271,12 @@ function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfileDialo
         <div className="room-profile-editor-body">
           <div className="room-profile-editor-media">
             <div>
-              <span>Profile picture</span>
+              <span>Profile Picture</span>
               <button
+                aria-label="Change profile picture"
                 className="room-profile-image-button"
                 onClick={() => fileInputRef.current?.click()}
+                title="Change profile picture"
                 type="button"
               >
                 {draftPhoto ? <img src={draftPhoto} alt="" /> : getInitial(draftName || user?.email)}
@@ -291,8 +296,10 @@ function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfileDialo
             <div>
               <span>Avatar</span>
               <button
+                aria-label="Change Limeets avatar"
                 className="room-profile-avatar-button"
                 onClick={() => setAvatarPickerOpen(true)}
+                title="Change Limeets avatar"
                 type="button"
               >
                 <AvatarPreview avatar={draftAvatar} size="profile" />
@@ -332,7 +339,7 @@ function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfileDialo
               setDraftAvatar(nextAvatar);
               setAvatarPickerOpen(false);
             }}
-            userName={draftName || displayName(user)}
+            userName={draftName || getProfileDisplayName(user)}
           />
         ) : null}
       </section>

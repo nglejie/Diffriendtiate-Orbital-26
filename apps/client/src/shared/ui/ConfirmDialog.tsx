@@ -6,7 +6,14 @@ import { createPortal } from "react-dom";
  * Reusable destructive-action confirmation modal.
  * The async submit path keeps delete buttons disabled while the request is in flight.
  */
-function ConfirmDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
+function ConfirmDialog({
+  confirmLabel,
+  message,
+  onCancel,
+  onConfirm,
+  submittingLabel = "Deleting",
+  title,
+}) {
   const [submitting, setSubmitting] = useState(false);
 
   /** Runs the caller's destructive action while locking the dialog controls. */
@@ -18,7 +25,7 @@ function ConfirmDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
 
   const dialog = (
     <div
-      className="modal-backdrop room-form-modal-backdrop"
+      className="modal-backdrop room-form-modal-backdrop confirm-dialog-backdrop"
       onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
     >
       <section
@@ -44,7 +51,7 @@ function ConfirmDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
             onClick={handleConfirm}
             type="button"
           >
-            {submitting ? "Deleting" : confirmLabel}
+            {submitting ? submittingLabel : confirmLabel}
           </button>
         </div>
       </section>

@@ -326,7 +326,7 @@ export function MeetingDisplayStage({ meeting, meetingAreaName = "Meeting Area",
       ) : (
         <div className="meeting-display-empty">
           <Video size={28} />
-          <span>Enter a Meeting Area in World to connect.</span>
+          <span>Enter a Meeting Area in Domain to connect.</span>
         </div>
       )}
     </section>
