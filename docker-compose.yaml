@@ -97,7 +97,7 @@ services:
       USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment
       PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FILE: /app/logs/chatbot.log
+      LOG_FILE: ${CHATBOT_LOG_FILE:-} # if no log file is set, logs wont be saved to any file
     volumes:
       - chroma_db:${CHROMA_DIR:-/app/chroma_db}
       - chatbot_logs:/app/logs
