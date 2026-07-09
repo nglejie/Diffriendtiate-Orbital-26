@@ -2724,7 +2724,8 @@ export function VirtualStudySpace({
           typeof updater === "function"
             ? updater(clone(areas[areaIndex]), next)
             : { ...areas[areaIndex], ...updater };
-        const label = String(updatedDraft.name || updatedDraft.label || "Area").trim().slice(0, 72) || "Area";
+        const rawLabel = updatedDraft.name ?? updatedDraft.label;
+        const label = rawLabel == null ? "Area" : String(rawLabel).slice(0, 72);
         const effects = getAreaEffects(updatedDraft);
         const updatedArea = {
           ...updatedDraft,

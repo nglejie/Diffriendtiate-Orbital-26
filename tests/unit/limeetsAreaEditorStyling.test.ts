@@ -70,6 +70,12 @@ describe("Limeets area editor styling", () => {
     expect(rule).toContain("border-radius: 12px");
   });
 
+  it("keeps selected area names untrimmed while typing", () => {
+    expect(virtualStudySpaceSource).toContain("const rawLabel = updatedDraft.name ?? updatedDraft.label;");
+    expect(virtualStudySpaceSource).toContain('const label = rawLabel == null ? "Area" : String(rawLabel).slice(0, 72);');
+    expect(virtualStudySpaceSource).not.toContain('String(updatedDraft.name || updatedDraft.label || "Area").trim()');
+  });
+
   it("keeps the Objects editor search bar at the taller fixed size", () => {
     const rule = cssRule(".limeets-gather-search");
 

@@ -235,7 +235,8 @@ function normalizePrivateArea(value, index, columns, rows, fallbackRoomId) {
   const row = clampInteger(bounds.row ?? bounds.y, 0, rows - 1, 0);
   const width = clampInteger(bounds.width ?? bounds.w, 1, columns - col, 1);
   const height = clampInteger(bounds.height ?? bounds.h, 1, rows - row, 1);
-  const label = safeString(value.name || value.label || "Area", "Area").slice(0, 72);
+  const rawLabel = value.name ?? value.label;
+  const label = rawLabel == null ? "Area" : String(rawLabel).slice(0, 72);
   const roomId = safeString(value.roomId || value.mapId || fallbackRoomId, fallbackRoomId).slice(0, 64);
   const destination = normalizeTeleporter(value.destination || value.teleporter, columns, rows, roomId);
 

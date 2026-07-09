@@ -91,6 +91,20 @@ describe("worldConfig", () => {
     expect(config.rooms[2].name).toBe("Zone 3");
   });
 
+  it("allows in-progress area names while editing but supplies fallbacks for missing names", () => {
+    const config = normalizeWorldConfig({
+      privateAreas: [
+        { id: "blank", name: "", bounds: { col: 1, row: 1, width: 2, height: 2 } },
+        { id: "draft", label: "Study ", bounds: { col: 4, row: 1, width: 2, height: 2 } },
+        { id: "missing", bounds: { col: 7, row: 1, width: 2, height: 2 } },
+      ],
+    });
+
+    expect(config.privateAreas[0].name).toBe("");
+    expect(config.privateAreas[1].name).toBe("Study ");
+    expect(config.privateAreas[2].name).toBe("Area");
+  });
+
   it("normalizes tile entries and drops malformed or out-of-bounds placements", () => {
     const config = normalizeWorldConfig({
       columns: 12,
