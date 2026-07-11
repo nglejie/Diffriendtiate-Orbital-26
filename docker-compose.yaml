@@ -41,7 +41,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-diffriendtiate}:${POSTGRES_PASSWORD:-diffriendtiate_password}@db:5432/${POSTGRES_DB:-diffriendtiate}
       CHATBOT_BASE_URL: http://server-chatbot:5000
       INTELLIGRATE_GPU_ENABLED: ${INTELLIGRATE_GPU_ENABLED:-false}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-ci-placeholder}
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
       VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
@@ -128,16 +128,16 @@ services:
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
       GPU_ENABLED: false
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-ci-placeholder}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-models/gemini-embedding-2}
       USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment
       PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FILE: ${CHATBOT_LOG_FILE:-} # if no log file is set, logs wont be saved to any file
     volumes:
       - chroma_db:${CHROMA_DIR:-/app/chroma_db}
-    # depends_on: # removed when deploying (no need ollama)
-    #   ollama:
-    #     condition: service_healthy
+      - chatbot_logs:/app/logs
     restart: unless-stopped
 
   ollama:
@@ -163,3 +163,4 @@ volumes:
   uploads_data:
   ollama_data:
   chroma_db:
+  chatbot_logs:

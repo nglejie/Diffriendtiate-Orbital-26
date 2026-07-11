@@ -6,6 +6,7 @@ services:
     environment:
       GPU_ENABLED: false
       USE_GEMINI_EMBEDDINGS: false # use ollama embeddings locally
+      LOG_LEVEL: DEBUG
     depends_on:
       ollama:
         condition: service_healthy
