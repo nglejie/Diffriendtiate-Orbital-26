@@ -19,7 +19,10 @@ describe("shared room dialogs", () => {
 
     expect(screen.getByRole("alertdialog", { name: "Delete Channel" })).toBeInTheDocument();
     expect(container.querySelector(".modal-backdrop")).toBeNull();
-    expect(document.body.querySelector(".room-form-modal-backdrop")).toBeInTheDocument();
+    expect(document.body.querySelector(".room-profile-modal-backdrop")).toBeInTheDocument();
+    expect(document.body.querySelector(".small-settings-dialog")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(document.body.querySelectorAll(".small-settings-dialog footer button")).toHaveLength(1);
   });
 
   it("portals text input dialogs to the document body", () => {
@@ -39,6 +42,9 @@ describe("shared room dialogs", () => {
 
     expect(screen.getByRole("textbox", { name: "Channel name" })).toBeInTheDocument();
     expect(container.querySelector(".modal-backdrop")).toBeNull();
-    expect(document.body.querySelector(".room-form-modal-backdrop")).toBeInTheDocument();
+    expect(document.body.querySelector(".room-profile-modal-backdrop")).toBeInTheDocument();
+    expect(document.body.querySelector(".small-settings-dialog")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(document.body.querySelectorAll(".small-settings-dialog footer button")).toHaveLength(1);
   });
 });

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  EditProfileDialog,
   UserProfileControls,
   getStoredProfileStatus,
   normalizeProfileStatus,
@@ -31,7 +32,11 @@ describe("UserProfileControls", () => {
   it("opens the profile popover with identity, edit profile, and current status", () => {
     render(<UserProfileControls statusText="In World" user={user} profileStatus="online" />);
 
-    fireEvent.click(screen.getByRole("button", { name: /fleming/i }));
+    const profileButton = screen.getByRole("button", { name: /fleming/i });
+    expect(profileButton).not.toHaveAttribute("data-tooltip");
+    expect(profileButton).not.toHaveAttribute("title");
+
+    fireEvent.click(profileButton);
 
     expect(screen.getByText("flemingsiow@gmail.com")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /edit profile/i })).toBeInTheDocument();
@@ -69,5 +74,12 @@ describe("UserProfileControls", () => {
 
     fireEvent.mouseDown(screen.getByRole("button", { name: "Outside" }));
     expect(screen.queryByRole("button", { name: /edit profile/i })).not.toBeInTheDocument();
+  });
+
+  it("renders named profile picture and avatar edit controls", () => {
+    render(<EditProfileDialog onClose={vi.fn()} user={user} />);
+
+    expect(screen.getByRole("button", { name: /change profile picture/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /change limeets avatar/i })).toBeInTheDocument();
   });
 });

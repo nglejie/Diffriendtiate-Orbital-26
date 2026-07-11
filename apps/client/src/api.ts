@@ -1,7 +1,8 @@
-const API_BASE = import.meta.env.VITE_API_URL || "";
+export const API_BASE = import.meta.env.VITE_API_URL || "";
 const TOKEN_KEY = "diffriendtiate_token";
+const SESSION_TOKEN_KEY = "diffriendtiate_session_token";
 
-let authToken = localStorage.getItem(TOKEN_KEY) || "";
+let authToken = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY) || "";
 
 type ApiRequestOptions = Omit<RequestInit, "body" | "headers"> & {
   body?: any;
@@ -70,14 +71,22 @@ export function getAuthToken() {
   return authToken;
 }
 
-export function setAuthToken(token: string) {
+export function setAuthToken(token: string, options: { remember?: boolean } = {}) {
   authToken = token || "";
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
 
   if (authToken) {
-    localStorage.setItem(TOKEN_KEY, authToken);
-  } else {
-    localStorage.removeItem(TOKEN_KEY);
+    if (options.remember === false) {
+      sessionStorage.setItem(SESSION_TOKEN_KEY, authToken);
+    } else {
+      localStorage.setItem(TOKEN_KEY, authToken);
+    }
   }
+}
+
+export function getOAuthUrl(provider: string) {
+  return `${API_BASE}/api/auth/oauth/${encodeURIComponent(provider)}`;
 }
 
 /**
@@ -110,7 +119,15 @@ async function request(path: string, options: ApiRequestOptions = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(payload.message || "Something went wrong.");
+    const error = new Error(payload.message || "Something went wrong.") as Error & {
+      payload?: any;
+      status?: number;
+      [key: string]: any;
+    };
+    Object.assign(error, payload);
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
   }
 
   return payload;
@@ -190,8 +207,21 @@ async function streamRequest(path: string, body: any, onEvent: any, options: Str
 export const api = {
   register: (body) => request("/api/auth/register", { method: "POST", body }),
   login: (body) => request("/api/auth/login", { method: "POST", body }),
+  completeSupabaseSession: (body) =>
+    request("/api/auth/supabase/session", { method: "POST", body }),
+  requestPasswordReset: (body) =>
+    request("/api/auth/password-reset/request", { method: "POST", body }),
+  resetPassword: (body) =>
+    request("/api/auth/password-reset/confirm", { method: "POST", body }),
+  resendEmailVerification: (body) =>
+    request("/api/auth/email-verification/resend", { method: "POST", body }),
+  confirmEmailVerification: (body) =>
+    request("/api/auth/email-verification/confirm", { method: "POST", body }),
   me: () => request("/api/auth/me"),
   updateProfile: (body) => request("/api/auth/me", { method: "PATCH", body }),
+  updateAccount: (body) => request("/api/auth/account", { method: "PATCH", body }),
+  updatePassword: (body) => request("/api/auth/password", { method: "PATCH", body }),
+  deleteAccount: () => request("/api/auth/me", { method: "DELETE" }),
   listRooms: (search = "") =>
     request(`/api/rooms${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   createRoom: (body) => request("/api/rooms", { method: "POST", body }),
@@ -200,6 +230,7 @@ export const api = {
     request(`/api/rooms/${roomId}`, { method: "PATCH", body }),
   deleteRoom: (roomId) => request(`/api/rooms/${roomId}`, { method: "DELETE" }),
   joinRoom: (roomId) => request(`/api/rooms/${roomId}/join`, { method: "POST" }),
+  leaveRoom: (roomId) => request(`/api/rooms/${roomId}/leave`, { method: "POST" }),
   joinInvite: (inviteCode, body) =>
     request(`/api/invites/${inviteCode}/join`, { method: "POST", body }),
   createChannel: (roomId: string, body: CreateChannelBody) =>
@@ -250,6 +281,16 @@ export const api = {
       `/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations/${encodeURIComponent(annotationId)}/replies`,
       { method: "POST", body },
     ),
+  deleteAnnotationReply: (
+    roomId: string,
+    channel: string,
+    annotationId: string,
+    replyId: string,
+  ) =>
+    request(
+      `/api/rooms/${roomId}/channels/${encodeURIComponent(channel)}/annotations/${encodeURIComponent(annotationId)}/replies/${encodeURIComponent(replyId)}`,
+      { method: "DELETE" },
+    ),
   getMessages: (roomId) => request(`/api/rooms/${roomId}/messages`),
   getResources: (roomId, options: ResourceQueryOptions = {}) => {
     const params = new URLSearchParams();
@@ -265,6 +306,10 @@ export const api = {
       method: "POST",
       body: formData,
     }).then(normalizeResourcePayload),
+  updateResource: (resourceId, body) =>
+    request(`/api/resources/${resourceId}`, { method: "PATCH", body }).then(normalizeResourcePayload),
+  moveResourceFolder: (roomId, body) =>
+    request(`/api/rooms/${roomId}/resources/folders`, { method: "PATCH", body }).then(normalizeResourcePayload),
   deleteResource: (resourceId) =>
     request(`/api/resources/${resourceId}`, { method: "DELETE" }),
   restoreResource: (resourceId) =>

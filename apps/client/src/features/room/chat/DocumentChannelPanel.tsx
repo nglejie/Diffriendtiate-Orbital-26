@@ -15,24 +15,18 @@ import type {
   Tip,
 } from "react-pdf-highlighter-extended";
 import {
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Edit3,
   FileText,
-  MessageSquarePlus,
-  RotateCcw,
-  Send,
-  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, PointerEvent } from "react";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { getAuthToken } from "../../../api.ts";
 import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
-import { AnnotationSidebar } from "./AnnotationSidebar.tsx";
+import { AnnotationSidebar, RichAnnotationComposer } from "./AnnotationSidebar.tsx";
 import type { AnnotationSidebarHandle } from "./AnnotationSidebar.tsx";
-import { DocumentAuthorAvatar, mergeCurrentUserProfile } from "./DocumentAuthorAvatar.tsx";
+import { DocumentAuthorAvatar } from "./DocumentAuthorAvatar.tsx";
 
 export const ANNOTATION_TYPES = [
   { id: "question", label: "Question", color: "#f59e0b" },
@@ -96,6 +90,7 @@ export interface DocumentChannelPanelProps {
   ) => Promise<void>;
   onDeleteAnnotation: (id: string) => Promise<void>;
   onAddReply: (annotationId: string, comment: string) => Promise<void>;
+  onDeleteReply: (annotationId: string, replyId: string) => Promise<void>;
   onError: (message: string) => void;
   onPageChange: (page: number) => void;
   isOwner?: boolean;
@@ -291,7 +286,6 @@ function SelectionTip({
   resourceId: string;
 }) {
   const [annotationType, setAnnotationType] = useState<AnnotationType>("general");
-  const [comment, setComment] = useState("");
   const [saving, setSaving] = useState(false);
   const highlighter = usePdfHighlighterContext();
 
@@ -301,11 +295,11 @@ function SelectionTip({
 
   useEffect(() => {
     highlighter.updateTipPosition();
-  }, [annotationType, comment, highlighter]);
+  }, [annotationType, highlighter]);
 
-  async function saveAnnotation() {
+  async function saveAnnotation(commentHtml: string) {
     const selection: PdfSelection | null = highlighter.getCurrentSelection() || highlighter.getGhostHighlight();
-    const note = comment.trim();
+    const note = commentHtml.trim();
     if (!selection || !note) return;
 
     setSaving(true);
@@ -320,7 +314,6 @@ function SelectionTip({
       });
       highlighter.removeGhostHighlight();
       highlighter.setTip(null);
-      setComment("");
     } catch (error) {
       onError(error instanceof Error ? error.message : "Unable to save annotation.");
     } finally {
@@ -341,39 +334,27 @@ function SelectionTip({
         }))}
         value={annotationType}
       />
-      <textarea
+      <RichAnnotationComposer
         autoFocus
-        onChange={(event) => setComment(event.target.value)}
-        placeholder="Add context for the world..."
-        rows={3}
-        value={comment}
+        buttonLabel="Save Annotation"
+        className="selection-tip-composer"
+        disabled={saving}
+        onSubmit={saveAnnotation}
+        placeholder="Add context for this annotation"
       />
-      <button
-        className="primary-button compact"
-        disabled={!comment.trim() || saving}
-        onClick={saveAnnotation}
-        type="button"
-      >
-        Save Annotation
-      </button>
     </div>
   );
 }
 
 function HighlightPopup({
   annotation,
-  onOpenThread,
 }: {
   annotation: Annotation;
-  onOpenThread: (id: string) => void;
 }) {
   return (
     <div className="document-highlight-popup">
       <strong>{annotation.author?.name || "Unknown"}</strong>
       <p>{truncate(annotation.comment || annotation.content?.text || "Annotation")}</p>
-      <button onClick={() => onOpenThread(annotation.id)} type="button">
-        Open thread
-      </button>
     </div>
   );
 }
@@ -385,7 +366,7 @@ function HighlightContainer({ onOpenThread }: { onOpenThread: (id: string) => vo
   const color = type.color;
   const highlightTip: Tip = {
     position: highlight.position,
-    content: <HighlightPopup annotation={annotation} onOpenThread={onOpenThread} />,
+    content: <HighlightPopup annotation={annotation} />,
   };
 
   const renderedHighlight =
@@ -492,190 +473,6 @@ function DocumentPresenceBar({ members }: { members: DocumentPresenceMember[] })
   );
 }
 
-function AnnotationThreadCard({
-  annotation,
-  currentUser,
-  currentUserId,
-  editing,
-  editComment,
-  editType,
-  isActive,
-  isOwner,
-  onAddReply,
-  onBeginEdit,
-  onCancelEdit,
-  onDeleteAnnotation,
-  onError,
-  onSaveEdit,
-  onSetEditComment,
-  onSetEditType,
-  onToggleResolved,
-  pagePresence,
-  replyDraft,
-  replyOpen,
-  setReplyDraft,
-  setReplyOpen,
-}: {
-  annotation: Annotation;
-  currentUser: DocumentChannelPanelProps["user"];
-  currentUserId: string;
-  editing: boolean;
-  editComment: string;
-  editType: AnnotationType;
-  isActive: boolean;
-  isOwner: boolean;
-  onAddReply: (annotationId: string, comment: string) => Promise<void>;
-  onBeginEdit: (annotation: Annotation) => void;
-  onCancelEdit: () => void;
-  onDeleteAnnotation: (id: string) => Promise<void>;
-  onError: (message: string) => void;
-  onSaveEdit: (id: string) => Promise<void>;
-  onSetEditComment: (value: string) => void;
-  onSetEditType: (value: AnnotationType) => void;
-  onToggleResolved: (annotation: Annotation) => Promise<void>;
-  pagePresence: DocumentPresenceMember[];
-  replyDraft: string;
-  replyOpen: boolean;
-  setReplyDraft: (value: string) => void;
-  setReplyOpen: (open: boolean) => void;
-}) {
-  const [submittingReply, setSubmittingReply] = useState(false);
-  const type = getAnnotationType(annotation.annotationType);
-  const ownsAnnotation = annotation.author?.id === currentUserId;
-  const canDelete = ownsAnnotation || isOwner;
-  const canToggleResolved = annotation.annotationType === "question";
-  const annotationAuthor = mergeCurrentUserProfile(annotation.author, currentUser);
-
-  async function submitReply(event: FormEvent) {
-    event.preventDefault();
-    const comment = replyDraft.trim();
-    if (!comment) return;
-
-    setSubmittingReply(true);
-    try {
-      await onAddReply(annotation.id, comment);
-      setReplyDraft("");
-      setReplyOpen(false);
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Unable to add reply.");
-    } finally {
-      setSubmittingReply(false);
-    }
-  }
-
-  return (
-    <article
-      className={`document-annotation-card ${isActive ? "active" : ""}`}
-      style={{ "--annotation-color": type.color } as CSSProperties}
-    >
-      <div className="document-annotation-card-actions">
-        {ownsAnnotation ? (
-          <button aria-label="Edit annotation" onClick={() => onBeginEdit(annotation)} type="button">
-            <Edit3 size={15} />
-          </button>
-        ) : null}
-        {canDelete ? (
-          <button aria-label="Delete annotation" onClick={() => onDeleteAnnotation(annotation.id)} type="button">
-            <Trash2 size={15} />
-          </button>
-        ) : null}
-        {canToggleResolved ? (
-          <button
-            aria-label={annotation.resolved ? "Mark unresolved" : "Mark resolved"}
-            onClick={() => onToggleResolved(annotation)}
-            type="button"
-          >
-            {annotation.resolved ? <RotateCcw size={15} /> : <CheckCircle2 size={15} />}
-          </button>
-        ) : null}
-      </div>
-
-      <div className="document-annotation-card-topline">
-        <span className="document-annotation-type-badge">{type.label}</span>
-        {getPageNumber(annotation) ? <small>Page {getPageNumber(annotation)}</small> : null}
-      </div>
-
-      {annotation.content?.text ? (
-        <blockquote className="document-annotation-excerpt">{annotation.content.text}</blockquote>
-      ) : null}
-
-      <div className="document-annotation-author-row">
-        <DocumentAuthorAvatar author={annotation.author} currentUser={currentUser} />
-        <strong>{annotationAuthor.name || "Unknown"}</strong>
-        <time>{formatAnnotationTime(annotation.createdAt)}</time>
-        {annotation.resolved ? <em>Resolved</em> : null}
-      </div>
-
-      {editing ? (
-        <div className="document-annotation-edit-form">
-          <AppSelectMenu
-            ariaLabel="Edit annotation type"
-            className="document-annotation-type-select compact"
-            label="Type"
-            onChange={(value) => onSetEditType(value as AnnotationType)}
-            options={ANNOTATION_TYPES.map((nextType) => ({
-              label: nextType.label,
-              value: nextType.id,
-            }))}
-            value={editType}
-          />
-          <textarea
-            onChange={(event) => onSetEditComment(event.target.value)}
-            rows={3}
-            value={editComment}
-          />
-          <div>
-            <button className="secondary-button compact" onClick={onCancelEdit} type="button">
-              Cancel
-            </button>
-            <button className="primary-button compact" onClick={() => onSaveEdit(annotation.id)} type="button">
-              Save
-            </button>
-          </div>
-        </div>
-      ) : (
-        <p className="document-annotation-comment">{annotation.comment}</p>
-      )}
-
-      {annotation.replies?.length ? (
-        <div className="document-annotation-replies">
-          {annotation.replies.map((reply) => (
-            <div className="document-annotation-reply" key={reply.id}>
-              <DocumentAuthorAvatar author={reply.author} currentUser={currentUser} small />
-              <div>
-                <p>
-                  <strong>{mergeCurrentUserProfile(reply.author, currentUser).name || "Unknown"}</strong>
-                  <time>{formatAnnotationTime(reply.createdAt)}</time>
-                </p>
-                <span>{reply.comment}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {replyOpen ? (
-        <form className="document-annotation-reply-form" onSubmit={submitReply}>
-          <input
-            autoFocus
-            onChange={(event) => setReplyDraft(event.target.value)}
-            placeholder="Reply to this thread"
-            value={replyDraft}
-          />
-          <button aria-label="Send reply" disabled={!replyDraft.trim() || submittingReply} type="submit">
-            <Send size={15} />
-          </button>
-        </form>
-      ) : (
-        <button className="document-annotation-reply-trigger" onClick={() => setReplyOpen(true)} type="button">
-          <MessageSquarePlus size={15} />
-          Reply
-        </button>
-      )}
-    </article>
-  );
-}
-
 export function DocumentChannelPanel({
   activeChannel,
   annotations,
@@ -684,6 +481,7 @@ export function DocumentChannelPanel({
   onAddReply,
   onCreateAnnotation,
   onDeleteAnnotation,
+  onDeleteReply,
   onError,
   onPageChange,
   onUpdateAnnotation,
@@ -700,19 +498,15 @@ export function DocumentChannelPanel({
   const [activeFilter, setActiveFilter] = useState<AnnotationFilter>("all");
   const [sortOrder, setSortOrder] = useState<AnnotationSort>("page");
   const [activeAnnotationId, setActiveAnnotationId] = useState("");
-  const [editingId, setEditingId] = useState("");
-  const [editComment, setEditComment] = useState("");
-  const [editType, setEditType] = useState<AnnotationType>("general");
-  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
-  const [openReplyId, setOpenReplyId] = useState("");
   const [pdfScrollContainer, setPdfScrollContainer] = useState<HTMLElement | null>(null);
   const [filterScrollState, setFilterScrollState] = useState({ left: false, right: false });
+  const [sidebarWidth, setSidebarWidth] = useState(360);
   const annotationSidebarRef = useRef<AnnotationSidebarHandle | null>(null);
   const filterRowRef = useRef<HTMLDivElement | null>(null);
   const highlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
   const lastReportedPageRef = useRef(0);
+  const panelRef = useRef<HTMLElement | null>(null);
   const pageChangeTimeoutRef = useRef<number | null>(null);
-  const threadRefs = useRef<Record<string, HTMLElement | null>>({});
   const resourceKind = useMemo(() => {
     if (["pdf", "docx", "pptx", "image"].includes(resourceType)) {
       return resourceType as DocumentResourceKind;
@@ -891,51 +685,34 @@ export function DocumentChannelPanel({
 
   function openThread(annotationId: string) {
     setActiveAnnotationId(annotationId);
+    const highlight = highlights.find((candidate) => candidate.id === annotationId);
+    if (highlight) highlighterUtilsRef.current?.scrollToHighlight?.(highlight);
     annotationSidebarRef.current?.openThread(annotationId);
   }
 
-  function beginEdit(annotation: Annotation) {
-    setEditingId(annotation.id);
-    setEditComment(annotation.comment || "");
-    setEditType(getAnnotationType(annotation.annotationType).id);
+  function jumpToAnnotation(annotationId: string) {
+    setActiveAnnotationId(annotationId);
+    const highlight = highlights.find((candidate) => candidate.id === annotationId);
+    if (highlight) highlighterUtilsRef.current?.scrollToHighlight?.(highlight);
   }
 
-  function cancelEdit() {
-    setEditingId("");
-    setEditComment("");
-    setEditType("general");
-  }
+  function beginSidebarResize(event: PointerEvent<HTMLDivElement>) {
+    const panel = panelRef.current;
+    if (!panel) return;
+    event.preventDefault();
 
-  async function saveEdit(annotationId: string) {
-    try {
-      await onUpdateAnnotation(annotationId, {
-        annotationType: editType,
-        comment: editComment.trim(),
-      });
-      cancelEdit();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Unable to update annotation.");
+    const panelRect = panel.getBoundingClientRect();
+    function handlePointerMove(moveEvent: globalThis.PointerEvent) {
+      const nextWidth = Math.min(Math.max(panelRect.right - moveEvent.clientX, 300), Math.min(560, panelRect.width * 0.48));
+      setSidebarWidth(nextWidth);
     }
-  }
-
-  async function toggleResolved(annotation: Annotation) {
-    try {
-      await onUpdateAnnotation(annotation.id, { resolved: !annotation.resolved });
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Unable to update annotation.");
+    function stopResize() {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
     }
-  }
 
-  async function deleteAnnotation(annotationId: string) {
-    try {
-      await onDeleteAnnotation(annotationId);
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Unable to delete annotation.");
-    }
-  }
-
-  function setReplyDraft(annotationId: string, value: string) {
-    setReplyDrafts((current) => ({ ...current, [annotationId]: value }));
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
   }
 
   if (!resourceUrl) {
@@ -949,7 +726,12 @@ export function DocumentChannelPanel({
   }
 
   return (
-    <section className="document-channel-panel" aria-label={`${resourceTitle} document channel`}>
+    <section
+      className="document-channel-panel"
+      aria-label={`${resourceTitle} document channel`}
+      ref={panelRef}
+      style={{ "--document-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
       <div className="document-viewer-pane">
         <header className="document-channel-header">
           <div>
@@ -1016,14 +798,24 @@ export function DocumentChannelPanel({
         </div>
       </div>
 
+      <div
+        aria-label="Resize Annotations Panel"
+        aria-orientation="vertical"
+        className="document-sidebar-resizer"
+        onPointerDown={beginSidebarResize}
+        role="separator"
+      />
+
       <AnnotationSidebar
         activeChannel={activeChannel}
         annotations={annotations}
         currentUser={user}
         isOwner={isOwner}
         onAddReply={onAddReply}
-        onDeleteAnnotation={deleteAnnotation}
+        onDeleteAnnotation={onDeleteAnnotation}
+        onDeleteReply={onDeleteReply}
         onError={onError}
+        onJumpToAnnotation={jumpToAnnotation}
         onUpdateAnnotation={onUpdateAnnotation}
         ref={annotationSidebarRef}
         resourceId={resourceId}

@@ -13,8 +13,11 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../../../api.ts";
 import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
+import SmallSettingsDialog from "../../../shared/ui/SmallSettingsDialog.tsx";
+import { FieldTooltipTrigger } from "../../dashboard/DashboardComponents.tsx";
 import {
   formatTimeOnly,
   getInitial,
@@ -265,6 +268,11 @@ function formatDateTimeFull(value) {
 }
 
 function formatWindowSchedule(poll) {
+  if (!poll) return "";
+  return `${formatDateRange(poll.rangeStart, poll.rangeEnd)}, ${timeLabelFromMinutes(getPollStartMinutes(poll))} – ${timeLabelFromMinutes(getPollEndMinutes(poll))}`;
+}
+
+function formatWindowCardSchedule(poll) {
   if (!poll) return "";
   return `${formatDateRange(poll.rangeStart, poll.rangeEnd)}, ${timeLabelFromMinutes(getPollStartMinutes(poll))} – ${timeLabelFromMinutes(getPollEndMinutes(poll))}`;
 }
@@ -687,19 +695,16 @@ export function CoordinatePanel({
   const activePolls = useMemo(() => polls.filter((candidate) => !candidate.scheduledSessionId), [polls]);
   const [view, setView] = useState("week");
   const [cursorDate, setCursorDate] = useState(new Date());
-  const [paintMode, setPaintMode] = useState("available");
   const [editingAvailability, setEditingAvailability] = useState(false);
-  const [overlayWhileEditing, setOverlayWhileEditing] = useState(false);
   const [showBestTimes, setShowBestTimes] = useState(false);
   const [showPollOptions, setShowPollOptions] = useState(false);
   const [selectedPollId, setSelectedPollId] = useState("");
   const [editingPollId, setEditingPollId] = useState("");
-  const [windowsOpen, setWindowsOpen] = useState(true);
-  const [responsesOpen, setResponsesOpen] = useState(true);
-  const [bestTimesOpen, setBestTimesOpen] = useState(true);
+  const [availabilityInspectorMode, setAvailabilityInspectorMode] = useState("windows");
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [selectedMemberIds, setSelectedMemberIds] = useState([]);
   const [hoveredSlotKey, setHoveredSlotKey] = useState("");
+  const [hoveredSlotPoint, setHoveredSlotPoint] = useState(null);
   const [pollForm, setPollForm] = useState(() => createPollForm(null));
   const [slotStatusDraft, setSlotStatusDraft] = useState({});
   const [availabilityDirty, setAvailabilityDirty] = useState(false);
@@ -712,6 +717,7 @@ export function CoordinatePanel({
   const [selectedSession, setSelectedSession] = useState(null);
   const draggingRef = useRef(false);
   const dragStartSlotRef = useRef(null);
+  const dragPaintStatusRef = useRef("");
   const selectedPoll = activePolls.find((candidate) => candidate.id === selectedPollId) || activePolls[0] || null;
   const poll = selectedPoll;
   const pollResponses = useMemo(
@@ -809,6 +815,7 @@ export function CoordinatePanel({
     function stopDrag() {
       draggingRef.current = false;
       dragStartSlotRef.current = null;
+      dragPaintStatusRef.current = "";
     }
 
     window.addEventListener("pointerup", stopDrag);
@@ -825,6 +832,19 @@ export function CoordinatePanel({
     setEditingPollId("");
     setPollForm(getDefaultPollForm());
     setShowPollOptions(true);
+  }
+
+  function openAvailabilityWindowDetails(nextPoll) {
+    if (!nextPoll?.id) return;
+    setSelectedPollId(nextPoll.id);
+    setCursorDate(clampDateToPoll(new Date(nextPoll.rangeStart), nextPoll));
+    setEditingAvailability(false);
+    setAvailabilityInspectorMode("details");
+  }
+
+  function returnToAvailabilityWindows() {
+    setEditingAvailability(false);
+    setAvailabilityInspectorMode("windows");
   }
 
   function openEditWindowForm(nextPoll = selectedPoll) {
@@ -867,6 +887,7 @@ export function CoordinatePanel({
       if (savedPoll?.id) {
         setSelectedPollId(savedPoll.id);
         setCursorDate(clampDateToPoll(new Date(savedPoll.rangeStart), savedPoll));
+        setAvailabilityInspectorMode("details");
       }
       setEditingPollId("");
       setShowPollOptions(false);
@@ -886,6 +907,7 @@ export function CoordinatePanel({
       const payload = await api.deleteCoordinatePoll(room.id, editingPollId);
       onCoordinateChanged(payload);
       setEditingPollId("");
+      setAvailabilityInspectorMode("windows");
       setShowPollOptions(false);
     } catch (err) {
       onError(err.message);
@@ -908,23 +930,25 @@ export function CoordinatePanel({
     });
   }
 
-  function paintSlots(slots) {
+  function nextAvailabilityStatus(currentStatus) {
+    if (currentStatus === "available") return "ifNeeded";
+    if (currentStatus === "ifNeeded") return "";
+    return "available";
+  }
+
+  function paintSlots(slots, status) {
     const uniqueSlots = slots.filter(Boolean);
     if (!uniqueSlots.length) return;
 
     setSlotStatusDraft((current) => {
       const next = { ...current };
       uniqueSlots.forEach((slot) => {
-        if (paintMode === "erase") delete next[slot.startAt];
-        else next[slot.startAt] = paintMode;
+        if (!status) delete next[slot.startAt];
+        else next[slot.startAt] = status;
       });
       return next;
     });
     setAvailabilityDirty(true);
-  }
-
-  function paintSlot(slot) {
-    paintSlots([slot]);
   }
 
   function getDragRangeSlots(startSlot, endSlot) {
@@ -950,7 +974,7 @@ export function CoordinatePanel({
 
   function paintDragRange(slot) {
     const startSlot = dragStartSlotRef.current || slot;
-    paintSlots(getDragRangeSlots(startSlot, slot));
+    paintSlots(getDragRangeSlots(startSlot, slot), dragPaintStatusRef.current);
   }
 
   function handleAvailabilityPointerDown(event, slot) {
@@ -958,7 +982,9 @@ export function CoordinatePanel({
     event.preventDefault();
     draggingRef.current = true;
     dragStartSlotRef.current = slot;
-    paintSlot(slot);
+    dragPaintStatusRef.current = event.button === 2 ? "" : nextAvailabilityStatus(slotStatusDraft[slot.startAt] || "");
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    paintSlots([slot], dragPaintStatusRef.current);
   }
 
   function handleAvailabilityPointerEnter(slot) {
@@ -975,6 +1001,18 @@ export function CoordinatePanel({
       ?.closest?.("[data-slot-start]");
     const targetSlot = target?.getAttribute("data-slot-start");
     paintDragRange(slotLookup.get(targetSlot) || slot);
+  }
+
+  function handleAvailabilitySlotHover(slotKey, event = null) {
+    setHoveredSlotKey(slotKey);
+    setHoveredSlotPoint(
+      slotKey && event
+        ? {
+            x: event.clientX,
+            y: event.clientY,
+          }
+        : null,
+    );
   }
 
   async function saveAvailability() {
@@ -1025,14 +1063,13 @@ export function CoordinatePanel({
   function beginAvailabilityEdit() {
     setSlotStatusDraft(buildSlotStatusMap(currentUserResponse));
     setAvailabilityDirty(false);
-    setOverlayWhileEditing(false);
     setEditingAvailability(true);
+    setAvailabilityInspectorMode("details");
   }
 
   function cancelAvailabilityEdit() {
     setSlotStatusDraft(buildSlotStatusMap(currentUserResponse));
     setAvailabilityDirty(false);
-    setOverlayWhileEditing(false);
     setEditingAvailability(false);
   }
 
@@ -1173,6 +1210,7 @@ export function CoordinatePanel({
     setView(nextView);
     if (nextView === "availability") {
       setEditingAvailability(false);
+      setAvailabilityInspectorMode("windows");
       if (selectedPoll) setCursorDate((current) => clampDateToPoll(current, selectedPoll));
     }
   }
@@ -1243,37 +1281,34 @@ export function CoordinatePanel({
                   <div className="coordinate-availability-actions">
                     {editingAvailability ? (
                       <>
-                        <div className="coordinate-paint-toggle" role="group" aria-label="Availability Paint Mode">
-                          <button
-                            className={paintMode === "available" ? "active available" : ""}
-                            onClick={() => setPaintMode("available")}
-                            type="button"
-                          >
-                            Available
-                          </button>
-                          <button
-                            className={paintMode === "ifNeeded" ? "active if-needed" : ""}
-                            onClick={() => setPaintMode("ifNeeded")}
-                            type="button"
-                          >
-                            If Needed
-                          </button>
-                          <button
-                            className={paintMode === "erase" ? "active" : ""}
-                            onClick={() => setPaintMode("erase")}
-                            type="button"
-                          >
-                            Erase
-                          </button>
-                        </div>
-                        <label className="coordinate-mini-toggle">
-                          <input
-                            checked={overlayWhileEditing}
-                            onChange={(event) => setOverlayWhileEditing(event.target.checked)}
-                            type="checkbox"
-                          />
-                          <span>Overlay Availabilities</span>
-                        </label>
+                        <FieldTooltipTrigger
+                          ariaLabel="Availability colour help"
+                          className="coordinate-availability-help"
+                          maxWidth={260}
+                          message={(
+                            <span className="coordinate-availability-help-content">
+                              <span className="availability-legend-row available">
+                                <b className="available" />
+                                <span>
+                                  <strong>Available</strong>
+                                  <small>Works well for you.</small>
+                                </span>
+                              </span>
+                              <span className="availability-legend-row if-needed">
+                                <b className="if-needed" />
+                                <span>
+                                  <strong>If Needed</strong>
+                                  <small>Possible, but not ideal.</small>
+                                </span>
+                              </span>
+                              <em>
+                                <span>Click or drag to cycle states.</span>
+                                <span>Right-click erases.</span>
+                              </em>
+                            </span>
+                          )}
+                          tooltipClassName="coordinate-availability-tooltip"
+                        />
                         <span className="coordinate-action-divider" aria-hidden="true" />
                         <button
                           className="secondary-button compact danger"
@@ -1308,16 +1343,16 @@ export function CoordinatePanel({
                   days={visiblePollDays}
                   editing={editingAvailability}
                   getSlotAvailability={getSlotAvailability}
-                  overlayEnabled={!editingAvailability || overlayWhileEditing}
+                  overlayEnabled={!editingAvailability}
                   onPointerDown={handleAvailabilityPointerDown}
                   onPointerEnter={handleAvailabilityPointerEnter}
                   onPointerMove={handleAvailabilityPointerMove}
                   onSchedule={openEventDialog}
-                  onSlotHover={setHoveredSlotKey}
+                  onSlotHover={handleAvailabilitySlotHover}
                   ownStatuses={slotStatusDraft}
-                  paintMode={paintMode}
                   poll={poll}
                   showBestTimes={showBestTimes}
+                  user={user}
                   userIsOwner={room?.isOwner}
                 />
               </>
@@ -1336,21 +1371,117 @@ export function CoordinatePanel({
             )}
           </main>
 
-          <aside className="coordinate-inspector">
-            <section className="coordinate-inspector-section">
-              <button
-                aria-expanded={windowsOpen}
-                className="coordinate-inspector-heading"
-                onClick={() => setWindowsOpen((current) => !current)}
-                type="button"
-              >
-                <span>Meetup Windows</span>
-                <small>{activePolls.length}</small>
-              </button>
-              {windowsOpen ? (
-                <>
+          <aside
+            className={`coordinate-inspector ${
+              availabilityInspectorMode === "details" && poll ? "detail-mode" : "windows-mode"
+            }`}
+          >
+            {availabilityInspectorMode === "details" && poll ? (
+              <>
+                <section className="coordinate-inspector-section coordinate-window-detail-summary">
+                  <button className="coordinate-window-back-button" onClick={returnToAvailabilityWindows} type="button">
+                    <ChevronLeft size={15} />
+                    Back
+                  </button>
+                  <div className="coordinate-window-detail-title">
+                    <div>
+                      <strong>{poll.title || "Group Meeting"}</strong>
+                      <small>{formatWindowCardSchedule(poll)}</small>
+                    </div>
+                    {room.isOwner ? (
+                      <button
+                        aria-label={`Edit ${poll.title || "Meetup Window"}`}
+                        className="coordinate-window-edit-button"
+                        onClick={() => openEditWindowForm(poll)}
+                        type="button"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="coordinate-inspector-section">
+                  <div className="coordinate-inspector-heading static">
+                    <label className="coordinate-heading-checkbox">
+                      <input
+                        aria-label={selectedMemberIds.length === members.length ? "Deselect All Responses" : "Select All Responses"}
+                        checked={selectedMemberIds.length === members.length}
+                        className="coordinate-control-checkbox"
+                        onChange={toggleEveryoneSelected}
+                        type="checkbox"
+                      />
+                      <span>Responses</span>
+                    </label>
+                    <small>{pollResponses.length}/{members.length}</small>
+                  </div>
+                  <div className="coordinate-respondent-list">
+                    {members.map((member) => {
+                      const response = responseByUser.get(member.id);
+                      const selected = selectedMemberIds.includes(member.id);
+                      return (
+                        <button
+                          aria-pressed={selected}
+                          className={`${selected ? "active" : ""} ${response ? "responded" : "not-responded"}`.trim()}
+                          key={member.id}
+                          onClick={() => toggleMember(member.id)}
+                          type="button"
+                        >
+                          <MemberAvatar member={member} />
+                          <span>
+                            <strong>{member.name}</strong>
+                            <small>{response ? "Responded" : "No Response"}</small>
+                          </span>
+                          {response ? <CheckCircle2 aria-label="Responded" size={15} /> : <span aria-hidden="true" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section className="coordinate-inspector-section">
+                  <div className="coordinate-inspector-heading static">
+                    <label className="coordinate-heading-checkbox">
+                      <input
+                        aria-label="Show Best Times"
+                        checked={showBestTimes}
+                        className="coordinate-control-checkbox"
+                        onChange={(event) => setShowBestTimes(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>Best Times</span>
+                    </label>
+                    <small>{bestSlots.length}</small>
+                  </div>
+                  {bestSlots.length ? (
+                    <div className="coordinate-best-times">
+                      {bestSlots.slice(0, 5).map(({ slot, availability }) => (
+                        <button
+                          key={slot.startAt}
+                          onClick={() => room.isOwner && openEventDialog(slot, { coordinatePollId: poll?.id || "" })}
+                          type="button"
+                        >
+                          <span>{formatDateTimeCompact(slot.startAt)}</span>
+                          <strong>
+                            {availability.available.length}
+                            {availability.ifNeeded.length ? ` + ${availability.ifNeeded.length}` : ""}/{availability.possible}
+                          </strong>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="coordinate-muted-copy">No matching times yet.</p>
+                  )}
+                </section>
+              </>
+            ) : (
+              <section className="coordinate-inspector-section coordinate-window-list-panel">
+                <div className="coordinate-inspector-heading static">
+                  <span>Meetup Windows</span>
+                  <small>{activePolls.length}</small>
+                </div>
                 {room.isOwner ? (
-                  <button className="coordinate-icon-text-button" onClick={openNewWindowForm} type="button">
+                  <button className="secondary-button compact coordinate-new-window-button" onClick={openNewWindowForm} type="button">
                     <Plus size={14} />
                     New Window
                   </button>
@@ -1363,19 +1494,18 @@ export function CoordinatePanel({
                       const selected = windowPoll.id === poll?.id;
                       const responseCount = getPollResponseCount(windowPoll, responses);
                       return (
-                        <article className={selected ? "active" : ""} key={windowPoll.id}>
+                        <article
+                          className={`${selected ? "active" : ""} ${room.isOwner ? "owner-actions" : ""}`.trim()}
+                          key={windowPoll.id}
+                        >
                           <button
                             className="coordinate-window-select"
-                            onClick={() => {
-                              setSelectedPollId(windowPoll.id);
-                              setCursorDate(clampDateToPoll(new Date(windowPoll.rangeStart), windowPoll));
-                              setEditingAvailability(false);
-                            }}
+                            onClick={() => openAvailabilityWindowDetails(windowPoll)}
                             type="button"
                           >
                             <span>
                               <strong>{windowPoll.title || "Group Meeting"}</strong>
-                              <small>{formatWindowSchedule(windowPoll)}</small>
+                              <small>{formatWindowCardSchedule(windowPoll)}</small>
                             </span>
                             <em>{responseCount}/{members.length} Responses</em>
                           </button>
@@ -1396,107 +1526,8 @@ export function CoordinatePanel({
                 ) : (
                   <p className="coordinate-muted-copy">No Active Windows.</p>
                 )}
-                </>
-              ) : null}
-            </section>
-
-            <section className="coordinate-inspector-section">
-              <button
-                aria-expanded={responsesOpen}
-                className="coordinate-inspector-heading"
-                onClick={() => setResponsesOpen((current) => !current)}
-                type="button"
-              >
-                <span>Responses</span>
-                <small>{pollResponses.length}/{members.length}</small>
-              </button>
-              {responsesOpen ? (
-                <>
-                  <div className="coordinate-respondent-list">
-                    {members.map((member) => {
-                      const response = responseByUser.get(member.id);
-                      const selected = selectedMemberIds.includes(member.id);
-                      return (
-                        <button
-                          className={selected ? "active" : ""}
-                          key={member.id}
-                          onClick={() => toggleMember(member.id)}
-                          type="button"
-                        >
-                          <MemberAvatar member={member} />
-                          <span>
-                            <strong>{member.name}</strong>
-                            <small>{response ? "Responded" : "Not Responded"}</small>
-                          </span>
-                          {selected ? <CheckCircle2 size={15} /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <label className="coordinate-select-all-toggle">
-                    <input
-                      checked={selectedMemberIds.length === members.length}
-                      onChange={toggleEveryoneSelected}
-                      type="checkbox"
-                    />
-                    <span>{selectedMemberIds.length === members.length ? "Deselect All" : "Select All"}</span>
-                  </label>
-                </>
-              ) : null}
-            </section>
-
-            <section className="coordinate-inspector-section">
-              <label className="coordinate-toggle-row">
-                <input
-                  checked={showBestTimes}
-                  onChange={(event) => setShowBestTimes(event.target.checked)}
-                  type="checkbox"
-                />
-                <span>Show Best Times</span>
-              </label>
-              {hoveredAvailability ? (
-                <div className="coordinate-hover-summary">
-                  <strong>{formatSlotRange(hoveredSlot)}</strong>
-                  <span>
-                    {hoveredAvailability.available.length}
-                    {hoveredAvailability.ifNeeded.length ? ` + ${hoveredAvailability.ifNeeded.length}` : ""}/
-                    {hoveredAvailability.possible} selected
-                  </span>
-                  <small>{hoveredAvailability.names || "No Selected Members Available"}</small>
-                </div>
-              ) : null}
-            </section>
-
-            {bestSlots.length ? (
-              <section className="coordinate-inspector-section">
-                <button
-                  aria-expanded={bestTimesOpen}
-                  className="coordinate-inspector-heading"
-                  onClick={() => setBestTimesOpen((current) => !current)}
-                  type="button"
-                >
-                  <span>Best Times</span>
-                  <small>{bestSlots.length}</small>
-                </button>
-                {bestTimesOpen ? (
-                  <div className="coordinate-best-times">
-                    {bestSlots.slice(0, 5).map(({ slot, availability }) => (
-                      <button
-                        key={slot.startAt}
-                        onClick={() => room.isOwner && openEventDialog(slot, { coordinatePollId: poll?.id || "" })}
-                        type="button"
-                      >
-                        <span>{formatDateTimeCompact(slot.startAt)}</span>
-                        <strong>
-                          {availability.available.length}
-                          {availability.ifNeeded.length ? ` + ${availability.ifNeeded.length}` : ""}/{availability.possible}
-                        </strong>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
               </section>
-            ) : null}
+            )}
           </aside>
         </div>
       ) : view === "month" ? (
@@ -1549,6 +1580,13 @@ export function CoordinatePanel({
           session={selectedSession}
         />
       ) : null}
+      {hoveredAvailability && hoveredSlot ? (
+        <AvailabilityHoverTooltip
+          availability={hoveredAvailability}
+          point={hoveredSlotPoint}
+          slot={hoveredSlot}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1596,18 +1634,36 @@ function MeetupWindowDialog({ editing, form, onCancel, onChange, onDelete, onSub
   }
 
   return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
-    >
-      <form className="room-form-modal coordinate-window-dialog" onSubmit={onSubmit}>
-        <header>
-          <h2>{editing ? "Edit Meetup Window" : "New Meetup Window"}</h2>
-          <button aria-label="Close Meetup Window" onClick={onCancel} type="button">
-            <X size={18} />
+    <SmallSettingsDialog
+      className="coordinate-window-dialog"
+      footer={
+        editing ? (
+          <>
+            <button className="danger-button compact" disabled={saving} onClick={onDelete} type="button">
+              Delete
+            </button>
+            <button
+              className="primary-button compact"
+              disabled={saving || !form.title.trim() || Number(form.dayEndMinutes) <= Number(form.dayStartMinutes) || !selectedDates.length}
+              type="submit"
+            >
+              {saving ? "Saving" : "Save"}
+            </button>
+          </>
+        ) : (
+          <button
+            className="primary-button compact"
+            disabled={saving || !form.title.trim() || Number(form.dayEndMinutes) <= Number(form.dayStartMinutes) || !selectedDates.length}
+            type="submit"
+          >
+            {saving ? "Saving" : "Create Window"}
           </button>
-        </header>
-
+        )
+      }
+      onClose={onCancel}
+      onSubmit={onSubmit}
+      title={editing ? "Edit Meetup Window" : "New Meetup Window"}
+    >
         <label className="field">
           <span>Title</span>
           <input
@@ -1685,24 +1741,7 @@ function MeetupWindowDialog({ editing, form, onCancel, onChange, onDelete, onSub
           </div>
         </section>
 
-        <div className={`modal-actions coordinate-window-modal-actions ${editing ? "editing" : "creating"}`}>
-          {editing ? (
-            <button className="secondary-button compact danger" disabled={saving} onClick={onDelete} type="button">
-              <Trash2 size={15} />
-              Delete Window
-            </button>
-          ) : null}
-          {editing ? <span /> : null}
-          <button
-            className="primary-button compact"
-            disabled={saving || !form.title.trim() || Number(form.dayEndMinutes) <= Number(form.dayStartMinutes) || !selectedDates.length}
-            type="submit"
-          >
-            {saving ? "Saving" : editing ? "Save Window" : "Create Window"}
-          </button>
-        </div>
-      </form>
-    </div>
+    </SmallSettingsDialog>
   );
 }
 
@@ -1786,16 +1825,16 @@ function AvailabilityHeatmap({
   onSchedule,
   onSlotHover,
   ownStatuses,
-  paintMode,
   poll,
   showBestTimes,
+  user,
   userIsOwner,
 }) {
   const rows = useMemo(() => buildAvailabilityRows(days, Number(poll?.slotMinutes) || 30), [days, poll?.slotMinutes]);
 
   return (
     <div
-      className={`coordinate-heatmap-grid polished ${editing ? `editing paint-${paintMode}` : ""}`.trim()}
+      className={`coordinate-heatmap-grid polished ${editing ? "editing" : ""}`.trim()}
       style={{
         "--coordinate-day-count": days.length || 1,
       }}
@@ -1824,32 +1863,27 @@ function AvailabilityHeatmap({
 
             return (
               <button
-                className={`coordinate-heat-slot ${ownStatus ? `own-${ownStatus}` : ""} ${isBest ? "best" : ""}`.trim()}
+                className={`coordinate-heat-slot ${ownStatus ? `own-${ownStatus}` : ""}`.trim()}
                 data-slot-start={slot.startAt}
                 key={slot.startAt}
+                onContextMenu={(event) => editing && event.preventDefault()}
                 onClick={() => {
                   if (!editing && userIsOwner) onSchedule(slot, { coordinatePollId: poll?.id || "" });
                 }}
-                onMouseDown={(event) => onPointerDown(event, slot)}
-                onMouseEnter={() => onPointerEnter(slot)}
-                onMouseMove={(event) => {
-                  onSlotHover(slot.startAt);
-                  onPointerMove(event, slot);
-                }}
                 onPointerDown={(event) => onPointerDown(event, slot)}
                 onPointerEnter={() => onPointerEnter(slot)}
-                onPointerLeave={() => onSlotHover("")}
+                onPointerLeave={() => onSlotHover("", null)}
                 onPointerMove={(event) => {
-                  onSlotHover(slot.startAt);
+                  onSlotHover(slot.startAt, event);
                   onPointerMove(event, slot);
                 }}
                 style={{
                   "--heat": `${heatPercent}%`,
                 }}
-                title={`${formatSlotRange(slot)} – ${availability.names || "No Selected Members Available"}`}
                 type="button"
               >
-                {overlayEnabled ? <span>{availability.available.length}</span> : <span />}
+                {!editing && ownStatus ? <OwnAvailabilityMarker status={ownStatus} user={user} /> : null}
+                {overlayEnabled ? <span className="coordinate-heat-count">{availability.available.length}</span> : <span />}
                 {overlayEnabled && availability.ifNeeded.length ? <small>+{availability.ifNeeded.length}</small> : null}
               </button>
             );
@@ -1857,6 +1891,51 @@ function AvailabilityHeatmap({
         </div>
       ))}
     </div>
+  );
+}
+
+function OwnAvailabilityMarker({ status, user }) {
+  const label = status === "ifNeeded" ? "Your If Needed Slot" : "Your Available Slot";
+  const initial = getInitial(user?.name || user?.email || "You");
+
+  return (
+    <span className={`coordinate-own-slot-marker ${status}`} aria-label={label}>
+      {user?.avatarUrl ? <img alt="" src={user.avatarUrl} /> : <span>{initial}</span>}
+    </span>
+  );
+}
+
+function AvailabilityHoverTooltip({ availability, point, slot }) {
+  if (!slot || !point) return null;
+
+  const tooltipWidth = 248;
+  const tooltipHeight = 112;
+  const left =
+    typeof window === "undefined"
+      ? point.x
+      : Math.min(Math.max(12, point.x + 14), window.innerWidth - tooltipWidth - 12);
+  const top =
+    typeof window === "undefined"
+      ? point.y
+      : Math.min(Math.max(12, point.y + 14), window.innerHeight - tooltipHeight - 12);
+
+  return createPortal(
+    <div
+      className="coordinate-slot-tooltip"
+      role="tooltip"
+      style={{
+        left,
+        top,
+      }}
+    >
+      <strong>{formatSlotRange(slot)}</strong>
+      <span>
+        {availability.available.length}
+        {availability.ifNeeded.length ? ` + ${availability.ifNeeded.length}` : ""}/{availability.possible} selected
+      </span>
+      <small>{availability.names || "No Selected Members Available"}</small>
+    </div>,
+    document.body,
   );
 }
 
@@ -2332,67 +2411,56 @@ function MemberAvatar({ member }) {
 function EventDetailsDialog({ canDelete, deleting, onClose, onDelete, session }) {
   const allDay = sessionIsAllDay(session);
   return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <article className="room-form-modal coordinate-event-dialog coordinate-event-details">
-        <header>
-          <div>
-            <span className={`coordinate-event-kind ${session.kind || "meeting"}`}>
-              {sessionKindLabel(session.kind)}
-            </span>
-            <h2>{session.title}</h2>
-          </div>
-          <button aria-label="Close Event Details" onClick={onClose} type="button">
-            <X size={18} />
+    <SmallSettingsDialog
+      className="coordinate-event-dialog coordinate-event-details medium-dialog"
+      description={sessionKindLabel(session.kind)}
+      footer={
+        canDelete ? (
+          <button className="danger-button compact" disabled={deleting} onClick={onDelete} type="button">
+            {deleting ? "Deleting" : "Delete Event"}
           </button>
-        </header>
-        <div className="coordinate-event-detail-grid">
-          <span>
-            <Clock size={15} />
-            {allDay ? "Date" : "Starts"}
-          </span>
-          <strong>{allDay ? formatDayMonth(session.startsAt, true) : formatDateTimeFull(session.startsAt)}</strong>
-          {!allDay && session.endsAt ? (
-            <>
-              <span>
-                <Clock size={15} />
-                Ends
-              </span>
-              <strong>{formatDateTimeFull(session.endsAt)}</strong>
-            </>
-          ) : null}
-          <span>
-            <Lock size={15} />
-            Visibility
-          </span>
-          <strong>{session.visibility === "private" ? "Private To Me" : "Everyone In Room"}</strong>
-          {session.location ? (
-            <>
-              <span>
-                <MapPin size={15} />
-                Location
-              </span>
-              <strong>{session.location}</strong>
-            </>
-          ) : null}
-        </div>
-        {session.agenda ? (
-          <section className="coordinate-event-notes">
-            <strong>Notes</strong>
-            <p>{session.agenda}</p>
-          </section>
+        ) : null
+      }
+      onClose={onClose}
+      title={session.title}
+    >
+      <div className="coordinate-event-detail-grid">
+        <span>
+          <Clock size={15} />
+          {allDay ? "Date" : "Starts"}
+        </span>
+        <strong>{allDay ? formatDayMonth(session.startsAt, true) : formatDateTimeFull(session.startsAt)}</strong>
+        {!allDay && session.endsAt ? (
+          <>
+            <span>
+              <Clock size={15} />
+              Ends
+            </span>
+            <strong>{formatDateTimeFull(session.endsAt)}</strong>
+          </>
         ) : null}
-        {canDelete ? (
-          <div className="modal-actions">
-            <button className="secondary-button compact danger" disabled={deleting} onClick={onDelete} type="button">
-              {deleting ? "Deleting" : "Delete Event"}
-            </button>
-          </div>
+        <span>
+          <Lock size={15} />
+          Visibility
+        </span>
+        <strong>{session.visibility === "private" ? "Private To Me" : "Everyone In Room"}</strong>
+        {session.location ? (
+          <>
+            <span>
+              <MapPin size={15} />
+              Location
+            </span>
+            <strong>{session.location}</strong>
+          </>
         ) : null}
-      </article>
-    </div>
+      </div>
+      {session.agenda ? (
+        <section className="coordinate-event-notes">
+          <strong>Notes</strong>
+          <p>{session.agenda}</p>
+        </section>
+      ) : null}
+    </SmallSettingsDialog>
   );
 }
 
@@ -2419,6 +2487,7 @@ function EventDialog({ draft, meetingAreas, onCancel, onChange, onSubmit, saving
         color: current.kind === nextKind && current.color ? current.color : defaultColor,
         allDay: nextKind === "deadline" ? false : current.allDay,
         endsAt: nextKind === "deadline" ? "" : current.endsAt || fallbackEnd,
+        location: nextKind === "deadline" ? "" : current.location,
       };
     });
   }
@@ -2444,176 +2513,173 @@ function EventDialog({ draft, meetingAreas, onCancel, onChange, onSubmit, saving
   }
 
   return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+    <SmallSettingsDialog
+      className="coordinate-event-dialog medium-dialog"
+      footer={
+        <button className="primary-button compact" disabled={saving || !draft.title.trim()} type="submit">
+          {saving ? "Saving" : "Save"}
+        </button>
+      }
+      onClose={onCancel}
+      onSubmit={onSubmit}
+      title="New Calendar Item"
     >
-      <form className="room-form-modal coordinate-event-dialog" onSubmit={onSubmit}>
-        <header>
-          <h2>New Calendar Item</h2>
-          <button aria-label="Close Calendar Item" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
-        </header>
+      <label className="field">
+        <span>Title</span>
+        <input
+          autoFocus
+          name="title"
+          onChange={updateField}
+          placeholder="Study Meetup"
+          required
+          value={draft.title}
+        />
+      </label>
 
-        <label className="field">
-          <span>Title</span>
+      <div className="form-grid">
+        <div className="field">
+          <span>Type</span>
+          <div className="coordinate-segmented-options" role="group" aria-label="Type">
+            {EVENT_KINDS.map((kind) => (
+              <button
+                className={draft.kind === kind.id ? "active" : ""}
+                key={kind.id}
+                onClick={() => setKind(kind.id)}
+                type="button"
+              >
+                {kind.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="field">
+          <span>Visibility</span>
+          <div className="coordinate-segmented-options" role="group" aria-label="Visibility">
+            <button
+              className={draft.visibility === "room" ? "active" : ""}
+              onClick={() => onChange((current) => ({ ...current, visibility: "room" }))}
+              type="button"
+            >
+              Everyone
+            </button>
+            <button
+              className={draft.visibility === "private" ? "active" : ""}
+              onClick={() => onChange((current) => ({ ...current, visibility: "private" }))}
+              type="button"
+            >
+              Private
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {draft.kind !== "deadline" ? (
+        <label className="coordinate-control-pill coordinate-toggle-row compact">
           <input
-            autoFocus
-            name="title"
-            onChange={updateField}
-            placeholder="Study Meetup"
+            checked={Boolean(draft.allDay)}
+            className="coordinate-control-checkbox"
+            onChange={(event) => setAllDay(event.target.checked)}
+            type="checkbox"
+          />
+          <span>All Day</span>
+        </label>
+      ) : null}
+
+      {draft.allDay ? (
+        <label className="field">
+          <span>Date</span>
+          <input
+            onChange={(event) => updateAllDayDate(event.target.value)}
             required
-            value={draft.title}
+            type="date"
+            value={String(draft.startsAt || "").slice(0, 10)}
           />
         </label>
-
+      ) : draft.kind === "deadline" ? (
+        <label className="field">
+          <span>Time</span>
+          <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
+        </label>
+      ) : (
         <div className="form-grid">
-          <div className="field">
-            <span>Type</span>
-            <div className="coordinate-segmented-options" role="group" aria-label="Type">
-              {EVENT_KINDS.map((kind) => (
+          <label className="field">
+            <span>Starts</span>
+            <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
+          </label>
+          <label className="field">
+            <span>Ends</span>
+            <input
+              disabled={draft.kind === "deadline"}
+              name="endsAt"
+              onChange={updateField}
+              type="datetime-local"
+              value={draft.endsAt}
+            />
+          </label>
+        </div>
+      )}
+
+      <div className="field">
+        <span>Colour</span>
+        <div className="coordinate-color-options" role="group" aria-label="Colour">
+          {EVENT_COLOR_OPTIONS.map((option) => (
+            <button
+              aria-pressed={draft.color === option.id}
+              className={draft.color === option.id ? "active" : ""}
+              key={option.id}
+              onClick={() => onChange((current) => ({ ...current, color: option.id }))}
+              style={{ "--swatch-color": option.value }}
+              type="button"
+            >
+              <span aria-hidden="true" />
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {draft.kind !== "deadline" ? (
+        <>
+          <label className="field">
+            <span>Location</span>
+            <div className="coordinate-location-input">
+              <MapPin size={17} />
+              <input
+                name="location"
+                onChange={updateField}
+                placeholder={meetingAreas.length ? "Meeting Area or custom location" : "Meeting room, Zoom, library, anything"}
+                value={draft.location}
+              />
+            </div>
+          </label>
+
+          {meetingAreas.length ? (
+            <div className="coordinate-meeting-area-picks" aria-label="Meeting areas">
+              {meetingAreas.map((area) => (
                 <button
-                  className={draft.kind === kind.id ? "active" : ""}
-                  key={kind.id}
-                  onClick={() => setKind(kind.id)}
+                  key={area.id}
+                  onClick={() => onChange((current) => ({ ...current, location: area.label }))}
                   type="button"
                 >
-                  {kind.label}
+                  <MapPin size={14} />
+                  {area.label}
                 </button>
               ))}
             </div>
-          </div>
-          <div className="field">
-            <span>Visibility</span>
-            <div className="coordinate-segmented-options" role="group" aria-label="Visibility">
-              <button
-                className={draft.visibility === "room" ? "active" : ""}
-                onClick={() => onChange((current) => ({ ...current, visibility: "room" }))}
-                type="button"
-              >
-                Everyone
-              </button>
-              <button
-                className={draft.visibility === "private" ? "active" : ""}
-                onClick={() => onChange((current) => ({ ...current, visibility: "private" }))}
-                type="button"
-              >
-                Private
-              </button>
-            </div>
-          </div>
-        </div>
+          ) : null}
+        </>
+      ) : null}
 
-        {draft.kind !== "deadline" ? (
-          <label className="coordinate-toggle-row compact">
-            <input
-              checked={Boolean(draft.allDay)}
-              onChange={(event) => setAllDay(event.target.checked)}
-              type="checkbox"
-            />
-            <span>All Day</span>
-          </label>
-        ) : null}
-
-        {draft.allDay ? (
-          <label className="field">
-            <span>Date</span>
-            <input
-              onChange={(event) => updateAllDayDate(event.target.value)}
-              required
-              type="date"
-              value={String(draft.startsAt || "").slice(0, 10)}
-            />
-          </label>
-        ) : draft.kind === "deadline" ? (
-          <label className="field">
-            <span>Time</span>
-            <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
-          </label>
-        ) : (
-          <div className="form-grid">
-            <label className="field">
-              <span>Starts</span>
-              <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
-            </label>
-            <label className="field">
-              <span>Ends</span>
-              <input
-                disabled={draft.kind === "deadline"}
-                name="endsAt"
-                onChange={updateField}
-                type="datetime-local"
-                value={draft.endsAt}
-              />
-            </label>
-          </div>
-        )}
-
-        <div className="field">
-          <span>Colour</span>
-          <div className="coordinate-color-options" role="group" aria-label="Colour">
-            {EVENT_COLOR_OPTIONS.map((option) => (
-              <button
-                aria-pressed={draft.color === option.id}
-                className={draft.color === option.id ? "active" : ""}
-                key={option.id}
-                onClick={() => onChange((current) => ({ ...current, color: option.id }))}
-                style={{ "--swatch-color": option.value }}
-                type="button"
-              >
-                <span aria-hidden="true" />
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <label className="field">
-          <span>Location</span>
-          <div className="coordinate-location-input">
-            <MapPin size={17} />
-            <input
-              name="location"
-              onChange={updateField}
-              placeholder={meetingAreas.length ? "Meeting Area or custom location" : "Meeting room, Zoom, library, anything"}
-              value={draft.location}
-            />
-          </div>
-        </label>
-
-        {meetingAreas.length ? (
-          <div className="coordinate-meeting-area-picks" aria-label="Meeting areas">
-            {meetingAreas.map((area) => (
-              <button
-                key={area.id}
-                onClick={() => onChange((current) => ({ ...current, location: area.label }))}
-                type="button"
-              >
-                <MapPin size={14} />
-                {area.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        <label className="field">
-          <span>Notes</span>
-          <textarea
-            name="agenda"
-            onChange={updateField}
-            placeholder="Agenda, deadline context, or prep notes"
-            rows={3}
-            value={draft.agenda}
-          />
-        </label>
-
-        <div className="modal-actions">
-          <button className="primary-button compact" disabled={saving || !draft.title.trim()} type="submit">
-            {saving ? "Saving" : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
+      <label className="field">
+        <span>Notes</span>
+        <textarea
+          name="agenda"
+          onChange={updateField}
+          placeholder="Agenda, deadline context, or prep notes"
+          rows={3}
+          value={draft.agenda}
+        />
+      </label>
+    </SmallSettingsDialog>
   );
 }

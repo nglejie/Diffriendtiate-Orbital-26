@@ -3,6 +3,7 @@ import {
   DEFAULT_CATEGORY_ID,
   addChannelToCategory,
   createCategoryId,
+  createUniqueChannelName,
   getCategoryNameForChannel,
   moveCategoryInLayout,
   moveChannelToCategory,
@@ -100,6 +101,16 @@ describe("chat layout helpers", () => {
   it("normalizes channel names into safe slugs", () => {
     expect(normalizeChannelName(" Lecture Notes!! ")).toBe("lecture-notes");
     expect(normalizeChannelName("Week_1 / Q&A")).toBe("week_1-qa");
+  });
+
+  it("creates a unique channel name when a duplicate already exists", () => {
+    expect(
+      createUniqueChannelName("general", [
+        "general",
+        { name: "general-2", type: "text" },
+      ]),
+    ).toBe("general-3");
+    expect(createUniqueChannelName("Lecture Notes", ["general"])).toBe("lecture-notes");
   });
 
   // Freezes time so category id generation can be tested deterministically.

@@ -54,7 +54,7 @@ export function normalizeResourceName(value = "") {
     .trim();
 }
 
-/** Returns the most stable display name available for a stored resource. */
+/** Returns the most stable username available for a stored resource. */
 export function getResourceDisplayName(resource) {
   return resource?.originalName || resource?.title || resource?.storageName || resource?.url || "Untitled resource";
 }

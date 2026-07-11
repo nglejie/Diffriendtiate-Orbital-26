@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MeetingDisplayStage,
   MeetingMediaStrip,
+  MeetingRemoteAudioSink,
   buildMeetingTiles,
 } from "./MeetingMediaTiles.tsx";
 
@@ -75,5 +76,27 @@ describe("MeetingMediaTiles", () => {
     expect(screen.getByRole("button", { name: /maximise/i })).toBeInTheDocument();
     expect(screen.getByText("Fleming screen")).toBeInTheDocument();
     expect(screen.getByText("Durin screen")).toBeInTheDocument();
+  });
+
+  it("keeps remote audio mounted independently of the visible meeting tiles", () => {
+    const remoteStream = fakeStream();
+    const meeting = activeMeeting({
+      participants: [
+        { media: { cameraOff: false, muted: true, screenSharing: false }, user, userId: "user-a" },
+        { media: { cameraOff: true, muted: false, screenSharing: false }, user: { id: "user-b", name: "Durin" }, userId: "user-b" },
+      ],
+      remoteStreams: { "user-b": remoteStream },
+    });
+
+    const { container, rerender } = render(<MeetingRemoteAudioSink meeting={meeting} user={user} />);
+    const audio = container.querySelector("audio");
+
+    expect(container.querySelectorAll("audio")).toHaveLength(1);
+    expect(audio).not.toBeNull();
+    expect(audio?.muted).toBe(false);
+    expect((audio as HTMLAudioElement & { srcObject?: unknown })?.srcObject).toBe(remoteStream);
+
+    rerender(<MeetingRemoteAudioSink meeting={{ ...meeting, deafened: true }} user={user} />);
+    expect(container.querySelector("audio")).toBeNull();
   });
 });

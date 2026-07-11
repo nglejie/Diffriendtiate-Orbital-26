@@ -132,7 +132,7 @@ const ambientWorld = ({ id, name, type = "Scenic", environment, color, file }) =
   type,
   environment,
   color,
-  description: `${name} ambient world background.`,
+  description: `${name} ambient domain background.`,
   css: ambientWorldPath(file),
 });
 

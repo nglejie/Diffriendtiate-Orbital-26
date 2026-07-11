@@ -95,7 +95,7 @@ test("Convolution document channels hide room controls, reject invalid uploads, 
   }, owner.token);
 
   await page.goto(`/#/rooms/${room.id}`);
-  await expect(page.getByRole("heading", { name: /^world$/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^domain$/i })).toBeVisible();
   await page.getByRole("button", { name: /^convolution$/i }).click();
   await expect(page.getByRole("heading", { name: /welcome to #general/i })).toBeVisible();
 
@@ -104,7 +104,8 @@ test("Convolution document channels hide room controls, reject invalid uploads, 
   await expect(page.getByRole("dialog", { name: /create channel/i })).toBeVisible();
   await expect(page.locator(".room-user-controls")).toHaveCount(0);
 
-  await page.getByRole("radio", { name: /document/i }).check();
+  await page.getByLabel(/channel type/i).click();
+  await page.getByRole("option", { name: /document channel/i }).click();
   await page.getByLabel(/channel name/i).fill("PDF Smoke");
 
   await page.locator(".document-channel-upload-input").setInputFiles({
@@ -156,8 +157,8 @@ test("Convolution document channels hide room controls, reject invalid uploads, 
   await page.getByRole("button", { exact: true, name: "general" }).click();
   await page.getByRole("button", { exact: true, name: "pdf-smoke" }).click();
   await expect(page.getByText("Can someone explain this paragraph?")).toBeVisible();
-  await page.getByRole("button", { name: /^reply$/i }).click();
-  await page.getByPlaceholder(/reply to this thread/i).fill("Yes, this is now discussable in Convolution.");
+  await page.getByRole("button", { name: /can someone explain this paragraph/i }).click();
+  await page.getByLabel(/reply to question/i).fill("Yes, this is now discussable in Convolution.");
   await page.getByRole("button", { name: /send reply/i }).click();
   await expect(page.getByText("Yes, this is now discussable in Convolution.")).toBeVisible();
 
@@ -210,13 +211,14 @@ test("Convolution image document channels keep shared categories, real PFPs, and
   }, owner.token);
 
   await page.goto(`/#/rooms/${room.id}`);
-  await expect(page.getByRole("heading", { name: /^world$/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^domain$/i })).toBeVisible();
   await page.getByRole("button", { name: /^convolution$/i }).click();
   await expect(page.getByText("Owner photo proof")).toBeVisible();
 
   await page.locator(".chat-category-header", { hasText: /text channels/i }).hover();
   await page.getByRole("button", { name: /create channel in text channels/i }).click();
-  await page.getByRole("radio", { name: /document/i }).check();
+  await page.getByLabel(/channel type/i).click();
+  await page.getByRole("option", { name: /document channel/i }).click();
   await page.getByLabel(/channel name/i).fill("Diagram Lab");
   await page.locator(".document-channel-upload-input").setInputFiles({
     buffer: makePng(),
@@ -257,9 +259,16 @@ test("Convolution image document channels keep shared categories, real PFPs, and
   await page.mouse.up();
   await page.getByLabel(/annotation type/i).click();
   await page.getByRole("option", { name: "Insight" }).click();
-  await page.getByPlaceholder(/add context for this region/i).fill("This visual needs a group note.");
+  await page.getByLabel(/add context for this region/i).click();
+  await page.keyboard.type("This visual needs a group note.");
+  const createImageAnnotationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes(`/api/rooms/${room.id}/channels/diagram-lab/annotations`),
+  );
   await page.getByRole("button", { name: /save annotation/i }).click();
-  await expect(page.getByText("This visual needs a group note.")).toBeVisible();
+  await expect((await createImageAnnotationResponse).status()).toBe(201);
+  await expect(page.getByRole("button", { name: /this visual needs a group note/i })).toBeVisible();
 
   const memberContext = await browser.newContext();
   const memberPage = await memberContext.newPage();
@@ -267,13 +276,13 @@ test("Convolution image document channels keep shared categories, real PFPs, and
     localStorage.setItem("diffriendtiate_token", token);
   }, member.token);
   await memberPage.goto(`/#/rooms/${room.id}`);
-  await expect(memberPage.getByRole("heading", { name: /^world$/i })).toBeVisible();
+  await expect(memberPage.getByRole("heading", { name: /^domain$/i })).toBeVisible();
   await memberPage.getByRole("button", { name: /^convolution$/i }).click();
   await expect(memberPage.getByText("Image Channel Member").first()).toBeVisible();
   await expect(memberPage.getByText(/diagrams/i)).toBeVisible();
   await expect(memberPage.getByRole("button", { exact: true, name: "diagram-lab" })).toBeVisible();
   await expect(memberPage.getByAltText("Image Channel Owner profile picture").first()).toBeVisible();
   await memberPage.getByRole("button", { exact: true, name: "diagram-lab" }).click();
-  await expect(memberPage.getByText("This visual needs a group note.")).toBeVisible();
+  await expect(memberPage.getByRole("button", { name: /this visual needs a group note/i })).toBeVisible();
   await memberContext.close();
 });

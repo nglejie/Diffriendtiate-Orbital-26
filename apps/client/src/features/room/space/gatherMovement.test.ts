@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AVATAR_ANIMATION_FPS,
   TILE_SIZE,
+  clampAvatarWorldPoint,
   findTilePath,
   getAvatarFrame,
   getDirectionFromDelta,
@@ -24,6 +25,24 @@ describe("gatherMovement", () => {
       .toEqual({ x: 4, y: 7 });
     expect(worldPointToTile({ x: 9999, y: -50 }, 12, 12))
       .toEqual({ x: 11, y: 0 });
+  });
+
+  it("clamps avatar anchors so the rendered sprite cannot leave the world bounds", () => {
+    // The world avatar is taller than a tile. Clamping to 0 would let the
+    // sprite's head render outside the map border at the top edge.
+    expect(clampAvatarWorldPoint({ x: -120, y: -80 }, 6, 5, TILE_SIZE))
+      .toEqual({ x: 24, y: 58 });
+    expect(clampAvatarWorldPoint({ x: 999, y: 999 }, 6, 5, TILE_SIZE))
+      .toEqual({ x: 168, y: 160 });
+    expect(clampAvatarWorldPoint({ x: 80, y: 92 }, 6, 5, TILE_SIZE))
+      .toEqual({ x: 80, y: 92 });
+  });
+
+  it("keeps avatar bounds deterministic on very small worlds", () => {
+    expect(clampAvatarWorldPoint({ x: -1, y: -1 }, 1, 1, TILE_SIZE))
+      .toEqual({ x: 16, y: 32 });
+    expect(clampAvatarWorldPoint({ x: 999, y: 999 }, 1, 1, TILE_SIZE))
+      .toEqual({ x: 16, y: 32 });
   });
 
   it("chooses the dominant movement direction", () => {
