@@ -354,8 +354,8 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   await page.getByRole("button", { name: /^week$/i }).click();
   await expect(page.locator(".coordinate-calendar-slot-zone").first()).toBeVisible();
 
-  // The event form should treat deadlines as time-only items, expose colour
-  // choices, and keep the themed location field from drawing the old pink ring.
+  // The event form should treat deadlines as time-only items and expose colour
+  // choices without meeting-specific location fields.
   await page.getByRole("button", { name: /new item/i }).click();
   const eventDialog = page.locator(".coordinate-event-dialog").last();
   await expect(eventDialog).toBeVisible();
@@ -364,18 +364,14 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   await expect(eventDialog.getByText(/^Ends$/)).toHaveCount(0);
   await expect(eventDialog.getByRole("button", { name: /^cancel$/i })).toHaveCount(0);
   await expect(eventDialog.locator(".coordinate-color-options")).toBeVisible();
-  const locationShell = eventDialog.locator(".coordinate-location-input");
-  await locationShell.locator("input").fill("Scara");
-  await expect
-    .poll(() => locationShell.evaluate((element) => getComputedStyle(element).boxShadow))
-    .toBe("none");
-  await eventDialog.getByRole("button", { name: /close calendar item/i }).click();
+  await expect(eventDialog.locator(".coordinate-location-input")).toHaveCount(0);
+  await eventDialog.getByRole("button", { name: /close new calendar item/i }).click();
 
   await page.getByLabel(/Create Item At 4 Jul, 10 AM/i).click();
   const slotDialog = page.locator(".coordinate-event-dialog").last();
   await expect(slotDialog.locator("input[name='startsAt']")).toHaveValue("2026-07-04T10:00");
   await expect(slotDialog.locator("input[name='endsAt']")).toHaveValue("2026-07-04T10:30");
-  await slotDialog.getByRole("button", { name: /close calendar item/i }).click();
+  await slotDialog.getByRole("button", { name: /close new calendar item/i }).click();
 
   await page.getByRole("button", { name: /new item/i }).click();
   const manualDialog = page.locator(".coordinate-event-dialog").last();
@@ -589,7 +585,7 @@ test("Coordidate keeps calendar and availability interactions polished", async (
     request.url().includes(`/api/rooms/${room.id}/coordinate/poll`) &&
     (request.postData() || "").includes(poll.id)
   ));
-  await editWindowDialog.getByRole("button", { name: /^save window$/i }).click();
+  await editWindowDialog.getByRole("button", { name: /^save$/i }).click();
   const saveWindowBody = (await saveWindowRequest).postDataJSON();
   expect(saveWindowBody.selectedDates).toEqual([
     "2026-07-04",
@@ -608,7 +604,7 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   await expect(windowDialog.getByText(/^To$/)).toHaveCount(0);
   await expect(windowDialog.getByRole("button", { name: /^cancel$/i })).toHaveCount(0);
   await expect(windowDialog.getByRole("button", { name: /^create window$/i })).toBeVisible();
-  await windowDialog.getByRole("button", { name: /^close meetup window$/i }).click();
+  await windowDialog.getByRole("button", { name: /^close new meetup window$/i }).click();
   await expect(windowDialog).toBeHidden();
   await page.getByRole("button", { name: /new item/i }).click();
   const finalEventDialog = page.locator(".coordinate-event-dialog").last();
@@ -619,7 +615,12 @@ test("Coordidate keeps calendar and availability interactions polished", async (
       eventSaveButton.evaluate((element) => {
         const parent = element.parentElement;
         if (!parent) return false;
-        return Math.abs(element.getBoundingClientRect().width - parent.getBoundingClientRect().width) <= 2;
+        const parentStyles = window.getComputedStyle(parent);
+        const parentContentWidth =
+          parent.getBoundingClientRect().width -
+          Number.parseFloat(parentStyles.paddingLeft) -
+          Number.parseFloat(parentStyles.paddingRight);
+        return Math.abs(element.getBoundingClientRect().width - parentContentWidth) <= 2;
       }),
     )
     .toBe(true);

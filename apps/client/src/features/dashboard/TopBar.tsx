@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { THEME_MODES, normaliseThemeMode } from "../../theme.ts";
 import { getInitial } from "../../shared/utils/room.ts";
+import AccountSettingsScreen from "./AccountSettingsScreen.tsx";
 import {
   EditProfileDialog,
   getProfileAvatarUrl,
@@ -23,6 +24,7 @@ import {
 function TopBar({ onCreateRoom, onLogout, onThemeChange, onUserUpdated, themeMode, user }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const accountMenuRef = useRef(null);
   const activeThemeMode = normaliseThemeMode(themeMode);
   const isLightMode = activeThemeMode === THEME_MODES.light;
@@ -100,7 +102,14 @@ function TopBar({ onCreateRoom, onLogout, onThemeChange, onUserUpdated, themeMod
                 <UserRound size={18} />
                 Profile
               </button>
-              <button aria-disabled="true" disabled role="menuitem" type="button">
+              <button
+                onClick={() => {
+                  setAccountOpen(false);
+                  setAccountSettingsOpen(true);
+                }}
+                role="menuitem"
+                type="button"
+              >
                 <Settings size={18} />
                 Settings
               </button>
@@ -124,6 +133,15 @@ function TopBar({ onCreateRoom, onLogout, onThemeChange, onUserUpdated, themeMod
         <EditProfileDialog
           onClose={() => setProfileEditorOpen(false)}
           onProfileUpdated={onUserUpdated}
+          user={user}
+        />,
+        document.body,
+      ) : null}
+      {accountSettingsOpen ? createPortal(
+        <AccountSettingsScreen
+          onClose={() => setAccountSettingsOpen(false)}
+          onLogout={onLogout}
+          onUserUpdated={onUserUpdated}
           user={user}
         />,
         document.body,

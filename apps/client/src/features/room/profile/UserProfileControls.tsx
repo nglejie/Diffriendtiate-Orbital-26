@@ -1,6 +1,7 @@
 import { ChevronRight, Edit3, Pencil, X } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.ts";
+import SmallSettingsDialog from "../../../shared/ui/SmallSettingsDialog.tsx";
 import { getInitial } from "../../../shared/utils/room.ts";
 import { AvatarPreview } from "./AvatarPreview.tsx";
 import {
@@ -233,7 +234,7 @@ export function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfi
   async function saveProfile() {
     const trimmedName = draftName.trim();
     if (!trimmedName) {
-      setError("Display name is required.");
+      setError("Username is required.");
       return;
     }
 
@@ -256,19 +257,29 @@ export function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfi
   }
 
   return (
-    <div
-      className="modal-backdrop room-profile-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    <SmallSettingsDialog
+      ariaLabel="Edit Profile"
+      footer={
+        <button className="primary-button compact" disabled={saving} onClick={saveProfile} type="button">
+          {saving ? "Saving..." : "Save"}
+        </button>
+      }
+      onClose={onClose}
+      overlay={
+        avatarPickerOpen ? (
+          <AvatarPickerDialog
+            initialAvatar={draftAvatar}
+            onBack={() => setAvatarPickerOpen(false)}
+            onDone={(nextAvatar) => {
+              setDraftAvatar(nextAvatar);
+              setAvatarPickerOpen(false);
+            }}
+            displayName={draftName || getProfileDisplayName(user)}
+          />
+        ) : null
+      }
+      title="Edit Profile"
     >
-      <section className="room-profile-editor" role="dialog" aria-modal="true" aria-label="Edit Profile">
-        <header>
-          <h2>Edit Profile</h2>
-          <button aria-label="Close profile editor" onClick={onClose} type="button">
-            <X size={20} />
-          </button>
-        </header>
-
-        <div className="room-profile-editor-body">
           <div className="room-profile-editor-media">
             <div>
               <span>Profile Picture</span>
@@ -311,7 +322,7 @@ export function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfi
           </div>
 
           <label className="field room-profile-name-field">
-            <span>Display name</span>
+            <span>Username</span>
             <input
               maxLength={80}
               onChange={(event) => setDraftName(event.target.value)}
@@ -320,30 +331,7 @@ export function EditProfileDialog({ onClose, onProfileUpdated, user }: EditProfi
           </label>
 
           {error ? <p className="form-error">{error}</p> : null}
-        </div>
-
-        <footer>
-          <button className="secondary-button compact" onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button className="primary-button compact" disabled={saving} onClick={saveProfile} type="button">
-            {saving ? "Saving..." : "Save"}
-          </button>
-        </footer>
-
-        {avatarPickerOpen ? (
-          <AvatarPickerDialog
-            initialAvatar={draftAvatar}
-            onBack={() => setAvatarPickerOpen(false)}
-            onDone={(nextAvatar) => {
-              setDraftAvatar(nextAvatar);
-              setAvatarPickerOpen(false);
-            }}
-            userName={draftName || getProfileDisplayName(user)}
-          />
-        ) : null}
-      </section>
-    </div>
+    </SmallSettingsDialog>
   );
 }
 
@@ -351,10 +339,10 @@ type AvatarPickerDialogProps = {
   initialAvatar: LimeetsAvatarPreset;
   onBack: () => void;
   onDone: (avatar: LimeetsAvatarPreset) => void;
-  userName: string;
+  displayName: string;
 };
 
-function AvatarPickerDialog({ initialAvatar, onBack, onDone, userName }: AvatarPickerDialogProps) {
+function AvatarPickerDialog({ initialAvatar, onBack, onDone, displayName }: AvatarPickerDialogProps) {
   const normalizedInitial = useMemo(() => normalizeLimeetsAvatarPreset(initialAvatar), [initialAvatar]);
   const [activeCategory, setActiveCategory] = useState<LimeetsAvatarCategory>("base");
   const [activeSlotId, setActiveSlotId] = useState(AVATAR_SLOT_GROUPS[0].slots[0]);
@@ -396,7 +384,7 @@ function AvatarPickerDialog({ initialAvatar, onBack, onDone, userName }: AvatarP
   return (
     <div className="room-avatar-picker" role="dialog" aria-modal="true" aria-label="Choose Avatar">
       <header>
-        <span>{userName}</span>
+        <span>{displayName}</span>
         <button aria-label="Close avatar picker" onClick={onBack} type="button">
           <X size={20} />
         </button>

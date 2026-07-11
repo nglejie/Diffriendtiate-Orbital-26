@@ -12,15 +12,25 @@ test.describe("authentication journey", () => {
     const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: /your friends are waiting/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
 
-    await page.getByRole("button", { name: /sign up here/i }).click();
-    await expect(page.getByRole("heading", { name: /new here/i })).toBeVisible();
+    await page.getByRole("button", { name: /register/i }).click();
+    await expect(page.getByRole("heading", { name: /ready to create/i })).toBeVisible();
 
-    await page.getByPlaceholder("First name").fill("QA");
-    await page.getByPlaceholder("name@example.com").fill(`qa-e2e-${stamp}@example.com`);
-    await page.getByPlaceholder("password").fill("quality-pass-123");
-    await page.getByRole("button", { name: /let's go/i }).click();
+    await page.getByPlaceholder("Username").fill("QA");
+    await page.getByPlaceholder("Email Address").fill(`qa-e2e-${stamp}@example.com`);
+    await page.getByPlaceholder("Password", { exact: true }).fill("quality-pass-123");
+    const registrationResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith("/api/auth/register") && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: /create account/i }).click();
+    const registrationPayload = await registrationResponsePromise.then((response) => response.json());
+    await expect(page.getByRole("heading", { name: /verify email/i })).toBeVisible();
+    expect(registrationPayload.verificationToken).toBeTruthy();
+
+    // Browser E2E follows the same route a user reaches from their inbox. The
+    // test server exposes the token only to avoid depending on a real mailbox.
+    await page.goto(`/#/verify-email?token=${encodeURIComponent(registrationPayload.verificationToken)}`);
 
     await expect(page.getByRole("tab", { name: /my domains/i })).toBeVisible();
     await expect(page.getByRole("tab", { name: /explore domains/i })).toBeVisible();
@@ -36,7 +46,13 @@ test.describe("authentication journey", () => {
     expect(Math.abs(accountButtonBox!.height - accountAvatarBox!.height)).toBeLessThan(0.5);
 
     await accountButton.click();
-    await expect(page.getByRole("menuitem", { name: /settings/i })).toBeDisabled();
+    await page.getByRole("menuitem", { name: /settings/i }).click();
+    const accountDialog = page.getByRole("dialog", { name: /^account$/i });
+    await expect(accountDialog).toBeVisible();
+    await page.getByRole("button", { name: /close account/i }).click();
+    await expect(accountDialog).toBeHidden();
+
+    await accountButton.click();
     await page.getByRole("menuitem", { name: /^profile$/i }).click();
 
     const profileDialog = page.getByRole("dialog", { name: /edit profile/i });

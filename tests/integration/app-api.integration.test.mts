@@ -7,6 +7,7 @@ import {
   createRoom,
   expectStatus,
   joinRoom,
+  makeUser,
   registerUser,
   uploadTextResource,
 } from "../helpers/apiClient.mts";
@@ -149,6 +150,197 @@ describe("app API integration", () => {
     const list = await apiRequest(app.baseUrl, "/api/rooms", { token: owner.token });
     expect(list.status).toBe(200);
     expect(list.payload.rooms.some((item) => item.id === room.id)).toBe(true);
+  });
+
+  // New password accounts must verify their email before receiving an app
+  // session. Test mode exposes the verification token instead of depending on
+  // SMTP credentials.
+  it("requires email verification before password login", async () => {
+    const verificationUser = makeUser("verify");
+    const registration = await apiRequest(app.baseUrl, "/api/auth/register", {
+      method: "POST",
+      body: verificationUser,
+    });
+    expect(registration.status).toBe(201);
+    expect(registration.payload.emailVerificationRequired).toBe(true);
+    expect(registration.payload.verificationToken).toBeTruthy();
+
+    const blockedLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: verificationUser.email, password: verificationUser.password },
+    });
+    expect(blockedLogin.status).toBe(403);
+    expect(blockedLogin.payload.emailVerificationRequired).toBe(true);
+    expect(blockedLogin.payload.verificationToken).toBeTruthy();
+
+    const verification = await apiRequest(app.baseUrl, "/api/auth/email-verification/confirm", {
+      method: "POST",
+      body: { token: blockedLogin.payload.verificationToken },
+    });
+    expect(verification.status).toBe(200);
+    expect(verification.payload.token).toBeTruthy();
+    expect(verification.payload.user.emailVerified).toBe(true);
+
+    const login = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: verificationUser.email, password: verificationUser.password },
+    });
+    expect(login.status).toBe(200);
+  });
+
+  // Password resets store only a token hash and should let a user replace their
+  // password without an active session. Test mode exposes the raw token so the
+  // flow can be verified without an email provider.
+  it("requests and confirms a password reset", async () => {
+    const resetUser = await registerUser(app.baseUrl, { name: "Reset User" });
+    const request = await apiRequest(app.baseUrl, "/api/auth/password-reset/request", {
+      method: "POST",
+      body: { email: resetUser.email },
+    });
+    expect(request.status).toBe(200);
+    expect(request.payload.resetToken).toBeTruthy();
+    expect(request.payload.resetLink).toContain("#/reset-password?token=");
+
+    const confirm = await apiRequest(app.baseUrl, "/api/auth/password-reset/confirm", {
+      method: "POST",
+      body: {
+        password: "new-correct-horse-123",
+        token: request.payload.resetToken,
+      },
+    });
+    expect(confirm.status).toBe(200);
+    expect(confirm.payload.message).toMatch(/password updated/i);
+
+    const oldPassword = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: resetUser.email, password: resetUser.password },
+    });
+    expect(oldPassword.status).toBe(401);
+
+    const newPassword = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: resetUser.email, password: "new-correct-horse-123" },
+    });
+    expect(newPassword.status).toBe(200);
+    expect(newPassword.payload.user.email).toBe(resetUser.email);
+  });
+
+  it("updates account information, changes password, and deletes the account", async () => {
+    const accountUser = await registerUser(app.baseUrl, { name: "Account Settings User" });
+    const nextEmail = `updated-${accountUser.email}`;
+
+    const accountUpdate = await apiRequest(app.baseUrl, "/api/auth/account", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        name: "Updated Account User",
+      },
+    });
+    expect(accountUpdate.status).toBe(200);
+    expect(accountUpdate.payload.user).toMatchObject({
+      email: accountUser.email,
+      hasPassword: true,
+      name: "Updated Account User",
+    });
+
+    const emailChange = await apiRequest(app.baseUrl, "/api/auth/account", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        email: nextEmail,
+        name: "Updated Account User",
+      },
+    });
+    expect(emailChange.status).toBe(501);
+
+    const wrongCurrentPassword = await apiRequest(app.baseUrl, "/api/auth/password", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        currentPassword: "wrong-password",
+        newPassword: "new-account-password-123",
+      },
+    });
+    expect(wrongCurrentPassword.status).toBe(403);
+
+    const passwordUpdate = await apiRequest(app.baseUrl, "/api/auth/password", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        currentPassword: accountUser.password,
+        newPassword: "new-account-password-123",
+      },
+    });
+    expect(passwordUpdate.status).toBe(200);
+    expect(passwordUpdate.payload.user.hasPassword).toBe(true);
+
+    const oldPasswordLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: accountUser.email, password: accountUser.password },
+    });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: accountUser.email, password: "new-account-password-123" },
+    });
+    expect(newPasswordLogin.status).toBe(200);
+
+    const deleteAccount = await apiRequest(app.baseUrl, "/api/auth/me", {
+      method: "DELETE",
+      token: newPasswordLogin.payload.token,
+    });
+    expect(deleteAccount.status).toBe(200);
+
+    const deletedMe = await apiRequest(app.baseUrl, "/api/auth/me", {
+      token: newPasswordLogin.payload.token,
+    });
+    expect(deletedMe.status).toBe(401);
+  });
+
+  // Account deletion must not erase an owned domain if other members can keep
+  // using it. Until admin roles exist, member order acts as the tenure signal.
+  it("transfers owned domains to the longest-tenured remaining member when deleting an account", async () => {
+    const deletingOwner = await registerUser(app.baseUrl, { name: "Deleting Domain Owner" });
+    const nextOwner = await registerUser(app.baseUrl, { name: "Next Domain Owner" });
+    const transferredRoom = await createRoom(app.baseUrl, deletingOwner.token, {
+      name: "Transferable Domain",
+      moduleCode: "CS2103T",
+    });
+    await joinRoom(app.baseUrl, nextOwner.token, transferredRoom.id);
+
+    const deleteOwner = await apiRequest(app.baseUrl, "/api/auth/me", {
+      method: "DELETE",
+      token: deletingOwner.token,
+    });
+    expect(deleteOwner.status).toBe(200);
+
+    const remainingRoom = await apiRequest(app.baseUrl, `/api/rooms/${transferredRoom.id}`, {
+      token: nextOwner.token,
+    });
+    expect(remainingRoom.status).toBe(200);
+    expect(remainingRoom.payload.room).toMatchObject({
+      id: transferredRoom.id,
+      isOwner: true,
+      memberCount: 1,
+      owner: {
+        id: nextOwner.user.id,
+        name: "Next Domain Owner",
+      },
+    });
+    expect(remainingRoom.payload.room.members.map((member) => member.id)).toEqual([nextOwner.user.id]);
+  });
+
+  // Provider auth is config-gated. A missing OAuth client should guide the
+  // browser back to the app's auth callback route with a readable error.
+  it("redirects unconfigured OAuth providers back to the auth screen", async () => {
+    const response = await fetch(`${app.baseUrl}/api/auth/oauth/google`, { redirect: "manual" });
+    const location = response.headers.get("location") || "";
+    const callbackParams = new URLSearchParams(new URL(location).hash.replace(/^#\/auth\/callback\?/, ""));
+
+    expect(response.status).toBe(302);
+    expect(location).toContain("#/auth/callback?");
+    expect(callbackParams.get("error")).toBe("Google sign-in is not configured yet.");
   });
 
   // Covers common malformed auth and room-creation edge cases that otherwise
@@ -793,7 +985,7 @@ describe("app API integration", () => {
 
   // Covers the ordinary chat write/read loop for a non-owner member. The message
   // should be stored in the requested channel and returned with sender metadata
-  // so the UI can render the display name and grouping correctly.
+  // so the UI can render the username and grouping correctly.
   it("stores and retrieves channel messages with sender metadata", async () => {
     const createChannel = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/channels`, {
       method: "POST",
@@ -930,6 +1122,15 @@ describe("app API integration", () => {
       comment: "Added this to the recap checklist.",
     });
 
+    const deleteReply = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/${channelName}/annotations/${annotationId}/replies/${reply.payload.reply.id}`,
+      { method: "DELETE", token: owner.token },
+    );
+    expect(deleteReply.status).toBe(200);
+    expect(deleteReply.payload.id).toBe(reply.payload.reply.id);
+    expect(deleteReply.payload.annotation.replies).toHaveLength(0);
+
     const listed = await apiRequest(
       app.baseUrl,
       `/api/rooms/${room.id}/channels/${channelName}/annotations`,
@@ -945,6 +1146,47 @@ describe("app API integration", () => {
     );
     expect(deleted.status).toBe(200);
     expect(deleted.payload).toEqual({ id: annotationId, channel: channelName });
+  });
+
+  it("deletes annotation replies without deleting the parent thread", async () => {
+    const created = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/general/annotations`,
+      {
+        method: "POST",
+        token: member.token,
+        body: {
+          annotationType: "question",
+          comment: "Can we discuss this annotation?",
+          content: { text: "discussion anchor" },
+          position: { pageNumber: 1 },
+        },
+      },
+    );
+    expect(created.status).toBe(201);
+
+    const annotationId = created.payload.annotation.id;
+    const reply = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/general/annotations/${annotationId}/replies`,
+      {
+        method: "POST",
+        token: owner.token,
+        body: { comment: "Yes, this should be removable." },
+      },
+    );
+    expect(reply.status).toBe(201);
+    expect(reply.payload.annotation.replies).toHaveLength(1);
+
+    const deletedReply = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/general/annotations/${annotationId}/replies/${reply.payload.reply.id}`,
+      { method: "DELETE", token: owner.token },
+    );
+    expect(deletedReply.status).toBe(200);
+    expect(deletedReply.payload).toMatchObject({ id: reply.payload.reply.id });
+    expect(deletedReply.payload.annotation).toMatchObject({ id: annotationId, comment: "Can we discuss this annotation?" });
+    expect(deletedReply.payload.annotation.replies).toHaveLength(0);
   });
 
   // The Socket.IO annotation events mirror the REST behavior used for initial

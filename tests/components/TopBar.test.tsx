@@ -75,8 +75,8 @@ describe("TopBar", () => {
   });
 
   // Dashboard Profile should reuse the same editor surfaced from the in-world
-  // profile controls, while Settings remains visible but disabled for now.
-  it("opens the shared profile editor and keeps settings disabled", async () => {
+  // profile controls, while Settings opens the full account settings surface.
+  it("opens the shared profile editor and account settings", async () => {
     const user = userEvent.setup();
 
     render(
@@ -90,14 +90,18 @@ describe("TopBar", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /account menu/i }));
-    expect(screen.getByRole("menuitem", { name: /settings/i })).toBeDisabled();
+    await user.click(screen.getByRole("menuitem", { name: /settings/i }));
+    expect(screen.getByRole("dialog", { name: /^account$/i })).toBeInTheDocument();
 
+    await user.click(screen.getByRole("button", { name: /close account settings/i }));
+
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
     await user.click(screen.getByRole("menuitem", { name: /^profile$/i }));
 
     const editor = screen.getByRole("dialog", { name: /edit profile/i });
     expect(editor).toBeInTheDocument();
     expect(editor.closest(".top-bar")).toBeNull();
-    expect(screen.getByLabelText(/display name/i)).toHaveValue("Test User");
+    expect(screen.getByLabelText(/username/i)).toHaveValue("Test User");
   });
 
   // Checks outside-click dismissal for the Account popup. Popups throughout the

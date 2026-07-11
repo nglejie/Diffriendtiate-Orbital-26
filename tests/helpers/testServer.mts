@@ -188,6 +188,7 @@ export async function startTestApp(options: any = {}) {
     cwd: repoRoot,
     env: {
       ...process.env,
+      AUTH_TEST_ACTION_LINKS: "true",
       CHATBOT_BASE_URL: options.chatbotUrl || "http://127.0.0.1:59999",
       DATABASE_URL: "",
       DIFFRIENDTIATE_DATA_DIR: dataDir,
@@ -196,6 +197,7 @@ export async function startTestApp(options: any = {}) {
       LIBREOFFICE_BIN: options.libreOfficeBin ?? process.env.LIBREOFFICE_BIN ?? "libreoffice",
       NODE_ENV: "test",
       PORT: String(port),
+      ...(options.env || {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

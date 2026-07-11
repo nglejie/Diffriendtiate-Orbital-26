@@ -260,7 +260,9 @@ test("room tab sidebars share row and collapsible section styling", async ({ pag
   await expect(createFolderDialog.locator(".resource-folder-location")).toContainText(
     "LocationAll Files / Uploads / Test",
   );
-  await createFolderDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(createFolderDialog.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+  await createFolderDialog.getByRole("button", { name: /close/i }).click();
+  await expect(createFolderDialog).toBeHidden();
   await breadcrumb.getByRole("button", { name: "All Files" }).click();
 
   await page.locator(".resource-drive-table").getByRole("button", { name: "General", exact: true }).click();
@@ -541,12 +543,14 @@ test("Infilenite supports drag-drop upload, preview, and resource edit actions",
   await expect(
     moveDialog.getByLabel("Move destination path").getByRole("button", { name: "All Files", exact: true }),
   ).toBeVisible();
-  await moveDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(moveDialog.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+  await moveDialog.getByRole("button", { name: /close/i }).click();
+  await expect(moveDialog).toBeHidden();
 
   await page.getByRole("button", { name: "New Folder" }).click();
   const folderDialog = page.getByRole("dialog");
   await folderDialog.getByPlaceholder("Folder Name").fill("Nested QA");
-  await folderDialog.getByRole("button", { name: "Create" }).click();
+  await folderDialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.locator(".resource-table-row.folder").filter({ hasText: "Nested QA" })).toBeVisible();
 
   await droppedRow.hover();
@@ -580,7 +584,9 @@ test("Infilenite supports drag-drop upload, preview, and resource edit actions",
   await expect(editDialog.locator(".app-select-option-list")).toBeVisible();
   await expect(editDialog.getByRole("option", { name: "Reference" })).toBeVisible();
   await editDialog.getByRole("option", { name: "Reference" }).click();
-  await editDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(editDialog.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+  await editDialog.getByRole("button", { name: /close/i }).click();
+  await expect(editDialog).toBeHidden();
 
   await droppedRow.hover();
   await droppedRow.getByRole("button", { name: /DropNote\.txt options/i }).click();

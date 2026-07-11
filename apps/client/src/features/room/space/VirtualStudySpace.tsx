@@ -1362,7 +1362,7 @@ export function VirtualStudySpace({
 
   const isOwner = Boolean(room?.isOwner);
   const avatarPreset = normalizeLimeetsAvatarPreset(user?.avatarPreset);
-  const currentUserName = getDisplayName(user);
+  const currentdisplayName = getDisplayName(user);
   const playerReady = Boolean(player);
 
   const world = useMemo(() => {
@@ -4384,10 +4384,10 @@ export function VirtualStudySpace({
         ) : null}
 
         <footer className="limeets-gather-savebar">
-          <span>{worldSaved ? "Saved" : "Unsaved Domain Changes"}</span>
+          <span>{worldSaved ? "Saved" : "Unsaved Changes"}</span>
           <button disabled={saveState === "saving"} onClick={saveWorld} type="button">
             <Save size={16} />
-            {saveState === "saving" ? "Saving" : "Save Domain"}
+            {saveState === "saving" ? "Saving" : "Save"}
           </button>
         </footer>
       </aside>
@@ -4464,11 +4464,12 @@ export function VirtualStudySpace({
         </div>
         <button
           className="limeets-gather-current-close"
+          aria-label="Clear Selected Asset"
+          data-tooltip="Clear Selected Asset"
           onClick={() => {
             setSelectedAsset(null);
             setSelectedSpecial("");
           }}
-          title="Clear Selected Asset"
           type="button"
         >
           <X size={16} />
@@ -4481,6 +4482,7 @@ export function VirtualStudySpace({
               <button
                 aria-label={option.variantName || option.variantHex || "Variant"}
                 className={option.variantKey === selectedAsset.variantKey ? "selected" : ""}
+                data-tooltip={option.variantName || option.variantHex || "Variant"}
                 key={`${option.id}-color`}
                 onClick={() => {
                   const matchingDirection = getAssetDirectionOptions(option).find(
@@ -4488,7 +4490,6 @@ export function VirtualStudySpace({
                   );
                   handleSelectAsset(matchingDirection || option);
                 }}
-                title={option.variantName || option.variantHex || "Variant"}
                 type="button"
               >
                 <span
@@ -4675,7 +4676,7 @@ export function VirtualStudySpace({
           {player ? (
             <Avatar
               avatarPreset={avatarPreset}
-              name={currentUserName}
+              name={currentdisplayName}
               player={player}
               status={currentProfileStatus}
             />

@@ -186,6 +186,30 @@ export function normalizeChannelName(value) {
     .slice(0, 32);
 }
 
+/** Creates a non-colliding channel slug while preserving the owner's requested name. */
+export function createUniqueChannelName(value, channels = []) {
+  const baseName = normalizeChannelName(value) || "new-channel";
+  const existingNames = new Set(
+    (Array.isArray(channels) ? channels : [])
+      .map((channel) =>
+        typeof channel === "string"
+          ? normalizeChannelName(channel)
+          : normalizeChannelName(channel?.name || ""),
+      )
+      .filter(Boolean),
+  );
+
+  if (!existingNames.has(baseName)) return baseName;
+
+  let suffix = 2;
+  let candidate = `${baseName}-${suffix}`;
+  while (existingNames.has(candidate)) {
+    suffix += 1;
+    candidate = `${baseName}-${suffix}`;
+  }
+  return candidate;
+}
+
 /** Finds the category label shown beside a draft in the sidebar. */
 export function getCategoryNameForChannel(layout, channel) {
   const safeLayout = Array.isArray(layout) ? layout : [];

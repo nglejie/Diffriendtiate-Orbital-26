@@ -1,6 +1,6 @@
-import { X } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
+import SmallSettingsDialog from "./SmallSettingsDialog.tsx";
 
 /**
  * Reusable destructive-action confirmation modal.
@@ -24,38 +24,25 @@ function ConfirmDialog({
   }
 
   const dialog = (
-    <div
-      className="modal-backdrop room-form-modal-backdrop confirm-dialog-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+    <SmallSettingsDialog
+      ariaLabel={title}
+      className="confirm-dialog"
+      footer={
+        <button
+          className="danger-button compact"
+          disabled={submitting}
+          onClick={handleConfirm}
+          type="button"
+        >
+          {submitting ? submittingLabel : confirmLabel}
+        </button>
+      }
+      onClose={onCancel}
+      role="alertdialog"
+      title={title}
     >
-      <section
-        aria-label={title}
-        aria-modal="true"
-        className="room-form-modal compact-dialog"
-        role="alertdialog"
-      >
-        <header>
-          <h2>{title}</h2>
-          <button onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
-        </header>
-        <p className="dialog-copy">{message}</p>
-        <div className="modal-actions">
-          <button className="secondary-button compact" onClick={onCancel} type="button">
-            Cancel
-          </button>
-          <button
-            className="danger-button compact"
-            disabled={submitting}
-            onClick={handleConfirm}
-            type="button"
-          >
-            {submitting ? submittingLabel : confirmLabel}
-          </button>
-        </div>
-      </section>
-    </div>
+      <p className="dialog-copy">{message}</p>
+    </SmallSettingsDialog>
   );
 
   return createPortal(dialog, document.body);

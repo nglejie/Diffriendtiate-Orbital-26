@@ -10,7 +10,22 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import jwt from "jsonwebtoken";
 import multer from "multer";
+import nodemailer from "nodemailer";
 import { Server } from "socket.io";
+import {
+  buildClientAuthRedirectUrl,
+  buildClientEmailVerificationUrl,
+  buildClientPasswordResetUrl,
+  buildOAuthAuthorizationUrl,
+  buildOAuthCallbackUrl,
+  exchangeOAuthCode,
+  fetchOAuthProfile,
+  getOAuthProviderConfig,
+  isOAuthProviderConfigured,
+  normalizeOAuthProvider,
+  signOAuthState,
+  verifyOAuthState,
+} from "./oauth.js";
 import { initDb, readDb, storageMode, writeDb } from "./store.js";
 
 const execFileAsync = promisify(execFile);
@@ -111,12 +126,40 @@ function toEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isValidEmail(value) {
+  const email = toEmail(value);
+  return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function authProviderKeys(user) {
+  return Object.keys(user?.authProviders || {}).filter((provider) => provider !== "password");
+}
+
+function hasConfiguredPassword(user) {
+  if (!user?.passwordHash) return false;
+  if (user.authProviders?.password?.enabled === true) return true;
+  return authProviderKeys(user).length === 0;
+}
+
+function markPasswordConfigured(user) {
+  user.authProviders = {
+    ...(user.authProviders || {}),
+    password: {
+      enabled: true,
+      setAt: new Date().toISOString(),
+    },
+  };
+}
+
 function publicUser(user) {
   if (!user) return null;
   return {
     id: user.id,
     name: user.name,
     email: user.email,
+    emailVerified: user.emailVerified !== false,
+    authProviders: authProviderKeys(user),
+    hasPassword: hasConfiguredPassword(user),
     avatarPreset: user.avatarPreset || null,
     avatarUrl: user.avatarUrl || "",
   };
@@ -239,6 +282,378 @@ function signToken(user) {
   return jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: "7d" });
 }
 
+const passwordResetTokenTtlMs = 30 * 60 * 1000;
+const emailVerificationTokenTtlMs = 24 * 60 * 60 * 1000;
+function readBooleanEnv(name) {
+  return ["1", "true", "yes", "on"].includes(String(process.env[name] || "").trim().toLowerCase());
+}
+
+const exposeAuthActionLinks =
+  process.env.NODE_ENV !== "production" &&
+  (readBooleanEnv("AUTH_DEV_ACTION_LINKS") ||
+    readBooleanEnv("AUTH_DEV_RESET_LINKS") ||
+    readBooleanEnv("AUTH_TEST_ACTION_LINKS"));
+
+function createAuthActionToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function hashAuthActionToken(token) {
+  return crypto.createHash("sha256").update(String(token || ""), "utf8").digest("hex");
+}
+
+function readEnv(...names) {
+  for (const name of names) {
+    const value = String(process.env[name] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function isMailConfigured() {
+  return Boolean(readEnv("SMTP_URL") || (readEnv("SMTP_HOST") && readEnv("AUTH_EMAIL_FROM", "SMTP_FROM")));
+}
+
+function authMailboxUrl() {
+  return readEnv("AUTH_MAILBOX_URL", "MAILPIT_WEB_URL");
+}
+
+function canDeliverAuthActionLinks() {
+  return isMailConfigured() || exposeAuthActionLinks;
+}
+
+function assertAuthActionDeliveryConfigured(res) {
+  if (canDeliverAuthActionLinks()) return true;
+
+  res.status(503).json({
+    message: "Email delivery is not configured yet.",
+  });
+  return false;
+}
+
+function createMailTransporter() {
+  const smtpUrl = readEnv("SMTP_URL");
+  if (smtpUrl) return nodemailer.createTransport(smtpUrl);
+
+  const user = readEnv("SMTP_USER");
+  const pass = readEnv("SMTP_PASS");
+  const portValue = Number(readEnv("SMTP_PORT") || 587);
+  return nodemailer.createTransport({
+    host: readEnv("SMTP_HOST"),
+    port: Number.isFinite(portValue) ? portValue : 587,
+    secure: String(process.env.SMTP_SECURE || "").trim().toLowerCase() === "true" || portValue === 465,
+    auth: user || pass ? { user, pass } : undefined,
+  });
+}
+
+async function sendAuthEmail({ html, subject, text, to }) {
+  if (!isMailConfigured()) return { sent: false };
+
+  const from = readEnv("AUTH_EMAIL_FROM", "SMTP_FROM");
+  try {
+    await createMailTransporter().sendMail({
+      from,
+      html,
+      subject,
+      text,
+      to,
+    });
+  } catch (error) {
+    console.warn(`[auth] Email delivery failed: ${(error as Error).message}`);
+    const deliveryError = new Error("Email delivery failed. Check the SMTP configuration.") as Error & {
+      status?: number;
+    };
+    deliveryError.status = 502;
+    throw deliveryError;
+  }
+  return { sent: true };
+}
+
+function passwordResetInstructionsPayload(req, token = "", emailSent = false) {
+  const payload: any = {
+    message: emailSent
+      ? "If an account exists, a password reset email has been sent."
+      : "If an account exists, password reset instructions are available.",
+    resetEmailSent: emailSent,
+  };
+
+  const mailboxUrl = authMailboxUrl();
+  if (emailSent && mailboxUrl) {
+    payload.mailboxUrl = mailboxUrl;
+  }
+
+  if (exposeAuthActionLinks && token) {
+    payload.resetToken = token;
+    payload.resetLink = buildClientPasswordResetUrl(req, token);
+  }
+
+  return payload;
+}
+
+function emailVerificationInstructionsPayload(req, token = "", emailSent = false) {
+  const payload: any = {
+    emailVerificationRequired: true,
+    message: emailSent
+      ? "Check your email to verify your account."
+      : "Email verification instructions are available.",
+    verificationEmailSent: emailSent,
+  };
+
+  const mailboxUrl = authMailboxUrl();
+  if (emailSent && mailboxUrl) {
+    payload.mailboxUrl = mailboxUrl;
+  }
+
+  if (exposeAuthActionLinks && token) {
+    payload.verificationToken = token;
+    payload.verificationLink = buildClientEmailVerificationUrl(req, token);
+  }
+
+  return payload;
+}
+
+function createEmailVerification(user) {
+  const token = createAuthActionToken();
+  const now = new Date();
+  user.emailVerification = {
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + emailVerificationTokenTtlMs).toISOString(),
+    tokenHash: hashAuthActionToken(token),
+  };
+  user.emailVerified = false;
+  return token;
+}
+
+async function sendPasswordResetEmail(req, user, token) {
+  const resetLink = buildClientPasswordResetUrl(req, token);
+  return sendAuthEmail({
+    to: user.email,
+    subject: "Reset your Diffriendtiate password",
+    text: `Reset your Diffriendtiate password here: ${resetLink}\n\nThis link expires in 30 minutes.`,
+    html: `<p>Reset your Diffriendtiate password here:</p><p><a href="${resetLink}">Reset Password</a></p><p>This link expires in 30 minutes.</p>`,
+  });
+}
+
+async function sendEmailVerificationEmail(req, user, token) {
+  const verificationLink = buildClientEmailVerificationUrl(req, token);
+  return sendAuthEmail({
+    to: user.email,
+    subject: "Verify your Diffriendtiate email",
+    text: `Verify your Diffriendtiate email here: ${verificationLink}\n\nThis link expires in 24 hours.`,
+    html: `<p>Verify your Diffriendtiate email here:</p><p><a href="${verificationLink}">Verify Email</a></p><p>This link expires in 24 hours.</p>`,
+  });
+}
+
+function getSupabaseAuthConfig() {
+  return {
+    anonKey: readEnv("SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY"),
+    url: readEnv("SUPABASE_URL", "VITE_SUPABASE_URL").replace(/\/+$/, ""),
+  };
+}
+
+function isSupabaseAuthConfigured() {
+  const config = getSupabaseAuthConfig();
+  return Boolean(config.url && config.anonKey);
+}
+
+async function fetchSupabaseAuthUser(accessToken) {
+  const config = getSupabaseAuthConfig();
+  if (!config.url || !config.anonKey || !accessToken) return null;
+
+  const response = await fetch(`${config.url}/auth/v1/user`, {
+    headers: {
+      apikey: config.anonKey,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) return null;
+  return response.json();
+}
+
+async function deleteSupabaseAuthUser(user) {
+  const config = getSupabaseAuthConfig();
+  const serviceRoleKey = readEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUserId = String(user?.authProviders?.supabase?.id || "").trim();
+  if (!config.url || !serviceRoleKey || !supabaseUserId) return;
+
+  const response = await fetch(
+    `${config.url}/auth/v1/admin/users/${encodeURIComponent(supabaseUserId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+    },
+  );
+
+  if (!response.ok && response.status !== 404) {
+    const deletionError = new Error("Supabase account deletion failed.") as Error & {
+      status?: number;
+    };
+    deletionError.status = 502;
+    throw deletionError;
+  }
+}
+
+function supabaseUserDisplayName(supabaseUser, fallbackName = "") {
+  const metadata =
+    supabaseUser?.user_metadata && typeof supabaseUser.user_metadata === "object"
+      ? supabaseUser.user_metadata
+      : {};
+  return String(
+    fallbackName ||
+      metadata.name ||
+      metadata.full_name ||
+      metadata.preferred_username ||
+      supabaseUser?.email?.split("@")?.[0] ||
+      "Diffriendtiate User",
+  )
+    .trim()
+    .slice(0, 80);
+}
+
+async function upsertSupabaseUser(db, supabaseUser, fallbackName = "") {
+  const supabaseId = String(supabaseUser?.id || "").trim();
+  const email = toEmail(supabaseUser?.email);
+  if (!supabaseId || !email) {
+    throw new Error("Supabase session did not include a verified user identity.");
+  }
+
+  const existingUser = db.users.find(
+    (candidate) =>
+      candidate?.authProviders?.supabase?.id === supabaseId ||
+      toEmail(candidate.email) === email,
+  );
+  const providerLink = {
+    email,
+    id: supabaseId,
+    linkedAt: new Date().toISOString(),
+  };
+  const emailVerified = Boolean(
+    supabaseUser.email_confirmed_at ||
+      supabaseUser.confirmed_at ||
+      supabaseUser.email_verified,
+  );
+
+  if (existingUser) {
+    let changed = false;
+    if (hasConfiguredPassword(existingUser) && existingUser.authProviders?.password?.enabled !== true) {
+      markPasswordConfigured(existingUser);
+      changed = true;
+    }
+    if (existingUser.email !== email) {
+      existingUser.email = email;
+      changed = true;
+    }
+    if (!existingUser.authProviders?.supabase || existingUser.authProviders.supabase.id !== supabaseId) {
+      existingUser.authProviders = {
+        ...(existingUser.authProviders || {}),
+        supabase: providerLink,
+      };
+      changed = true;
+    }
+    if (!existingUser.passwordHash) {
+      existingUser.passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10);
+      changed = true;
+    }
+    if (!String(existingUser.name || "").trim()) {
+      existingUser.name = supabaseUserDisplayName(supabaseUser, fallbackName);
+      changed = true;
+    }
+    if (emailVerified && existingUser.emailVerified === false) {
+      existingUser.emailVerified = true;
+      existingUser.emailVerification = null;
+      changed = true;
+    }
+    return { changed, user: existingUser };
+  }
+
+  const now = new Date().toISOString();
+  const user = {
+    id: createId("usr"),
+    name: supabaseUserDisplayName(supabaseUser, fallbackName),
+    email,
+    avatarPreset: null,
+    avatarUrl: "",
+    authProviders: {
+      supabase: providerLink,
+    },
+    emailVerified,
+    emailVerification: null,
+    passwordReset: null,
+    passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10),
+    createdAt: now,
+  };
+
+  db.users.push(user);
+  return { changed: true, user };
+}
+
+async function getUserBySupabaseAccessToken(accessToken, fallbackName = "") {
+  if (!isSupabaseAuthConfigured()) return null;
+
+  const supabaseUser = await fetchSupabaseAuthUser(accessToken);
+  if (!supabaseUser) return null;
+
+  const db = await readDb();
+  const result = await upsertSupabaseUser(db, supabaseUser, fallbackName);
+  if (result.changed) {
+    await writeDb(db);
+  }
+  return result.user;
+}
+
+async function upsertOAuthUser(db, profile) {
+  const existingUser = db.users.find((candidate) => candidate.email === profile.email);
+  const linkedAt = new Date().toISOString();
+  const providerLink = {
+    email: profile.email,
+    id: profile.providerUserId || profile.email,
+    linkedAt,
+  };
+
+  if (existingUser) {
+    if (hasConfiguredPassword(existingUser) && existingUser.authProviders?.password?.enabled !== true) {
+      markPasswordConfigured(existingUser);
+    }
+    existingUser.authProviders = {
+      ...(existingUser.authProviders || {}),
+      [profile.provider]: providerLink,
+    };
+    if (!existingUser.passwordHash) {
+      existingUser.passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10);
+    }
+    if (!String(existingUser.name || "").trim()) {
+      existingUser.name = profile.name.slice(0, 80) || profile.email.split("@")[0];
+    }
+    existingUser.emailVerified = true;
+    existingUser.emailVerification = null;
+    return existingUser;
+  }
+
+  const now = new Date().toISOString();
+  const user = {
+    id: createId("usr"),
+    name: profile.name.slice(0, 80) || profile.email.split("@")[0],
+    email: profile.email,
+    avatarPreset: null,
+    avatarUrl: "",
+    authProviders: {
+      [profile.provider]: providerLink,
+    },
+    emailVerified: true,
+    emailVerification: null,
+    passwordReset: null,
+    passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10),
+    createdAt: now,
+  };
+
+  db.users.push(user);
+  return user;
+}
+
 /**
  * Resolves a bearer token into the latest user record.
  * Reading the database each time means deleted users lose access immediately.
@@ -249,10 +664,14 @@ async function getUserByToken(token) {
   try {
     const payload = jwt.verify(token, jwtSecret);
     const db = await readDb();
-    return db.users.find((user) => user.id === payload.sub) || null;
+    const localUser = db.users.find((user) => user.id === payload.sub) || null;
+    if (localUser) return localUser;
   } catch {
-    return null;
+    // Supabase access tokens are signed outside this app, so they fall through
+    // to Supabase Auth verification below.
   }
+
+  return getUserBySupabaseAccessToken(token);
 }
 
 /**
@@ -1745,6 +2164,28 @@ function addAnnotationReply(annotation, user, body = {}) {
   return { annotation: annotationDto(annotation), reply };
 }
 
+function deleteAnnotationReply(annotation, room, user, replyId) {
+  const id = String(replyId || "");
+  const replies = Array.isArray(annotation.replies) ? annotation.replies : [];
+  const reply = replies.find((candidate) => String(candidate?.id || "") === id);
+
+  if (!reply) {
+    return { status: 404, message: "Reply not found." };
+  }
+
+  const ownsReply = String(reply.author?.id || "") === user.id;
+  const ownsAnnotation = getAnnotationAuthorId(annotation) === user.id;
+  const ownsRoom = room.ownerId === user.id;
+
+  if (!ownsReply && !ownsAnnotation && !ownsRoom) {
+    return { status: 403, message: "Only the reply author, annotation author, or room owner can delete it." };
+  }
+
+  annotation.replies = replies.filter((candidate) => String(candidate?.id || "") !== id);
+  annotation.updatedAt = new Date().toISOString();
+  return { annotation: annotationDto(annotation), replyId: id };
+}
+
 function normalizeMessageAttachments(value) {
   if (!Array.isArray(value)) return [];
 
@@ -2829,6 +3270,7 @@ const upload = multer({
 });
 
 const app = express();
+app.set("trust proxy", 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -2937,6 +3379,108 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "Diffriendtiate API", storage: storageMode() });
 });
 
+function redirectToAuthError(req, res, message) {
+  res.redirect(buildClientAuthRedirectUrl(req, { error: message }));
+}
+
+app.get("/api/auth/oauth/:provider", (req, res) => {
+  const provider = normalizeOAuthProvider(req.params.provider);
+  if (!provider) {
+    return res.status(404).json({ message: "OAuth provider not found." });
+  }
+
+  const config = getOAuthProviderConfig(provider);
+  if (!isOAuthProviderConfigured(config)) {
+    return redirectToAuthError(req, res, `${config.label} sign-in is not configured yet.`);
+  }
+
+  const redirectUri = buildOAuthCallbackUrl(req, provider);
+  const state = signOAuthState(provider, jwtSecret);
+  res.redirect(buildOAuthAuthorizationUrl(config, redirectUri, state));
+});
+
+app.get("/api/auth/oauth/:provider/callback", async (req, res) => {
+  const provider = normalizeOAuthProvider(req.params.provider);
+  if (!provider) {
+    return res.status(404).json({ message: "OAuth provider not found." });
+  }
+
+  const config = getOAuthProviderConfig(provider);
+  const providerError = String(req.query.error_description || req.query.error || "").trim();
+  if (providerError) {
+    return redirectToAuthError(req, res, `${config.label} sign-in was cancelled or denied.`);
+  }
+
+  const code = String(req.query.code || "").trim();
+  const state = String(req.query.state || "").trim();
+  if (!code || !state) {
+    return redirectToAuthError(req, res, `${config.label} sign-in did not return the required credentials.`);
+  }
+
+  try {
+    if (!isOAuthProviderConfigured(config)) {
+      throw new Error(`${config.label} sign-in is not configured yet.`);
+    }
+
+    if (!verifyOAuthState(state, provider, jwtSecret)) {
+      throw new Error("OAuth state could not be verified.");
+    }
+
+    const redirectUri = buildOAuthCallbackUrl(req, provider);
+    const tokenPayload = await exchangeOAuthCode(config, code, redirectUri);
+    const profile = await fetchOAuthProfile(provider, tokenPayload);
+    const db = await readDb();
+    const user = await upsertOAuthUser(db, profile);
+    await writeDb(db);
+
+    res.redirect(
+      buildClientAuthRedirectUrl(req, {
+        token: signToken(user),
+      }),
+    );
+  } catch (error) {
+    const authError = error as Error;
+    console.warn(`[auth] ${config.label} OAuth failed: ${authError.message}`);
+    const isUserSafeMessage =
+      /not configured|verified email|NUS school|organization email|state could not be verified/i.test(
+        authError.message,
+      );
+    redirectToAuthError(
+      req,
+      res,
+      isUserSafeMessage ? authError.message : `${config.label} sign-in could not be completed.`,
+    );
+  }
+});
+
+app.post("/api/auth/supabase/session", async (req, res) => {
+  if (!isSupabaseAuthConfigured()) {
+    return res.status(503).json({ message: "Supabase authentication is not configured yet." });
+  }
+
+  const accessToken = String(req.body.accessToken || "").trim();
+  const name = String(req.body.name || "").trim();
+  if (!accessToken) {
+    return res.status(400).json({ message: "Supabase session is missing." });
+  }
+
+  try {
+    const user = await getUserBySupabaseAccessToken(accessToken, name);
+    if (!user) {
+      return res.status(401).json({ message: "Supabase session could not be verified." });
+    }
+
+    res.json({
+      token: accessToken,
+      user: publicUser(user),
+    });
+  } catch (error) {
+    const authError = error as Error;
+    console.warn(`[auth] Supabase session failed: ${authError.message}`);
+    res.status(401).json({ message: "Supabase session could not be verified." });
+  }
+});
+
 app.post("/api/auth/register", async (req, res) => {
   const db = await readDb();
   const name = String(req.body.name || "").trim();
@@ -2953,6 +3497,8 @@ app.post("/api/auth/register", async (req, res) => {
     return res.status(409).json({ message: "An account with this email already exists." });
   }
 
+  if (!assertAuthActionDeliveryConfigured(res)) return;
+
   const now = new Date().toISOString();
   const user = {
     id: createId("usr"),
@@ -2960,15 +3506,22 @@ app.post("/api/auth/register", async (req, res) => {
     email,
     avatarPreset: null,
     avatarUrl: "",
+    authProviders: {},
+    emailVerified: false,
+    emailVerification: null,
+    passwordReset: null,
     passwordHash: await bcrypt.hash(password, 10),
     createdAt: now,
   };
+  markPasswordConfigured(user);
+  const verificationToken = createEmailVerification(user);
+  const emailResult = await sendEmailVerificationEmail(req, user, verificationToken);
 
   db.users.push(user);
   await writeDb(db);
 
   res.status(201).json({
-    token: signToken(user),
+    ...emailVerificationInstructionsPayload(req, verificationToken, emailResult.sent),
     user: publicUser(user),
   });
 });
@@ -2983,10 +3536,143 @@ app.post("/api/auth/login", async (req, res) => {
     return res.status(401).json({ message: "Invalid email or password." });
   }
 
+  if (user.emailVerified === false) {
+    if (!assertAuthActionDeliveryConfigured(res)) return;
+    const verificationToken = createEmailVerification(user);
+    const emailResult = await sendEmailVerificationEmail(req, user, verificationToken);
+    await writeDb(db);
+    return res.status(403).json({
+      ...emailVerificationInstructionsPayload(req, verificationToken, emailResult.sent),
+      email: user.email,
+    });
+  }
+
   res.json({
     token: signToken(user),
     user: publicUser(user),
   });
+});
+
+app.post("/api/auth/email-verification/resend", async (req, res) => {
+  const db = await readDb();
+  const email = toEmail(req.body.email);
+
+  if (!email) {
+    return res.status(400).json({ message: "Email Address is required." });
+  }
+
+  const user = db.users.find((candidate) => candidate.email === email);
+  if (!user) {
+    return res.json(emailVerificationInstructionsPayload(req));
+  }
+
+  if (!assertAuthActionDeliveryConfigured(res)) return;
+
+  if (user.emailVerified !== false) {
+    return res.json({
+      emailVerificationRequired: false,
+      message: "Email address is already verified. You can log in.",
+    });
+  }
+
+  const verificationToken = createEmailVerification(user);
+  const emailResult = await sendEmailVerificationEmail(req, user, verificationToken);
+  await writeDb(db);
+
+  res.json({
+    ...emailVerificationInstructionsPayload(req, verificationToken, emailResult.sent),
+    email: user.email,
+  });
+});
+
+app.post("/api/auth/email-verification/confirm", async (req, res) => {
+  const db = await readDb();
+  const token = String(req.body.token || "").trim();
+
+  if (!token) {
+    return res.status(400).json({ message: "Verification link is missing." });
+  }
+
+  const tokenHash = hashAuthActionToken(token);
+  const user = db.users.find((candidate) => {
+    const verification = candidate.emailVerification;
+    if (!verification || typeof verification !== "object") return false;
+    if (verification.tokenHash !== tokenHash) return false;
+    return Number.isFinite(Date.parse(verification.expiresAt)) && Date.parse(verification.expiresAt) > Date.now();
+  });
+
+  if (!user) {
+    return res.status(400).json({ message: "Verification link is invalid or expired." });
+  }
+
+  user.emailVerified = true;
+  user.emailVerification = null;
+  await writeDb(db);
+
+  res.json({
+    message: "Email verified. Welcome to Diffriendtiate.",
+    token: signToken(user),
+    user: publicUser(user),
+  });
+});
+
+app.post("/api/auth/password-reset/request", async (req, res) => {
+  const db = await readDb();
+  const email = toEmail(req.body.email);
+
+  if (!email) {
+    return res.status(400).json({ message: "Email Address is required." });
+  }
+
+  const user = db.users.find((candidate) => candidate.email === email);
+  if (!user) {
+    return res.json(passwordResetInstructionsPayload(req));
+  }
+
+  if (!assertAuthActionDeliveryConfigured(res)) return;
+
+  const token = createAuthActionToken();
+  const now = new Date();
+  user.passwordReset = {
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + passwordResetTokenTtlMs).toISOString(),
+    tokenHash: hashAuthActionToken(token),
+  };
+
+  const emailResult = await sendPasswordResetEmail(req, user, token);
+  await writeDb(db);
+  res.json(passwordResetInstructionsPayload(req, token, emailResult.sent));
+});
+
+app.post("/api/auth/password-reset/confirm", async (req, res) => {
+  const db = await readDb();
+  const token = String(req.body.token || "").trim();
+  const password = String(req.body.password || "");
+
+  if (!token || password.length < 6) {
+    return res.status(400).json({
+      message: "A valid reset link and a password of at least 6 characters are required.",
+    });
+  }
+
+  const tokenHash = hashAuthActionToken(token);
+  const user = db.users.find((candidate) => {
+    const reset = candidate.passwordReset;
+    if (!reset || typeof reset !== "object") return false;
+    if (reset.tokenHash !== tokenHash) return false;
+    return Number.isFinite(Date.parse(reset.expiresAt)) && Date.parse(reset.expiresAt) > Date.now();
+  });
+
+  if (!user) {
+    return res.status(400).json({ message: "Reset link is invalid or expired." });
+  }
+
+  user.passwordHash = await bcrypt.hash(password, 10);
+  markPasswordConfigured(user);
+  user.passwordReset = null;
+  await writeDb(db);
+
+  res.json({ message: "Password updated. You can log in now." });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
@@ -3002,7 +3688,7 @@ app.patch("/api/auth/me", requireAuth, async (req, res) => {
 
   const name = String(req.body.name || "").trim();
   if (!name || name.length > 80) {
-    return res.status(400).json({ message: "Display name must be 1 to 80 characters." });
+    return res.status(400).json({ message: "Username must be 1 to 80 characters." });
   }
 
   try {
@@ -3028,6 +3714,181 @@ app.patch("/api/auth/me", requireAuth, async (req, res) => {
       .status(profileError.status || 400)
       .json({ message: profileError.message || "Unable to update profile." });
   }
+});
+
+app.patch("/api/auth/account", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const name = String(req.body.name || "").trim();
+  const email = toEmail(req.body.email);
+
+  if (!name || name.length > 80) {
+    return res.status(400).json({ message: "Username must be 1 to 80 characters." });
+  }
+
+  if (email && email !== toEmail(user.email)) {
+    return res.status(501).json({
+      message: "Email changes require verification and are not available yet.",
+    });
+  }
+
+  user.name = name;
+
+  await writeDb(db);
+  const profile = refreshLiveUserProfile(user);
+  db.rooms
+    .filter((room) => isMember(room, user.id))
+    .forEach((room) => {
+      io.to(`room:${room.id}`).emit("user:profile-updated", {
+        roomId: room.id,
+        user: profile,
+      });
+    });
+
+  res.json({ user: profile });
+});
+
+app.patch("/api/auth/password", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const currentPassword = String(req.body.currentPassword || "");
+  const newPassword = String(req.body.newPassword || req.body.password || "");
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({ message: "Password must be at least 6 characters." });
+  }
+
+  const alreadyHadPassword = hasConfiguredPassword(user);
+  if (alreadyHadPassword) {
+    const currentPasswordMatches =
+      currentPassword && (await bcrypt.compare(currentPassword, user.passwordHash));
+    if (!currentPasswordMatches) {
+      return res.status(403).json({ message: "Current password is incorrect." });
+    }
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  user.passwordReset = null;
+  markPasswordConfigured(user);
+  await writeDb(db);
+
+  res.json({
+    message: alreadyHadPassword ? "Password updated." : "Password set.",
+    user: publicUser(user),
+  });
+});
+
+app.delete("/api/auth/me", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const userId = req.user.id;
+  const user = db.users.find((candidate) => candidate.id === userId);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  try {
+    await deleteSupabaseAuthUser(user);
+  } catch (error) {
+    const deletionError = error as Error & { status?: number };
+    return res
+      .status(deletionError.status || 502)
+      .json({ message: deletionError.message || "Unable to delete account." });
+  }
+
+  const activeUserIds = new Set(db.users.map((candidate) => candidate.id));
+  const deletedRoomIds = new Set<string>();
+  const ownershipTransferTimestamp = new Date().toISOString();
+  const nextRooms = [];
+
+  for (const room of db.rooms) {
+    const remainingMemberIds = (room.memberIds || []).filter(
+      (memberId) => memberId !== userId && activeUserIds.has(memberId),
+    );
+
+    if (room.ownerId !== userId) {
+      nextRooms.push({
+        ...room,
+        memberIds: remainingMemberIds,
+      });
+      continue;
+    }
+
+    const nextOwnerId = remainingMemberIds[0];
+    if (!nextOwnerId) {
+      deletedRoomIds.add(room.id);
+      continue;
+    }
+
+    nextRooms.push({
+      ...room,
+      ownerId: nextOwnerId,
+      memberIds: remainingMemberIds,
+      updatedAt: ownershipTransferTimestamp,
+    });
+  }
+
+  const deletedPollIds = new Set(
+    (db.coordinatePolls || [])
+      .filter((poll) => deletedRoomIds.has(poll.roomId) || poll.createdBy === userId)
+      .map((poll) => poll.id),
+  );
+
+  db.users = db.users.filter((candidate) => candidate.id !== userId);
+  db.rooms = nextRooms;
+  db.messages = db.messages.filter(
+    (message) => !deletedRoomIds.has(message.roomId) && message.senderId !== userId,
+  );
+  db.resources = db.resources.filter(
+    (resource) => !deletedRoomIds.has(resource.roomId) && resource.uploaderId !== userId,
+  );
+  db.annotations = (db.annotations || [])
+    .filter((annotation) => !deletedRoomIds.has(annotation.roomId) && annotation.author?.id !== userId)
+    .map((annotation) => ({
+      ...annotation,
+      replies: (annotation.replies || []).filter((reply) => reply.author?.id !== userId),
+    }));
+  db.sessions = db.sessions.filter(
+    (session) => !deletedRoomIds.has(session.roomId) && session.createdBy !== userId,
+  );
+  db.coordinatePolls = (db.coordinatePolls || []).filter((poll) => !deletedPollIds.has(poll.id));
+  db.coordinateResponses = (db.coordinateResponses || []).filter(
+    (response) =>
+      !deletedRoomIds.has(response.roomId) &&
+      response.userId !== userId &&
+      !deletedPollIds.has(response.pollId),
+  );
+  db.buddyThreads = (db.buddyThreads || []).filter(
+    (thread) => !deletedRoomIds.has(thread.roomId) && thread.ownerId !== userId,
+  );
+
+  await writeDb(db);
+
+  activeSocketByUser.delete(userId);
+  roomActivityByRoom.forEach((activityByUser) => activityByUser.delete(userId));
+  spacePresenceByRoom.forEach((presenceBySocket) => {
+    presenceBySocket.forEach((presence, presenceKey) => {
+      if (presence.userId === userId || deletedRoomIds.has(presence.roomId)) {
+        presenceBySocket.delete(presenceKey);
+      }
+    });
+  });
+  meetingPresenceByRoom.forEach((presenceByArea, roomId) => {
+    if (deletedRoomIds.has(roomId)) {
+      meetingPresenceByRoom.delete(roomId);
+      return;
+    }
+    presenceByArea.forEach((presenceByUser) => presenceByUser.delete(userId));
+  });
+
+  res.json({ message: "Account deleted." });
 });
 
 app.get("/api/rooms", requireAuth, async (req, res) => {
@@ -3416,6 +4277,35 @@ app.post("/api/rooms/:roomId/channels/:channel/annotations/:annotationId/replies
   io.to(`room:${room.id}`).emit("annotation:updated", result.annotation);
   res.status(201).json({ annotation: result.annotation, reply: result.reply });
 });
+
+app.delete(
+  "/api/rooms/:roomId/channels/:channel/annotations/:annotationId/replies/:replyId",
+  requireAuth,
+  async (req, res) => {
+    const db = await readDb();
+    const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+    if (!room) return;
+
+    const channel = findNormalizedRoomChannel(room, req.params.channel);
+    if (!channel) {
+      return res.status(404).json({ message: "Channel not found." });
+    }
+
+    const annotation = findAnnotationForChannel(db, room, channel, req.params.annotationId);
+    if (!annotation) {
+      return res.status(404).json({ message: "Annotation not found." });
+    }
+
+    const result = deleteAnnotationReply(annotation, room, req.user, req.params.replyId);
+    if (result.status) {
+      return res.status(result.status).json({ message: result.message });
+    }
+
+    await writeDb(db);
+    io.to(`room:${room.id}`).emit("annotation:updated", result.annotation);
+    res.json({ annotation: result.annotation, id: result.replyId });
+  },
+);
 
 app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
   const db = await readDb();
@@ -5287,6 +6177,10 @@ app.use((error, _req, res, _next) => {
     }
 
     return res.status(400).json({ message: error.message || "Unable to upload that file." });
+  }
+
+  if (error?.type === "entity.parse.failed") {
+    return res.status(400).json({ message: "Malformed JSON request." });
   }
 
   if (error?.status) {

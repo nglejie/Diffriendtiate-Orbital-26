@@ -117,6 +117,19 @@ function normalizeDb(db) {
           ? user.avatarPreset
           : null,
       avatarUrl: user.avatarUrl || "",
+      authProviders:
+        user.authProviders && typeof user.authProviders === "object" && !Array.isArray(user.authProviders)
+          ? user.authProviders
+          : {},
+      emailVerified: user.emailVerified === false ? false : true,
+      emailVerification:
+        user.emailVerification && typeof user.emailVerification === "object" && !Array.isArray(user.emailVerification)
+          ? user.emailVerification
+          : null,
+      passwordReset:
+        user.passwordReset && typeof user.passwordReset === "object" && !Array.isArray(user.passwordReset)
+          ? user.passwordReset
+          : null,
     })),
     rooms: (db.rooms || []).map((room) => {
       const channels = (Array.isArray(room.channels) ? room.channels : ["general"]).map((channel) =>
@@ -261,6 +274,9 @@ async function initPostgres() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
+      email_verified BOOLEAN NOT NULL DEFAULT TRUE,
+      email_verification JSONB,
+      password_reset JSONB,
       password_hash TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL
     );
@@ -576,6 +592,10 @@ async function initPostgres() {
 
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_preset JSONB");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_providers JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification JSONB");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset JSONB");
 }
 
 /**
@@ -632,6 +652,10 @@ export async function readDb() {
         email,
         avatar_url AS "avatarUrl",
         avatar_preset AS "avatarPreset",
+        auth_providers AS "authProviders",
+        email_verified AS "emailVerified",
+        email_verification AS "emailVerification",
+        password_reset AS "passwordReset",
         password_hash AS "passwordHash",
         created_at AS "createdAt"
       FROM users
@@ -881,8 +905,11 @@ async function writePostgresDb(db) {
     for (const user of db.users) {
       await client.query(
         `
-          INSERT INTO users (id, name, email, avatar_url, avatar_preset, password_hash, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO users (
+            id, name, email, avatar_url, avatar_preset, auth_providers,
+            email_verified, email_verification, password_reset, password_hash, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         `,
         [
           user.id,
@@ -890,6 +917,10 @@ async function writePostgresDb(db) {
           user.email,
           user.avatarUrl || "",
           JSON.stringify(user.avatarPreset || null),
+          JSON.stringify(user.authProviders || {}),
+          user.emailVerified !== false,
+          JSON.stringify(user.emailVerification || null),
+          JSON.stringify(user.passwordReset || null),
           user.passwordHash,
           user.createdAt,
         ],

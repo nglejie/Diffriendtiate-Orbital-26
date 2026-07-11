@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../../api.ts";
 import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
+import SmallSettingsDialog from "../../../shared/ui/SmallSettingsDialog.tsx";
 import { FieldTooltipTrigger } from "../../dashboard/DashboardComponents.tsx";
 import {
   formatTimeOnly,
@@ -1633,18 +1634,36 @@ function MeetupWindowDialog({ editing, form, onCancel, onChange, onDelete, onSub
   }
 
   return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
-    >
-      <form className="room-form-modal coordinate-window-dialog" onSubmit={onSubmit}>
-        <header>
-          <h2>{editing ? "Edit Meetup Window" : "New Meetup Window"}</h2>
-          <button aria-label="Close Meetup Window" onClick={onCancel} type="button">
-            <X size={18} />
+    <SmallSettingsDialog
+      className="coordinate-window-dialog"
+      footer={
+        editing ? (
+          <>
+            <button className="danger-button compact" disabled={saving} onClick={onDelete} type="button">
+              Delete
+            </button>
+            <button
+              className="primary-button compact"
+              disabled={saving || !form.title.trim() || Number(form.dayEndMinutes) <= Number(form.dayStartMinutes) || !selectedDates.length}
+              type="submit"
+            >
+              {saving ? "Saving" : "Save"}
+            </button>
+          </>
+        ) : (
+          <button
+            className="primary-button compact"
+            disabled={saving || !form.title.trim() || Number(form.dayEndMinutes) <= Number(form.dayStartMinutes) || !selectedDates.length}
+            type="submit"
+          >
+            {saving ? "Saving" : "Create Window"}
           </button>
-        </header>
-
+        )
+      }
+      onClose={onCancel}
+      onSubmit={onSubmit}
+      title={editing ? "Edit Meetup Window" : "New Meetup Window"}
+    >
         <label className="field">
           <span>Title</span>
           <input
@@ -1722,24 +1741,7 @@ function MeetupWindowDialog({ editing, form, onCancel, onChange, onDelete, onSub
           </div>
         </section>
 
-        <div className={`modal-actions coordinate-window-modal-actions ${editing ? "editing" : "creating"}`}>
-          {editing ? (
-            <button className="secondary-button compact danger" disabled={saving} onClick={onDelete} type="button">
-              <Trash2 size={15} />
-              Delete Window
-            </button>
-          ) : null}
-          {editing ? <span /> : null}
-          <button
-            className="primary-button compact"
-            disabled={saving || !form.title.trim() || Number(form.dayEndMinutes) <= Number(form.dayStartMinutes) || !selectedDates.length}
-            type="submit"
-          >
-            {saving ? "Saving" : editing ? "Save Window" : "Create Window"}
-          </button>
-        </div>
-      </form>
-    </div>
+    </SmallSettingsDialog>
   );
 }
 
@@ -2409,67 +2411,56 @@ function MemberAvatar({ member }) {
 function EventDetailsDialog({ canDelete, deleting, onClose, onDelete, session }) {
   const allDay = sessionIsAllDay(session);
   return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <article className="room-form-modal coordinate-event-dialog coordinate-event-details">
-        <header>
-          <div>
-            <span className={`coordinate-event-kind ${session.kind || "meeting"}`}>
-              {sessionKindLabel(session.kind)}
-            </span>
-            <h2>{session.title}</h2>
-          </div>
-          <button aria-label="Close Event Details" onClick={onClose} type="button">
-            <X size={18} />
+    <SmallSettingsDialog
+      className="coordinate-event-dialog coordinate-event-details medium-dialog"
+      description={sessionKindLabel(session.kind)}
+      footer={
+        canDelete ? (
+          <button className="danger-button compact" disabled={deleting} onClick={onDelete} type="button">
+            {deleting ? "Deleting" : "Delete Event"}
           </button>
-        </header>
-        <div className="coordinate-event-detail-grid">
-          <span>
-            <Clock size={15} />
-            {allDay ? "Date" : "Starts"}
-          </span>
-          <strong>{allDay ? formatDayMonth(session.startsAt, true) : formatDateTimeFull(session.startsAt)}</strong>
-          {!allDay && session.endsAt ? (
-            <>
-              <span>
-                <Clock size={15} />
-                Ends
-              </span>
-              <strong>{formatDateTimeFull(session.endsAt)}</strong>
-            </>
-          ) : null}
-          <span>
-            <Lock size={15} />
-            Visibility
-          </span>
-          <strong>{session.visibility === "private" ? "Private To Me" : "Everyone In Room"}</strong>
-          {session.location ? (
-            <>
-              <span>
-                <MapPin size={15} />
-                Location
-              </span>
-              <strong>{session.location}</strong>
-            </>
-          ) : null}
-        </div>
-        {session.agenda ? (
-          <section className="coordinate-event-notes">
-            <strong>Notes</strong>
-            <p>{session.agenda}</p>
-          </section>
+        ) : null
+      }
+      onClose={onClose}
+      title={session.title}
+    >
+      <div className="coordinate-event-detail-grid">
+        <span>
+          <Clock size={15} />
+          {allDay ? "Date" : "Starts"}
+        </span>
+        <strong>{allDay ? formatDayMonth(session.startsAt, true) : formatDateTimeFull(session.startsAt)}</strong>
+        {!allDay && session.endsAt ? (
+          <>
+            <span>
+              <Clock size={15} />
+              Ends
+            </span>
+            <strong>{formatDateTimeFull(session.endsAt)}</strong>
+          </>
         ) : null}
-        {canDelete ? (
-          <div className="modal-actions">
-            <button className="secondary-button compact danger" disabled={deleting} onClick={onDelete} type="button">
-              {deleting ? "Deleting" : "Delete Event"}
-            </button>
-          </div>
+        <span>
+          <Lock size={15} />
+          Visibility
+        </span>
+        <strong>{session.visibility === "private" ? "Private To Me" : "Everyone In Room"}</strong>
+        {session.location ? (
+          <>
+            <span>
+              <MapPin size={15} />
+              Location
+            </span>
+            <strong>{session.location}</strong>
+          </>
         ) : null}
-      </article>
-    </div>
+      </div>
+      {session.agenda ? (
+        <section className="coordinate-event-notes">
+          <strong>Notes</strong>
+          <p>{session.agenda}</p>
+        </section>
+      ) : null}
+    </SmallSettingsDialog>
   );
 }
 
@@ -2496,6 +2487,7 @@ function EventDialog({ draft, meetingAreas, onCancel, onChange, onSubmit, saving
         color: current.kind === nextKind && current.color ? current.color : defaultColor,
         allDay: nextKind === "deadline" ? false : current.allDay,
         endsAt: nextKind === "deadline" ? "" : current.endsAt || fallbackEnd,
+        location: nextKind === "deadline" ? "" : current.location,
       };
     });
   }
@@ -2521,177 +2513,173 @@ function EventDialog({ draft, meetingAreas, onCancel, onChange, onSubmit, saving
   }
 
   return (
-    <div
-      className="modal-backdrop room-form-modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+    <SmallSettingsDialog
+      className="coordinate-event-dialog medium-dialog"
+      footer={
+        <button className="primary-button compact" disabled={saving || !draft.title.trim()} type="submit">
+          {saving ? "Saving" : "Save"}
+        </button>
+      }
+      onClose={onCancel}
+      onSubmit={onSubmit}
+      title="New Calendar Item"
     >
-      <form className="room-form-modal coordinate-event-dialog" onSubmit={onSubmit}>
-        <header>
-          <h2>New Calendar Item</h2>
-          <button aria-label="Close Calendar Item" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
-        </header>
+      <label className="field">
+        <span>Title</span>
+        <input
+          autoFocus
+          name="title"
+          onChange={updateField}
+          placeholder="Study Meetup"
+          required
+          value={draft.title}
+        />
+      </label>
 
-        <label className="field">
-          <span>Title</span>
+      <div className="form-grid">
+        <div className="field">
+          <span>Type</span>
+          <div className="coordinate-segmented-options" role="group" aria-label="Type">
+            {EVENT_KINDS.map((kind) => (
+              <button
+                className={draft.kind === kind.id ? "active" : ""}
+                key={kind.id}
+                onClick={() => setKind(kind.id)}
+                type="button"
+              >
+                {kind.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="field">
+          <span>Visibility</span>
+          <div className="coordinate-segmented-options" role="group" aria-label="Visibility">
+            <button
+              className={draft.visibility === "room" ? "active" : ""}
+              onClick={() => onChange((current) => ({ ...current, visibility: "room" }))}
+              type="button"
+            >
+              Everyone
+            </button>
+            <button
+              className={draft.visibility === "private" ? "active" : ""}
+              onClick={() => onChange((current) => ({ ...current, visibility: "private" }))}
+              type="button"
+            >
+              Private
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {draft.kind !== "deadline" ? (
+        <label className="coordinate-control-pill coordinate-toggle-row compact">
           <input
-            autoFocus
-            name="title"
-            onChange={updateField}
-            placeholder="Study Meetup"
+            checked={Boolean(draft.allDay)}
+            className="coordinate-control-checkbox"
+            onChange={(event) => setAllDay(event.target.checked)}
+            type="checkbox"
+          />
+          <span>All Day</span>
+        </label>
+      ) : null}
+
+      {draft.allDay ? (
+        <label className="field">
+          <span>Date</span>
+          <input
+            onChange={(event) => updateAllDayDate(event.target.value)}
             required
-            value={draft.title}
+            type="date"
+            value={String(draft.startsAt || "").slice(0, 10)}
           />
         </label>
-
+      ) : draft.kind === "deadline" ? (
+        <label className="field">
+          <span>Time</span>
+          <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
+        </label>
+      ) : (
         <div className="form-grid">
-          <div className="field">
-            <span>Type</span>
-            <div className="coordinate-segmented-options" role="group" aria-label="Type">
-              {EVENT_KINDS.map((kind) => (
+          <label className="field">
+            <span>Starts</span>
+            <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
+          </label>
+          <label className="field">
+            <span>Ends</span>
+            <input
+              disabled={draft.kind === "deadline"}
+              name="endsAt"
+              onChange={updateField}
+              type="datetime-local"
+              value={draft.endsAt}
+            />
+          </label>
+        </div>
+      )}
+
+      <div className="field">
+        <span>Colour</span>
+        <div className="coordinate-color-options" role="group" aria-label="Colour">
+          {EVENT_COLOR_OPTIONS.map((option) => (
+            <button
+              aria-pressed={draft.color === option.id}
+              className={draft.color === option.id ? "active" : ""}
+              key={option.id}
+              onClick={() => onChange((current) => ({ ...current, color: option.id }))}
+              style={{ "--swatch-color": option.value }}
+              type="button"
+            >
+              <span aria-hidden="true" />
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {draft.kind !== "deadline" ? (
+        <>
+          <label className="field">
+            <span>Location</span>
+            <div className="coordinate-location-input">
+              <MapPin size={17} />
+              <input
+                name="location"
+                onChange={updateField}
+                placeholder={meetingAreas.length ? "Meeting Area or custom location" : "Meeting room, Zoom, library, anything"}
+                value={draft.location}
+              />
+            </div>
+          </label>
+
+          {meetingAreas.length ? (
+            <div className="coordinate-meeting-area-picks" aria-label="Meeting areas">
+              {meetingAreas.map((area) => (
                 <button
-                  className={draft.kind === kind.id ? "active" : ""}
-                  key={kind.id}
-                  onClick={() => setKind(kind.id)}
+                  key={area.id}
+                  onClick={() => onChange((current) => ({ ...current, location: area.label }))}
                   type="button"
                 >
-                  {kind.label}
+                  <MapPin size={14} />
+                  {area.label}
                 </button>
               ))}
             </div>
-          </div>
-          <div className="field">
-            <span>Visibility</span>
-            <div className="coordinate-segmented-options" role="group" aria-label="Visibility">
-              <button
-                className={draft.visibility === "room" ? "active" : ""}
-                onClick={() => onChange((current) => ({ ...current, visibility: "room" }))}
-                type="button"
-              >
-                Everyone
-              </button>
-              <button
-                className={draft.visibility === "private" ? "active" : ""}
-                onClick={() => onChange((current) => ({ ...current, visibility: "private" }))}
-                type="button"
-              >
-                Private
-              </button>
-            </div>
-          </div>
-        </div>
+          ) : null}
+        </>
+      ) : null}
 
-        {draft.kind !== "deadline" ? (
-          <label className="coordinate-control-pill coordinate-toggle-row compact">
-            <input
-              checked={Boolean(draft.allDay)}
-              className="coordinate-control-checkbox"
-              onChange={(event) => setAllDay(event.target.checked)}
-              type="checkbox"
-            />
-            <span>All Day</span>
-          </label>
-        ) : null}
-
-        {draft.allDay ? (
-          <label className="field">
-            <span>Date</span>
-            <input
-              onChange={(event) => updateAllDayDate(event.target.value)}
-              required
-              type="date"
-              value={String(draft.startsAt || "").slice(0, 10)}
-            />
-          </label>
-        ) : draft.kind === "deadline" ? (
-          <label className="field">
-            <span>Time</span>
-            <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
-          </label>
-        ) : (
-          <div className="form-grid">
-            <label className="field">
-              <span>Starts</span>
-              <input name="startsAt" onChange={updateField} required type="datetime-local" value={draft.startsAt} />
-            </label>
-            <label className="field">
-              <span>Ends</span>
-              <input
-                disabled={draft.kind === "deadline"}
-                name="endsAt"
-                onChange={updateField}
-                type="datetime-local"
-                value={draft.endsAt}
-              />
-            </label>
-          </div>
-        )}
-
-        <div className="field">
-          <span>Colour</span>
-          <div className="coordinate-color-options" role="group" aria-label="Colour">
-            {EVENT_COLOR_OPTIONS.map((option) => (
-              <button
-                aria-pressed={draft.color === option.id}
-                className={draft.color === option.id ? "active" : ""}
-                key={option.id}
-                onClick={() => onChange((current) => ({ ...current, color: option.id }))}
-                style={{ "--swatch-color": option.value }}
-                type="button"
-              >
-                <span aria-hidden="true" />
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <label className="field">
-          <span>Location</span>
-          <div className="coordinate-location-input">
-            <MapPin size={17} />
-            <input
-              name="location"
-              onChange={updateField}
-              placeholder={meetingAreas.length ? "Meeting Area or custom location" : "Meeting room, Zoom, library, anything"}
-              value={draft.location}
-            />
-          </div>
-        </label>
-
-        {meetingAreas.length ? (
-          <div className="coordinate-meeting-area-picks" aria-label="Meeting areas">
-            {meetingAreas.map((area) => (
-              <button
-                key={area.id}
-                onClick={() => onChange((current) => ({ ...current, location: area.label }))}
-                type="button"
-              >
-                <MapPin size={14} />
-                {area.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        <label className="field">
-          <span>Notes</span>
-          <textarea
-            name="agenda"
-            onChange={updateField}
-            placeholder="Agenda, deadline context, or prep notes"
-            rows={3}
-            value={draft.agenda}
-          />
-        </label>
-
-        <div className="modal-actions">
-          <button className="primary-button compact" disabled={saving || !draft.title.trim()} type="submit">
-            {saving ? "Saving" : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
+      <label className="field">
+        <span>Notes</span>
+        <textarea
+          name="agenda"
+          onChange={updateField}
+          placeholder="Agenda, deadline context, or prep notes"
+          rows={3}
+          value={draft.agenda}
+        />
+      </label>
+    </SmallSettingsDialog>
   );
 }

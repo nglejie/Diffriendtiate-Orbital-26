@@ -17,6 +17,7 @@ await fs.mkdir(dataDir, { recursive: true });
 // developer data or services-owned code.
 process.env.CHATBOT_BASE_URL =
   process.env.E2E_MOCK_CHATBOT_URL || "http://127.0.0.1:5011";
+process.env.AUTH_TEST_ACTION_LINKS = "true";
 process.env.DATABASE_URL = "";
 process.env.DIFFRIENDTIATE_DATA_DIR = dataDir;
 process.env.JWT_SECRET = "diffriendtiate-e2e-secret";

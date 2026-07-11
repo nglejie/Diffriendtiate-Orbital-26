@@ -110,7 +110,7 @@ function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
 
         <span className="room-enter-action">
           {isExploreCard ? <Plus size={18} /> : <DoorOpen size={18} />}
-          {isExploreCard ? "View Details" : "Enter Domain"}
+          {isExploreCard ? "View Details" : "Enter"}
         </span>
       </button>
 

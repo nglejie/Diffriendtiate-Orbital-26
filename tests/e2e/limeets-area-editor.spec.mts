@@ -12,7 +12,17 @@ async function registerViaApi(request, name: string, email: string) {
     data: { name, email, password: PASSWORD },
   });
   expect(response.ok()).toBeTruthy();
-  return response.json();
+  const payload = await response.json();
+
+  if (payload.verificationToken) {
+    const verificationResponse = await request.post(`${API_BASE}/api/auth/email-verification/confirm`, {
+      data: { token: payload.verificationToken },
+    });
+    expect(verificationResponse.ok()).toBeTruthy();
+    return verificationResponse.json();
+  }
+
+  return payload;
 }
 
 async function createWorldViaApi(request, token: string) {

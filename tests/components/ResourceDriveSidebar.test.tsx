@@ -1,7 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { ResourceDriveSidebar } from "../../apps/client/src/features/room/resources/ResourceFileManager.tsx";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ResourceDriveSidebar,
+  useResourceDriveController,
+} from "../../apps/client/src/features/room/resources/ResourceFileManager.tsx";
 
 function renderSidebar(overrides = {}) {
   const drive = {
@@ -42,6 +45,10 @@ function renderSidebar(overrides = {}) {
 }
 
 describe("ResourceDriveSidebar", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   // Keeps Infilenite aligned with the Convolution sidebar pattern: route-like
   // actions use Title Case, while section controls use Quick Access.
   it("uses the shared quick access section layout", async () => {
@@ -87,5 +94,48 @@ describe("ResourceDriveSidebar", () => {
 
     await user.click(addItemsButton);
     expect(drive.setAddItemsSectionId).toHaveBeenCalledWith("starred");
+  });
+
+  it("does not offer rename for the default Starred section", () => {
+    renderSidebar({
+      openSectionMenuId: "starred",
+      quickMenuAnchor: { left: 0, top: 0 },
+    });
+
+    expect(screen.queryByRole("menuitem", { name: /rename section/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /remove section/i })).toBeInTheDocument();
+  });
+
+  it("adds selected items to Starred through the quick access add flow", () => {
+    const { result } = renderHook(() =>
+      useResourceDriveController({
+        resources: [
+          {
+            id: "resource-notes",
+            title: "Lecture Notes.pdf",
+            deletedAt: null,
+            metadata: {},
+          },
+        ],
+        room: { id: "room-resource-drive", moduleCode: "CS2103T" },
+      }),
+    );
+
+    act(() => {
+      result.current.setAddItemsSectionId("starred");
+    });
+
+    act(() => {
+      result.current.addItemsToSection(["resource-notes"]);
+    });
+
+    expect(result.current.starredIds).toEqual(["resource-notes"]);
+    expect(result.current.getQuickSectionEntries(result.current.quickSections[0])).toEqual([
+      expect.objectContaining({
+        id: "resource-notes",
+        kind: "file",
+        name: "Lecture Notes.pdf",
+      }),
+    ]);
   });
 });

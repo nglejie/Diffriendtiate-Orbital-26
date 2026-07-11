@@ -2,6 +2,7 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { useMemo, useState } from "react";
 
 export type AppSelectOption = {
+  description?: string;
   disabled?: boolean;
   label: string;
   value: string;
@@ -32,6 +33,7 @@ export function AppSelectMenu({
     [options, value],
   );
   const selectedLabel = selectedOption?.label || placeholder;
+  const selectedDescription = selectedOption?.description || "";
   const menuClassName = ["app-select-menu", className].filter(Boolean).join(" ");
 
   function chooseOption(option: AppSelectOption) {
@@ -51,7 +53,10 @@ export function AppSelectMenu({
         onClick={() => setOpen((current) => !current)}
         type="button"
       >
-        <span>{selectedLabel}</span>
+        <span>
+          <strong>{selectedLabel}</strong>
+          {selectedDescription ? <small>{selectedDescription}</small> : null}
+        </span>
         {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </button>
 
@@ -68,7 +73,10 @@ export function AppSelectMenu({
               role="option"
               type="button"
             >
-              <span>{option.label}</span>
+              <span>
+                <strong>{option.label}</strong>
+                {option.description ? <small>{option.description}</small> : null}
+              </span>
               {value === option.value ? <Check size={16} /> : null}
             </button>
           ))}

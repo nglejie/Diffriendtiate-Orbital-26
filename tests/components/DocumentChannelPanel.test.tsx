@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ImageAnnotatorPanel } from "../../apps/client/src/features/room/chat/ImageAnnotatorPanel.tsx";
+import { AnnotationSidebar } from "../../apps/client/src/features/room/chat/AnnotationSidebar.tsx";
 import { DocumentAuthorAvatar } from "../../apps/client/src/features/room/chat/DocumentAuthorAvatar.tsx";
 import { DocumentChannelPanel } from "../../apps/client/src/features/room/chat/DocumentChannelPanel.tsx";
 
@@ -13,6 +14,7 @@ const basePanelProps = {
   onAddReply: async () => {},
   onCreateAnnotation: async () => {},
   onDeleteAnnotation: async () => {},
+  onDeleteReply: async () => {},
   onError: () => {},
   onPageChange: () => {},
   onUpdateAnnotation: async () => {},
@@ -173,6 +175,186 @@ describe("DocumentChannelPanel annotation sidebar", () => {
     expect(screen.getByText("Why does this step work?")).toBeInTheDocument();
     expect(screen.queryByText("This is the main formula.")).not.toBeInTheDocument();
   });
+
+  it("opens an annotation thread and sends replies through the shared composer", async () => {
+    const user = userEvent.setup();
+    const onAddReply = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <DocumentChannelPanel
+        {...basePanelProps}
+        annotations={[
+          {
+            annotationType: "question",
+            author: { id: "author-1", name: "Question Author" },
+            channel: "lecture-slides",
+            comment: "Why does this step work?",
+            content: { text: "confusing step" },
+            createdAt: "2026-07-04T10:00:00.000Z",
+            id: "ann-question",
+            position: { boundingRect: { y1: 20 }, pageNumber: 1 },
+            replies: [],
+            resolved: false,
+            resourceId: "res_slides",
+          },
+        ]}
+        onAddReply={onAddReply}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /why does this step work/i }));
+    expect(screen.queryByRole("button", { name: /^reply$/i })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText(/reply to question/i), "It follows from the theorem.");
+    await user.click(screen.getByRole("button", { name: /send reply/i }));
+
+    expect(onAddReply).toHaveBeenCalledWith(
+      "ann-question",
+      expect.stringContaining("It follows from the theorem."),
+    );
+  });
+
+  it("jumps to an annotation anchor from the preview card while showing neutral reply counts", async () => {
+    const user = userEvent.setup();
+    const onJumpToAnnotation = vi.fn();
+
+    render(
+      <AnnotationSidebar
+        activeChannel="lecture-slides"
+        annotations={[
+          {
+            annotationType: "insight",
+            author: { id: "author-1", name: "Question Author" },
+            channel: "lecture-slides",
+            comment: "This is a TOC!",
+            content: {},
+            createdAt: "2026-07-04T10:00:00.000Z",
+            id: "ann-insight",
+            position: {},
+            replies: [
+              {
+                author: { id: "user_1", name: "Student One" },
+                comment: "First reply",
+                createdAt: "2026-07-04T10:02:00.000Z",
+                id: "reply-1",
+              },
+              {
+                author: { id: "user_2", name: "Student Two" },
+                comment: "Second reply",
+                createdAt: "2026-07-04T10:03:00.000Z",
+                id: "reply-2",
+              },
+            ],
+            resourceId: "res_slides",
+            resolved: false,
+          },
+        ]}
+        currentUser={{ email: "student@example.test", id: "user_1", name: "Student One" }}
+        onAddReply={async () => {}}
+        onDeleteAnnotation={async () => {}}
+        onDeleteReply={async () => {}}
+        onError={() => {}}
+        onJumpToAnnotation={onJumpToAnnotation}
+        onUpdateAnnotation={async () => {}}
+        resourceId="res_slides"
+      />,
+    );
+
+    expect(screen.getByText("2 Replies")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reply$/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /this is a toc/i }));
+
+    expect(onJumpToAnnotation).toHaveBeenCalledWith("ann-insight");
+    expect(screen.getByRole("button", { name: "Back To Annotations" })).toBeInTheDocument();
+  });
+
+  it("uses custom tooltip labels for annotation thread icon buttons and timestamps", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <DocumentChannelPanel
+        {...basePanelProps}
+        annotations={[
+          {
+            annotationType: "question",
+            author: { id: "author-1", name: "Question Author" },
+            channel: "lecture-slides",
+            comment: "Why does this step work?",
+            content: { text: "confusing step" },
+            createdAt: "2026-07-04T10:00:00.000Z",
+            id: "ann-question",
+            position: { boundingRect: { y1: 20 }, pageNumber: 1 },
+            replies: [],
+            resolved: false,
+            resourceId: "res_slides",
+          },
+        ]}
+        isOwner
+        onJumpToAnnotation={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /why does this step work/i }));
+
+    expect(screen.getByRole("button", { name: "Back To Annotations" })).toHaveAttribute(
+      "data-tooltip",
+      "Back To Annotations",
+    );
+    expect(screen.getByRole("button", { name: "Mark Resolved" })).toHaveAttribute(
+      "data-tooltip",
+      "Mark Resolved",
+    );
+    expect(screen.getByRole("button", { name: "Delete Annotation" })).toHaveAttribute(
+      "data-tooltip",
+      "Delete Annotation",
+    );
+    expect(screen.getByRole("button", { name: "Jump To Annotation" })).toHaveAttribute(
+      "data-tooltip",
+      "Jump To Annotation",
+    );
+
+    const threadTimestamp = container.querySelector(".document-annotation-thread .document-message-time");
+    expect(threadTimestamp).not.toHaveAttribute("title");
+    expect(threadTimestamp).toHaveAttribute("data-tooltip", expect.stringContaining("2026"));
+  });
+
+  it("opens an annotation thread and deletes a reply when the user owns it", async () => {
+    const user = userEvent.setup();
+    const onDeleteReply = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <DocumentChannelPanel
+        {...basePanelProps}
+        annotations={[
+          {
+            annotationType: "question",
+            author: { id: "author-1", name: "Question Author" },
+            channel: "lecture-slides",
+            comment: "Why does this step work?",
+            content: { text: "confusing step" },
+            createdAt: "2026-07-04T10:00:00.000Z",
+            id: "ann-question",
+            position: { boundingRect: { y1: 20 }, pageNumber: 1 },
+            replies: [
+              {
+                author: { id: "user_1", name: "Student One" },
+                comment: "This is my reply.",
+                createdAt: "2026-07-04T10:02:00.000Z",
+                id: "reply-owned",
+              },
+            ],
+            resolved: false,
+            resourceId: "res_slides",
+          },
+        ]}
+        onDeleteReply={onDeleteReply}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /why does this step work/i }));
+    await user.click(screen.getByRole("button", { name: /delete reply/i }));
+
+    expect(onDeleteReply).toHaveBeenCalledWith("ann-question", "reply-owned");
+  });
 });
 
 describe("DocumentChannelPanel annotation composer", () => {
@@ -196,14 +378,14 @@ describe("DocumentChannelPanel annotation composer", () => {
     const tip = within(screen.getByTestId("selection-tip"));
     await user.click(tip.getByLabelText(/annotation type/i));
     await user.click(screen.getByRole("option", { name: "Question" }));
-    await user.type(tip.getByPlaceholderText(/add context for the domain/i), "Can someone explain this paragraph?");
+    await user.type(tip.getByLabelText(/add context for this annotation/i), "Can someone explain this paragraph?");
     await user.click(tip.getByRole("button", { name: /save annotation/i }));
 
     expect(onCreateAnnotation).toHaveBeenCalledWith(
       expect.objectContaining({
         annotationType: "question",
         channel: "lecture-slides",
-        comment: "Can someone explain this paragraph?",
+        comment: expect.stringContaining("Can someone explain this paragraph?"),
         content: { text: "Document channel smoke test" },
         resourceId: "res_slides",
       }),
@@ -249,14 +431,14 @@ describe("ImageAnnotatorPanel", () => {
 
     await user.click(screen.getByLabelText(/annotation type/i));
     await user.click(screen.getByRole("option", { name: "Insight" }));
-    await user.type(screen.getByPlaceholderText(/add context for this region/i), "This diagram needs a note.");
+    await user.type(screen.getByLabelText(/add context for this region/i), "This diagram needs a note.");
     await user.click(screen.getByRole("button", { name: /save annotation/i }));
 
     expect(onCreateAnnotation).toHaveBeenCalledWith(
       expect.objectContaining({
         annotationType: "insight",
         channel: "lecture-slides",
-        comment: "This diagram needs a note.",
+        comment: expect.stringContaining("This diagram needs a note."),
         content: {},
         position: expect.objectContaining({
           height: 0.4,
@@ -352,5 +534,21 @@ describe("ImageAnnotatorPanel", () => {
 
     expect(screen.getByText("100%")).toBeInTheDocument();
     expect(screen.queryByText("90%")).not.toBeInTheDocument();
+  });
+
+  it("labels image toolbar controls and exposes a resizable annotations panel", () => {
+    render(
+      <ImageAnnotatorPanel
+        {...basePanelProps}
+        resourceMimeType={undefined}
+        resourceTitle="Diagram.webp"
+        resourceType={undefined}
+        resourceUrl="/uploads/diagram.webp"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fit To View" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download Original" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize Annotations Panel" })).toBeInTheDocument();
   });
 });

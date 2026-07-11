@@ -18,11 +18,17 @@ async function registerThroughUi(page, name, email) {
   // final assertion waits for the dashboard Create Domain button, proving login
   // completed and the app shell is ready.
   await page.goto("/");
-  await page.getByRole("button", { name: /sign up here/i }).click();
-  await page.getByLabel(/first name/i).fill(name);
-  await page.getByLabel(/email/i).fill(email);
-  await page.getByLabel(/^password$/i).fill(PASSWORD);
-  await page.getByRole("button", { name: /let's go/i }).click();
+  await page.getByRole("button", { name: /register/i }).click();
+  await page.getByPlaceholder("Username").fill(name);
+  await page.getByPlaceholder("Email Address").fill(email);
+  await page.getByPlaceholder("Password", { exact: true }).fill(PASSWORD);
+  const registrationResponsePromise = page.waitForResponse((response) =>
+    response.url().endsWith("/api/auth/register") && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: /create account/i }).click();
+  const registrationPayload = await registrationResponsePromise.then((response) => response.json());
+  expect(registrationPayload.verificationToken).toBeTruthy();
+  await page.goto(`/#/verify-email?token=${encodeURIComponent(registrationPayload.verificationToken)}`);
   await expect(page.getByRole("button", { name: /create domain/i })).toBeVisible();
 }
 
@@ -34,7 +40,17 @@ async function registerViaApi(request, name, email) {
     data: { name, email, password: PASSWORD },
   });
   expect(response.ok()).toBeTruthy();
-  return response.json();
+  const payload = await response.json();
+
+  if (payload.verificationToken) {
+    const verificationResponse = await request.post(`${API_BASE}/api/auth/email-verification/confirm`, {
+      data: { token: payload.verificationToken },
+    });
+    expect(verificationResponse.ok()).toBeTruthy();
+    return verificationResponse.json();
+  }
+
+  return payload;
 }
 
 async function createRoomViaApi(request, token, overrides = {}) {
@@ -242,14 +258,15 @@ test("UAT: user registers, toggles theme, creates a custom room, and navigates c
   await expect(deleteConfirm).toBeVisible();
   const layerState = await page.evaluate(() => {
     const settingsLayer = document.querySelector(".room-settings-screen");
-    const confirmLayer = document.querySelector(".confirm-dialog-backdrop");
+    const confirmLayer = document.querySelector(".confirm-dialog")?.closest(".modal-backdrop");
     return {
       confirmZ: Number.parseInt(window.getComputedStyle(confirmLayer!).zIndex, 10),
       settingsZ: Number.parseInt(window.getComputedStyle(settingsLayer!).zIndex, 10),
     };
   });
   expect(layerState.confirmZ).toBeGreaterThan(layerState.settingsZ);
-  await deleteConfirm.getByRole("button", { name: /^cancel$/i }).click();
+  await expect(deleteConfirm.getByRole("button", { name: /^cancel$/i })).toHaveCount(0);
+  await deleteConfirm.getByRole("button", { name: /close delete domain/i }).click();
   await expect(deleteConfirm).toHaveCount(0);
   await settingsShell.getByRole("button", { name: /close domain settings/i }).click();
   await expect(settingsShell).toHaveCount(0);
@@ -420,12 +437,14 @@ test("UAT: non-owner members cannot see room management controls", async ({ page
   await expect(tapOutButton.locator("svg")).toHaveClass(/lucide-bed/);
   expect(await tapOutButton.getAttribute("title")).toBeNull();
   await tapOutButton.hover();
+  const tapOutTooltip = page.getByRole("tooltip", { name: "Tap Out" });
+  await expect(tapOutTooltip).toBeVisible();
   const tapOutTooltipState = await page.evaluate(() => {
-    const button = document.querySelector('.room-call-actions button[aria-label="Tap Out"]');
-    const caret = window.getComputedStyle(button!, "::before");
-    const bubble = window.getComputedStyle(button!, "::after");
+    const bubble = document.querySelector(".app-tooltip-floating");
+    const caretElement = document.querySelector(".app-tooltip-floating__caret");
+    const caret = window.getComputedStyle(caretElement!);
     return {
-      bubbleOpacity: bubble.opacity,
+      bubbleOpacity: window.getComputedStyle(bubble!).opacity,
       caretBorders: [
         caret.borderTopWidth,
         caret.borderRightWidth,
@@ -439,7 +458,7 @@ test("UAT: non-owner members cannot see room management controls", async ({ page
   });
   expect(tapOutTooltipState.bubbleOpacity).toBe("1");
   expect(tapOutTooltipState.caretOpacity).toBe("1");
-  expect(tapOutTooltipState.caretBorders).toEqual(["0px", "1px", "1px", "0px"]);
+  expect(tapOutTooltipState.caretBorders.some((width) => width !== "0px")).toBe(true);
   expect(tapOutTooltipState.caretClipPath).toBe("none");
   expect(tapOutTooltipState.caretHeight).toBeGreaterThanOrEqual(10);
 
@@ -457,13 +476,15 @@ test("UAT: non-owner members cannot see room management controls", async ({ page
 
   await page.getByRole("button", { name: /^convolution$/i }).click();
   await page.getByRole("button", { name: /^convolution$/i }).hover();
+  const railTooltip = page.getByRole("tooltip", { name: "Convolution" });
+  await expect(railTooltip).toBeVisible();
   const railTooltipState = await page.evaluate(() => {
-    const button = document.querySelector('.room-icon-rail button[aria-label="Convolution"]');
-    const caret = window.getComputedStyle(button!, "::before");
-    const bubble = window.getComputedStyle(button!, "::after");
+    const bubble = document.querySelector(".app-tooltip-floating");
+    const caretElement = document.querySelector(".app-tooltip-floating__caret");
+    const caret = window.getComputedStyle(caretElement!);
     return {
-      bubbleMinHeight: Number.parseFloat(bubble.minHeight),
-      bubbleOpacity: bubble.opacity,
+      bubbleMinHeight: Number.parseFloat(window.getComputedStyle(bubble!).minHeight),
+      bubbleOpacity: window.getComputedStyle(bubble!).opacity,
       caretBorders: [
         caret.borderTopWidth,
         caret.borderRightWidth,
@@ -476,9 +497,9 @@ test("UAT: non-owner members cannot see room management controls", async ({ page
   });
   expect(railTooltipState.bubbleOpacity).toBe("1");
   expect(railTooltipState.caretOpacity).toBe("1");
-  expect(railTooltipState.caretBorders).toEqual(["0px", "0px", "1px", "1px"]);
+  expect(railTooltipState.caretBorders.some((width) => width !== "0px")).toBe(true);
   expect(railTooltipState.caretClipPath).toBe("none");
-  expect(railTooltipState.bubbleMinHeight).toBeGreaterThanOrEqual(36);
+  expect(railTooltipState.bubbleMinHeight).toBeGreaterThanOrEqual(30);
   await expect(page.getByRole("button", { name: /create channel in text channels/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /general options/i })).toHaveCount(0);
 

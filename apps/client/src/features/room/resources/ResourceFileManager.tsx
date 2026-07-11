@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../../api.ts";
 import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
+import SmallSettingsDialog from "../../../shared/ui/SmallSettingsDialog.tsx";
 import { UPLOADS_FOLDER } from "../roomConstants.ts";
 import { enrichResources, getResourceDisplayName } from "../resourceWorkspace.ts";
 
@@ -426,47 +427,30 @@ function SectionDialog({
   const trimmedName = name.trim();
 
   return createPortal(
-    <div
-      className="resource-modal-backdrop"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      role="presentation"
-    >
-      <form
-        aria-modal="true"
-        className="resource-modal-card resource-create-dialog"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (trimmedName) onSubmit(trimmedName);
-        }}
-        role="dialog"
-      >
-        <button className="resource-modal-close" onClick={onClose} type="button">
-          <X size={22} />
+    <SmallSettingsDialog
+      className="resource-create-dialog"
+      footer={
+        <button className="primary-button compact" disabled={!trimmedName} type="submit">
+          {submitLabel}
         </button>
-        <header>
-          <h2>{title}</h2>
-        </header>
-        <label className="resource-field">
-          <span>Name</span>
-          <input
-            autoFocus
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Section Name"
-            value={name}
-          />
-        </label>
-        <div className="resource-modal-actions">
-          <button className="secondary-button compact" onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button className="primary-button compact" disabled={!trimmedName} type="submit">
-            {submitLabel}
-          </button>
-        </div>
-      </form>
-    </div>,
+      }
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (trimmedName) onSubmit(trimmedName);
+      }}
+      title={title}
+    >
+      <label className="resource-field field">
+        <span>Name</span>
+        <input
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Section Name"
+          value={name}
+        />
+      </label>
+    </SmallSettingsDialog>,
     document.body,
   );
 }
@@ -476,52 +460,35 @@ function FolderDialog({ currentPath, onClose, onCreate }) {
   const locationParts = resourcePathParts(currentPath);
 
   return createPortal(
-    <div
-      className="resource-modal-backdrop"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      role="presentation"
-    >
-      <form
-        aria-modal="true"
-        className="resource-modal-card resource-create-dialog"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const folderName = name.trim();
-          if (folderName) onCreate(normalizePath([currentPath, folderName].filter(Boolean).join("/")));
-        }}
-        role="dialog"
-      >
-        <button className="resource-modal-close" onClick={onClose} type="button">
-          <X size={22} />
+    <SmallSettingsDialog
+      className="resource-create-dialog"
+      footer={
+        <button className="primary-button compact" disabled={!name.trim()} type="submit">
+          Create
         </button>
-        <header>
-          <h2>Create Folder</h2>
-        </header>
-        <div className="resource-folder-location">
-          <span className="resource-folder-location-label">Location</span>
-          <ResourcePathTrail parts={locationParts} />
-        </div>
-        <label className="resource-field">
-          <span>Folder Name</span>
-          <input
-            autoFocus
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Folder Name"
-            value={name}
-          />
-        </label>
-        <div className="resource-modal-actions">
-          <button className="secondary-button compact" onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button className="primary-button compact" disabled={!name.trim()} type="submit">
-            Create
-          </button>
-        </div>
-      </form>
-    </div>,
+      }
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault();
+        const folderName = name.trim();
+        if (folderName) onCreate(normalizePath([currentPath, folderName].filter(Boolean).join("/")));
+      }}
+      title="Create Folder"
+    >
+      <div className="resource-folder-location">
+        <span className="resource-folder-location-label">Location</span>
+        <ResourcePathTrail parts={locationParts} />
+      </div>
+      <label className="resource-field field">
+        <span>Folder Name</span>
+        <input
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Folder Name"
+          value={name}
+        />
+      </label>
+    </SmallSettingsDialog>,
     document.body,
   );
 }
@@ -572,21 +539,23 @@ function AddItemsDialog({ folders, onAdd, onClose, resources }) {
   }
 
   return createPortal(
-    <div
-      className="resource-modal-backdrop"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      role="presentation"
-    >
-      <div className="resource-modal-card resource-create-dialog wide" role="dialog" aria-modal="true">
-        <button className="resource-modal-close" onClick={onClose} type="button">
-          <X size={22} />
+    <SmallSettingsDialog
+      bodyClassName="resource-choose-body"
+      className="resource-create-dialog resource-choose-dialog"
+      footer={
+        <button
+          className="primary-button compact"
+          disabled={!selected.length}
+          onClick={() => onAdd(selected)}
+          type="button"
+        >
+          Choose
         </button>
-        <header>
-          <h2>Choose Items to Add</h2>
-        </header>
-        <div className="resource-search compact">
+      }
+      onClose={onClose}
+      title="Choose Items To Add"
+    >
+        <div className="resource-search compact resource-dialog-search">
           <Search size={18} />
           <input
             autoFocus
@@ -595,7 +564,8 @@ function AddItemsDialog({ folders, onAdd, onClose, resources }) {
             value={query}
           />
         </div>
-        <nav className="resource-picker-path" aria-label="Choose items folder path">
+        <nav className="resource-picker-path resource-dialog-path" aria-label="Choose items folder path">
+          <FolderInput size={15} aria-hidden="true" />
           <button
             className={!pickerPath ? "active" : ""}
             onClick={() => {
@@ -609,8 +579,8 @@ function AddItemsDialog({ folders, onAdd, onClose, resources }) {
           {pickerParts.map((part, index) => {
             const path = pickerParts.slice(0, index + 1).join("/");
             return (
-              <span key={path}>
-                /
+              <span className="resource-picker-node" key={path}>
+                <span className="resource-picker-separator">/</span>
                 <button
                   className={path === pickerPath ? "active" : ""}
                   onClick={() => {
@@ -669,21 +639,7 @@ function AddItemsDialog({ folders, onAdd, onClose, resources }) {
           ))}
           {!entries.length ? <p className="resource-empty-small">No matching items.</p> : null}
         </div>
-        <div className="resource-modal-actions">
-          <button className="secondary-button compact" onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button
-            className="primary-button compact"
-            disabled={!selected.length}
-            onClick={() => onAdd(selected)}
-            type="button"
-          >
-            Choose
-          </button>
-        </div>
-      </div>
-    </div>,
+    </SmallSettingsDialog>,
     document.body,
   );
 }
@@ -789,59 +745,42 @@ function ResourceEditDialog({ onClose, onSubmit, resource }) {
   const trimmedName = name.trim();
 
   return createPortal(
-    <div
-      className="resource-modal-backdrop"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      role="presentation"
-    >
-      <form
-        aria-modal="true"
-        className="resource-modal-card resource-create-dialog"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!trimmedName) return;
-          onSubmit({
-            metadata: { resourceType: category, type: category },
-            title: trimmedName,
-          });
-        }}
-        role="dialog"
-      >
-        <button className="resource-modal-close" onClick={onClose} type="button">
-          <X size={22} />
+    <SmallSettingsDialog
+      className="resource-create-dialog"
+      footer={
+        <button className="primary-button compact" disabled={!trimmedName} type="submit">
+          Save
         </button>
-        <header>
-          <h2>Edit Resource</h2>
-        </header>
-        {isCanvasSyncedResource(resource) ? (
-          <p className="resource-muted">
-            This lives inside the synced Canvas folder. The next Canvas sync can overwrite these details.
-          </p>
-        ) : null}
-        <label className="resource-field">
-          <span>Name</span>
-          <input autoFocus onChange={(event) => setName(event.target.value)} value={name} />
-        </label>
-        <AppSelectMenu
-          ariaLabel="Category"
-          className="resource-edit-category-select"
-          label="Category"
-          onChange={setCategory}
-          options={RESOURCE_CATEGORY_SELECT_OPTIONS}
-          value={category}
-        />
-        <div className="resource-modal-actions">
-          <button className="secondary-button compact" onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button className="primary-button compact" disabled={!trimmedName} type="submit">
-            Save
-          </button>
-        </div>
-      </form>
-    </div>,
+      }
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!trimmedName) return;
+        onSubmit({
+          metadata: { resourceType: category, type: category },
+          title: trimmedName,
+        });
+      }}
+      title="Edit Resource"
+    >
+      {isCanvasSyncedResource(resource) ? (
+        <p className="resource-muted">
+          This lives inside the synced Canvas folder. The next Canvas sync can overwrite these details.
+        </p>
+      ) : null}
+      <label className="resource-field field">
+        <span>Name</span>
+        <input autoFocus onChange={(event) => setName(event.target.value)} value={name} />
+      </label>
+      <AppSelectMenu
+        ariaLabel="Category"
+        className="resource-edit-category-select"
+        label="Category"
+        onChange={setCategory}
+        options={RESOURCE_CATEGORY_SELECT_OPTIONS}
+        value={category}
+      />
+    </SmallSettingsDialog>,
     document.body,
   );
 }
@@ -864,30 +803,22 @@ function MoveDialog({ folders, itemName, onClose, onSubmit, title = "Move Item" 
   const pickerParts = pickerPath ? pickerPath.split("/") : [];
 
   return createPortal(
-    <div
-      className="resource-modal-backdrop"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      role="presentation"
-    >
-      <form
-        aria-modal="true"
-        className="resource-modal-card resource-create-dialog"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit(pickerPath);
-        }}
-        role="dialog"
-      >
-        <button className="resource-modal-close" onClick={onClose} type="button">
-          <X size={22} />
+    <SmallSettingsDialog
+      className="resource-create-dialog medium-dialog"
+      footer={
+        <button className="primary-button compact" type="submit">
+          Move Here
         </button>
-        <header>
-          <h2>{title}</h2>
-        </header>
+      }
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit(pickerPath);
+      }}
+      title={title}
+    >
         <p className="resource-muted">{itemName}</p>
-        <div className="resource-search compact">
+        <div className="resource-search compact resource-dialog-search">
           <Search size={18} />
           <input
             autoFocus
@@ -896,7 +827,8 @@ function MoveDialog({ folders, itemName, onClose, onSubmit, title = "Move Item" 
             value={query}
           />
         </div>
-        <nav className="resource-picker-path" aria-label="Move destination path">
+        <nav className="resource-picker-path resource-dialog-path" aria-label="Move destination path">
+          <FolderInput size={15} aria-hidden="true" />
           <button
             className={!pickerPath ? "active" : ""}
             onClick={() => {
@@ -956,16 +888,7 @@ function MoveDialog({ folders, itemName, onClose, onSubmit, title = "Move Item" 
           ))}
           {!folderEntries.length ? <p className="resource-empty-small">No child folders here.</p> : null}
         </div>
-        <div className="resource-modal-actions">
-          <button className="secondary-button compact" onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button className="primary-button compact" type="submit">
-            Move Here
-          </button>
-        </div>
-      </form>
-    </div>,
+    </SmallSettingsDialog>,
     document.body,
   );
 }
@@ -1122,7 +1045,7 @@ function ResourceActions({
   );
 }
 
-function QuickSectionMenu({ anchor, onClose, onRemoveSection, onRenameSection }) {
+function QuickSectionMenu({ anchor, canRename = true, onClose, onRemoveSection, onRenameSection }) {
   const menuRef = useRef(null);
 
   /**
@@ -1154,10 +1077,12 @@ function QuickSectionMenu({ anchor, onClose, onRemoveSection, onRenameSection })
       role="menu"
       style={{ left: anchor.left, top: anchor.top }}
     >
-      <button onClick={onRenameSection} role="menuitem" type="button">
-        <Pencil size={15} />
-        Rename Section
-      </button>
+      {canRename ? (
+        <button onClick={onRenameSection} role="menuitem" type="button">
+          <Pencil size={15} />
+          Rename Section
+        </button>
+      ) : null}
       <button className="danger" onClick={onRemoveSection} role="menuitem" type="button">
         <Trash2 size={15} />
         Remove Section
@@ -1914,6 +1839,12 @@ export function useResourceDriveController({
   }
 
   function addItemsToSection(itemIds) {
+    if (addItemsSectionId === "starred") {
+      setStarredIds((current) => Array.from(new Set([...current, ...itemIds])));
+      setAddItemsSectionId("");
+      return;
+    }
+
     setQuickSections((current) =>
       current.map((section) =>
         section.id === addItemsSectionId
@@ -2208,6 +2139,7 @@ export function ResourceDriveSidebar({ drive }) {
                 {menuOpen ? (
                   <QuickSectionMenu
                     anchor={drive.quickMenuAnchor}
+                    canRename={section.id !== "starred"}
                     onClose={() => drive.setOpenSectionMenuId("")}
                     onRemoveSection={() => drive.removeQuickSection(section.id)}
                     onRenameSection={() => {

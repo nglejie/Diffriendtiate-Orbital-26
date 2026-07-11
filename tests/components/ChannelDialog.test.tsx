@@ -4,16 +4,18 @@ import { describe, expect, it, vi } from "vitest";
 import { ChannelDialog } from "../../apps/client/src/features/room/chat/ChannelDialog.tsx";
 
 const resources = [
-  { id: "res-pdf", title: "Lecture 01.pdf", mimeType: "application/pdf" },
+  { id: "res-pdf", title: "Lecture 01.pdf", mimeType: "application/pdf", folder: "General/Lectures" },
   {
     id: "res-docx",
+    folder: "General/Tutorials",
     title: "Tutorial worksheet",
     mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   },
   { id: "res-txt", title: "Plain notes.txt", mimeType: "text/plain" },
-  { id: "res-image", title: "Diagram.png", mimeType: "image/png" },
+  { id: "res-image", title: "Diagram.png", mimeType: "image/png", folder: "Uploads" },
   {
     id: "res-pptx",
+    folder: "General/Lectures",
     title: "Lecture slides.pptx",
     mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   },
@@ -44,15 +46,23 @@ describe("ChannelDialog", () => {
     renderDialog({ onCreateChannel });
 
     await user.type(screen.getByPlaceholderText("new-channel"), "Lecture Docs");
-    await user.click(screen.getByRole("radio", { name: /document/i }));
+    await user.click(screen.getByLabelText(/channel type/i));
+    await user.click(screen.getByRole("option", { name: /document channel/i }));
 
-    expect(screen.getByText("Link a Document")).toBeInTheDocument();
+    expect(screen.getByText("in Documents")).toBeInTheDocument();
+    expect(screen.getByText("Read, annotate, and discuss on documents.")).toBeInTheDocument();
+    expect(screen.getByText("Link Document")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /general/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /uploads/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /general/i }));
+    expect(screen.getByRole("button", { name: /lectures/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /lectures/i }));
+
     expect(screen.getByText("Lecture 01.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Tutorial worksheet")).toBeInTheDocument();
     expect(screen.getByText("Lecture slides.pptx")).toBeInTheDocument();
-    expect(screen.getByText("Diagram.png")).toBeInTheDocument();
-    expect(screen.getByText("Whiteboard.jpg")).toBeInTheDocument();
-    expect(screen.getByText("Concept map.webp")).toBeInTheDocument();
+    expect(screen.getByText("PowerPoint")).toBeInTheDocument();
+    expect(screen.queryByText(/application\/vnd/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Plain notes.txt")).not.toBeInTheDocument();
     expect(screen.queryByText("Deleted.pdf")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^create channel$/i })).toBeDisabled();
@@ -76,10 +86,25 @@ describe("ChannelDialog", () => {
     const onRequestUpload = vi.fn();
     renderDialog({ onRequestUpload, resources: [{ id: "res-txt", title: "Only text.txt", mimeType: "text/plain" }] });
 
-    await user.click(screen.getByRole("radio", { name: /document/i }));
+    await user.click(screen.getByLabelText(/channel type/i));
+    await user.click(screen.getByRole("option", { name: /document channel/i }));
     expect(screen.getByText(/no pdf, docx, pptx, png, jpg, or webp resources/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /upload new document/i }));
+    await user.click(screen.getByRole("button", { name: /^upload$/i }));
     expect(onRequestUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters documents and auto-selects a freshly uploaded resource", async () => {
+    const user = userEvent.setup();
+    const onCreateChannel = vi.fn();
+    renderDialog({ latestUploadedResourceId: "res-image", onCreateChannel });
+
+    await user.type(screen.getByPlaceholderText("new-channel"), "Diagram");
+
+    expect(screen.getByLabelText(/diagram\.png/i)).toBeChecked();
+
+    await user.type(screen.getByPlaceholderText("Search documents"), "slides");
+    expect(screen.getByText("Lecture slides.pptx")).toBeInTheDocument();
+    expect(screen.queryByText("Diagram.png")).not.toBeInTheDocument();
   });
 });
