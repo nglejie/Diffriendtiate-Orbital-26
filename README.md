@@ -55,66 +55,18 @@ Local dev without GPU (Ollama for embeddings, Gemini for generation LLM)
 - Requires Gemini API Key
 
 ```cmd
-docker compose -f docker-compose.yaml -f docker-compose.local.yaml up --build
+docker compose --profile local -f docker-compose.yaml -f docker-compose.local.yaml up --build
 ```
 
 With NVIDIA GPU (Ollama for all models)
 
 ```cmd
-docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
+docker compose --profile local -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
 ```
 
 The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL, as well as LLM chatbot and Ollama services. Uploaded files, database data, vector database data, and pulled LLM models are stored in Docker volumes.
 
 When `DATABASE_URL` is set, the server initializes and uses PostgreSQL automatically. Without `DATABASE_URL`, local development falls back to the JSON store under `apps/server/data`.
-
-### Command Line Setup
-
-Run from the project root:
-
-#### Main App 
-
-```bash
-npm install
-npm run dev
-```
-
-The local app usually runs at:
-
-- Frontend: `http://127.0.0.1:5173`
-- Backend API: `http://127.0.0.1:4000`
-
-#### Services
-
-Ollama
-
-One-time setup
-- Download Ollama
-- Pull models
-    ```
-    ollama serve &&
-    ollama pull nomic-embed-text &&
-    ollama pull qwen2.5:7b
-    ```
-
-
-Start Ollama server
-```bash
-ollama serve
-```
-
-Chatbot Server
-
-```bash
-python -m venv venv &&
-.\venv\Scripts\activate &&
-pip install -r .\services\server-chatbot\requirements.txt &&
-uvicorn main:app --app-dir services/server-chatbot --reload
-```
-The services usually runs locally at
-
-- server-chatbot: `http://127.0.0.1:8000`
-- ollama: `http://127.0.0.1:11434`
 
 ## Features
 

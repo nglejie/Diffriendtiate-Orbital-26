@@ -1,4 +1,7 @@
 from langchain_core.tools import tool
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 def build_file_tool(file_bytes: bytes, file_name: str, vectorstore):
     """Tool for accessing uploaded file content
@@ -26,7 +29,8 @@ def build_file_tool(file_bytes: bytes, file_name: str, vectorstore):
         Returns:
             str: the full content of uploaded file
         """
-        print(f"---Using Read File Tool: {reason}---")
+        # print(f"---Using Read File Tool: {reason}---")
+        logger.info(f"Tool: read_file | reason: {reason} | file: {file_name}")
         if "content" not in cache:
             cache["content"] = vectorstore.load_file_content_from_bytes(file_bytes, file_name)
             
@@ -55,9 +59,11 @@ def build_room_tools(vectorstore, room_id: str) -> list:
         Returns:
             str: results of the retrieval
         """
-        print("---Using Search Corpus Tool---")
-        print(f"Search Query: {query}")
+        # print("---Using Search Corpus Tool---")
+        # print(f"Search Query: {query}")
+        logger.info(f"Tool: search_corpus | room: {room_id} | query: {query!r}")
         docs = vectorstore.search(query=query, room_id = room_id)
+        logger.debug(f"search_corpus results | room: {room_id} | docs found: {len(docs)}")
         
         print("Room:", room_id)
         print("Docs Found:", len(docs))

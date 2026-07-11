@@ -30,13 +30,13 @@ If all is well (pray), LLM will send correct response back to user
 - ChromaDB (Database)
 
 ## Models
+If GPU is detected / Used, or for local dev
+- Generation: Qwen2.5:7b (ollama)
 - Embedding: nomic-embed-text (ollama)
 
-If GPU is detected / Used
-- Generation: Qwen2.5:7b (ollama)
-
-If no GPU is detected / Used
+If no GPU is detected / Used, or for deployment
 - Generation: gemini-3.1-flash-lite (Gemini API)
+- Embedding: gemini-embedding-2 (Gemini API)
 
 ## Files
 ### main.py
@@ -71,13 +71,11 @@ If no GPU is detected / Used
 - File to define all pydantic models
     - Maintains 1 source of truth for all files requiring reference to pydantic models
 
+### logger.py
+- File to handle logging of application
+    - Logging is using python logging
+
 ## Limitations / Future work
 - Limited to only text based documents (PDF, TXT, DOCX)
 - Does not extract information from images or any other media type
 - Currently only accepts manually uploading of 1 file (not used in main app)
-- Have not tested extensively
-    - Multiple file in database (same / different room documents)
-    - Both uploaded file and search (not used in main app)
-    - Response accuracy
-    - Consistentency of tool usage
-    - Simultaneous requests

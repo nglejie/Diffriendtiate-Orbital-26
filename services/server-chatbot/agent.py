@@ -1,6 +1,5 @@
 import os
 import json
-import re
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
@@ -11,6 +10,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
 from models import HistoryMessage
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 GPU_ENABLED = os.getenv("GPU_ENABLED") == "true"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -44,13 +46,15 @@ class Agent:
         self.vectorstore = vectorstore
         # Decide to use ollama / gemini
         if GPU_ENABLED or not GEMINI_API_KEY:
-            print("DEBUG: GPU Enabled / No GEMINI_API_KEY Detected, Using Ollama Model")
+            # print("DEBUG: GPU Enabled / No GEMINI_API_KEY Detected, Using Ollama Model")
+            logger.info(f"Using Ollama LLM | model: {LLM_MODEL} | url: {OLLAMA_BASE_URL}")
             self.llm = ChatOllama(
                 model = LLM_MODEL,
                 base_url=OLLAMA_BASE_URL,
             )
         else:
-            print("DEBUG: NO GPU detected, using Gemini model")
+            # print("DEBUG: NO GPU detected, using Gemini model")
+            logger.info(f"Using Gemini LLM | model: {GEMINI_MODEL}")
             self.llm = ChatGoogleGenerativeAI(
                 model=GEMINI_MODEL,
                 google_api_key=GEMINI_API_KEY,
@@ -79,6 +83,8 @@ class Agent:
             tools += build_room_tools(self.vectorstore, room_id)
         if file_bytes and file_name and enable_agent_tools:
             tools += build_file_tool(file_bytes, file_name, self.vectorstore)
+            
+        logger.debug(f"Agent built | tools: {[t.name for t in tools]} | room_id: {room_id} | has_file: {file_bytes is not None}")
             
         @dynamic_prompt
         def generate_system_prompt_middleware(request) -> str:
@@ -192,7 +198,9 @@ class Agent:
         """
         sources = []
         if hasattr(message, "name") and message.name in ("search_corpus", "read_file"):
-                for line in message.content.split("\n"):
+            content = self._extract_text_content(message.content)
+            if content:
+                for line in content.split("\n"):
                     if line.startswith("[Source:"):
                         source = line.replace("[Source:", "").replace("]", "").strip()
                         sources.append(source)
@@ -231,7 +239,8 @@ class Agent:
             elif item.role == 'assistant':
                 messages.append(AIMessage(content = item.content))
             else:
-                print(f'DEBUG: Not handled message in message chain (message omitted). role: {item.role} | content: {item.content}')
+                logger.warning(f"Unhandled role in message chain (omitted) | role: {item.role}")
+                # print(f'DEBUG: Not handled message in message chain (message omitted). role: {item.role} | content: {item.content}')
         
         return messages
         
@@ -249,7 +258,9 @@ class Agent:
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name, enable_agent_tools = True)
         messages = self._message_chain_to_messages(message_chain)
-        print(f"DEBUG: messages\n{messages}\n")
+        
+        logger.debug(f"Stream started | messages: {len(messages)} | room_id: {room_id}")
+        
         sources = []
         all_messages = list(messages)
         
@@ -272,7 +283,7 @@ class Agent:
                 args = event["data"].get("input", {})
                 
                 tool_call_in_progress[run_id] = {"name": tool_name, "args": args}
-                
+                logger.info(f"Tool call started | tool: {tool_name} | args: {args})")
                 yield f"[TOOL_START]{json.dumps({'name': tool_name, "args": args})}"
                     
             # Handle tool ending
@@ -295,7 +306,7 @@ class Agent:
                         sources.append(source)
                 
                 tool_call_in_progress.pop(run_id, None)
-                
+                logger.info(f"Tool call complete | tool: {tool_name}")
                 yield f"[TOOL_END]{json.dumps({"name": tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
@@ -306,15 +317,12 @@ class Agent:
                         all_messages.append(ai_message)
             
             else: # catch any other events
-                print(f"DEBUG: unhandled event type: {event_type} | metadata {event.get('metadata', {})}")
+                # print(f"DEBUG: unhandled event type: {event_type} | metadata {event.get('metadata', {})}")
+                logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")
                 
-        # return sources after all tokens
-        yield f"[SOURCES]{json.dumps(sources)}"
-
-        chain = self._convert_messages(all_messages)
-        print(f"DEBUG: Message Chain\n{chain}\n")
-        yield f"[CHAIN]{json.dumps(chain)}"
-        
+        logger.info(f"Stream complete | sources: {sources}")
+        yield f"[SOURCES]{json.dumps(sources)}" # return sources after all tokens
+        yield f"[CHAIN]{json.dumps(self._convert_messages(all_messages))}"
         yield f"[DONE]"
                 
     async def invoke(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
@@ -331,11 +339,13 @@ class Agent:
         """
         agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name, enable_agent_tools = True)
         messages = self._message_chain_to_messages(message_chain)
+        logger.debug(f"Invoke started | messages: {len(messages)} | room_id: {room_id}")
         
         result = await agent.ainvoke({"messages": messages})
         # answer = result["messages"][-1].content
         answer = self._extract_text_content(result["messages"][-1].content)
         sources = self._extract_sources(result["messages"])
         chain = self._convert_messages(result["messages"])
-                            
+        
+        logger.info(f"Invoke complete | surces: {sources}")
         return answer, sources, chain
