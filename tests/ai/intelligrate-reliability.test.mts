@@ -175,3 +175,286 @@ describe("Intelligrate app-side reliability", () => {
     expect(refreshed.payload.threads.map((thread) => thread.title)).toContain("Public explanation");
   });
 });
+
+describe("Intelligrate BYOK LiteLLM routing", () => {
+  let app;
+  let chatbot;
+  let owner;
+  let room;
+
+  beforeAll(async () => {
+    chatbot = await startMockChatbot({ streamAnswer: "Mock BYOK streamed answer" });
+    app = await startTestApp({
+      chatbotUrl: chatbot.url,
+      env: {
+        LLM_API_KEY_ENCRYPTION_KEY:
+          "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      },
+    });
+    owner = await registerUser(app.baseUrl, { name: "BYOK Stream Owner" });
+    room = await createRoom(app.baseUrl, owner.token, {
+      name: "BYOK Routing Room",
+      moduleCode: "CS3216",
+    });
+  });
+
+  afterAll(async () => {
+    await app?.stop();
+    await chatbot?.stop();
+  });
+
+  it("streams a BYOK provider response through Intelligrate with the decrypted user key", async () => {
+    const userSecret = "sk-byok-openai-secret-987654321";
+    const savedKey = await apiRequest(app.baseUrl, "/api/auth/llm-api-keys", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        providerId: "openai",
+        label: "Owner OpenAI",
+        model: "openai/gpt-4o-mini",
+        apiKey: userSecret,
+      },
+    });
+    expect(savedKey.status).toBe(201);
+
+    const providers = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/buddy/providers`, {
+      token: owner.token,
+    });
+    expect(providers.status).toBe(200);
+    expect(providers.payload.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: savedKey.payload.key.id,
+          providerName: "OpenAI",
+          available: true,
+        }),
+      ]),
+    );
+
+    const response = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        providerKeyId: savedKey.payload.key.id,
+        messages: [{ role: "user", body: "Explain BYOK in one sentence." }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const streamText = await response.text();
+    expect(streamText).toContain("event: token");
+    expect(streamText).toContain("Mock BYOK streamed answer");
+
+    expect(chatbot.calls.streams).toHaveLength(1);
+    expect(chatbot.calls.streams[0]).toMatchObject({
+      llm_api_key: userSecret,
+      llm_model: "openai/gpt-4o-mini",
+      room_id: room.id,
+    });
+    expect(chatbot.calls.streams[0].llm_api_key_query).toBeUndefined();
+    expect(JSON.parse(chatbot.calls.streams[0].message_chain).at(-1)).toMatchObject({
+      role: "user",
+      content: "Explain BYOK in one sentence.",
+    });
+  });
+
+  it("routes BYOK attachment prompts through the same grounded stream contract", async () => {
+    const userSecret = "sk-byok-openai-grounded-secret-987654321";
+    const savedKey = await apiRequest(app.baseUrl, "/api/auth/llm-api-keys", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        providerId: "openai",
+        label: "Grounded OpenAI",
+        model: "openai/gpt-4o",
+        apiKey: userSecret,
+      },
+    });
+    expect(savedKey.status).toBe(201);
+
+    const upload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "BYOKAttachment.txt",
+      "BYOK attachment content for grounded routing.",
+      "Uploads/Intelligrate",
+    );
+
+    const response = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        attachmentResourceIds: [upload.resource.id],
+        providerKeyId: savedKey.payload.key.id,
+        messages: [{ role: "user", body: "Summarise this BYOK attachment." }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const streamCall = chatbot.calls.streams.at(-1);
+    expect(streamCall).toMatchObject({
+      llm_api_key: userSecret,
+      llm_model: "openai/gpt-4o",
+      room_id: room.id,
+    });
+    expect(streamCall.contentType).toContain("multipart/form-data");
+    expect(streamCall.bodyText).toContain("BYOKAttachment.txt");
+    expect(streamCall.bodyText).toContain("BYOK attachment content");
+    const messageChain = JSON.parse(streamCall.message_chain);
+    expect(messageChain.at(-1).content).toContain(
+      "Files attached to this message: BYOKAttachment.txt.",
+    );
+  });
+});
+
+describe("Intelligrate grounded stream contract", () => {
+  let app;
+  let chatbot;
+  let owner;
+  let room;
+
+  beforeAll(async () => {
+    chatbot = await startMockChatbot({
+      streamEvents: [
+        {
+          event: "tool_start",
+          data: { name: "search_corpus", args: { query: "Orbital" } },
+        },
+        {
+          event: "tool_end",
+          data: {
+            name: "search_corpus",
+            result: "[Source: OrbitalGuide.txt] Orbital is Diffriendtiate's project context.",
+          },
+        },
+        {
+          event: "token",
+          data: "Orbital is Diffriendtiate's project context from the uploaded guide.",
+        },
+        {
+          event: "answer",
+          data: "Orbital is Diffriendtiate's project context from the uploaded guide.",
+        },
+        {
+          event: "sources",
+          data: ["OrbitalGuide.txt"],
+        },
+        {
+          event: "chain",
+          data: [
+            { role: "user", content: "What is Orbital?" },
+            {
+              role: "assistant",
+              content: "Orbital is Diffriendtiate's project context from the uploaded guide.",
+            },
+          ],
+        },
+      ],
+    });
+    app = await startTestApp({ chatbotUrl: chatbot.url });
+    owner = await registerUser(app.baseUrl, { name: "Grounded Stream Owner" });
+    room = await createRoom(app.baseUrl, owner.token, {
+      name: "Grounded Stream Room",
+      moduleCode: "CS3216",
+    });
+  });
+
+  afterAll(async () => {
+    await app?.stop();
+    await chatbot?.stop();
+  });
+
+  it("streams room-corpus tool events, source events, and prior chat context", async () => {
+    await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "OrbitalGuide.txt",
+      "Orbital is Diffriendtiate's project context.",
+      "Project Notes",
+    );
+
+    const response = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "user", body: "Remember that Orbital matters." },
+          { role: "assistant", body: "I will keep Orbital in context." },
+          { role: "user", body: "What is Orbital?" },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const streamText = await response.text();
+    expect(streamText).toContain("event: tool_start");
+    expect(streamText).toContain("event: tool_end");
+    expect(streamText).toContain("event: sources");
+    expect(streamText).toContain("OrbitalGuide.txt");
+
+    expect(chatbot.calls.embeds).toHaveLength(1);
+    expect(chatbot.calls.embeds[0].urls[0]).toMatchObject({
+      file_name: "OrbitalGuide.txt",
+    });
+    const streamCall = chatbot.calls.streams.at(-1);
+    expect(streamCall).toMatchObject({
+      room_id: room.id,
+    });
+    const messageChain = JSON.parse(streamCall.message_chain);
+    expect(messageChain.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(messageChain.at(-1).content).toContain("What is Orbital?");
+    expect(messageChain.at(-1).content).toContain("Available room resource filenames: OrbitalGuide.txt.");
+  });
+
+  it("forwards one supported attachment as multipart and includes its filename in context", async () => {
+    const upload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "AttachedOrbital.txt",
+      "Attached Orbital notes explain that Orbital is the project workspace.",
+      "Uploads/Intelligrate",
+    );
+
+    const response = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        attachmentResourceIds: [upload.resource.id],
+        messages: [{ role: "user", body: "Summarise the attached file." }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const streamCall = chatbot.calls.streams.at(-1);
+    expect(streamCall.contentType).toContain("multipart/form-data");
+    expect(streamCall.bodyText).toContain("AttachedOrbital.txt");
+    expect(streamCall.bodyText).toContain("Attached Orbital notes");
+    const messageChain = JSON.parse(streamCall.message_chain);
+    expect(messageChain.at(-1).content).toContain(
+      "Files attached to this message: AttachedOrbital.txt.",
+    );
+  });
+});

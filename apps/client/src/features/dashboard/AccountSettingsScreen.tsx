@@ -1,16 +1,27 @@
 import {
+  CheckCircle2,
+  CircleMinus,
   CircleX,
   Eye,
   EyeOff,
+  KeyRound,
+  ListPlus,
   LogOut,
   Pencil,
+  PlugZap,
+  Plus,
+  Search,
+  Trash2,
+  Unplug,
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../api.ts";
+import { AppSelectMenu } from "../../shared/ui/AppSelectMenu.tsx";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog.tsx";
+import { formatModelLabel, ProviderIcon } from "../../shared/ui/LlmProviderIcon.tsx";
 import SmallSettingsDialog from "../../shared/ui/SmallSettingsDialog.tsx";
 import { getInitial } from "../../shared/utils/room.ts";
 import {
@@ -29,7 +40,57 @@ function maskEmail(email = "") {
   return `${"*".repeat(Math.max(8, Math.min(12, name.length + 4)))}@${domain}`;
 }
 
+const emptyLlmKeyPayload = {
+  encryptionAvailable: true,
+  providerCatalogAvailable: true,
+  providerCatalogError: "",
+  providerCatalogStale: false,
+  providers: [],
+  keys: [],
+};
+
+const commonLlmProviderGroups = [
+  { ids: ["openai"], terms: ["chatgpt"] },
+  { ids: ["anthropic"], terms: ["claude"] },
+  { ids: ["gemini"], terms: ["google"] },
+  { ids: ["openrouter"], terms: [] },
+  { ids: ["groq"], terms: [] },
+  { ids: ["mistral"], terms: [] },
+  { ids: ["cohere"], terms: [] },
+  { ids: ["together_ai", "together"], terms: ["together"] },
+  { ids: ["perplexity"], terms: [] },
+  { ids: ["xai"], terms: ["grok"] },
+];
+// Picks a stable default provider for the Add Key dialog once the catalog loads.
+function getFirstLlmProvider(payload) {
+  for (const group of commonLlmProviderGroups) {
+    const provider = findCommonProvider(payload.providers || [], group);
+    if (provider) return provider;
+  }
+  return payload.providers?.[0] || null;
+}
+
+function getProviderSearchText(provider) {
+  return [provider?.id, provider?.providerName, provider?.defaultLabel]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+}
+
+function providerMatchesAny(provider, terms) {
+  const searchText = getProviderSearchText(provider);
+  return terms.some((term) => searchText.includes(String(term || "").toLowerCase()));
+}
+
+function findCommonProvider(providers, group) {
+  const exactProvider = providers.find((provider) => group.ids.includes(String(provider.id || "").toLowerCase()));
+  if (exactProvider) return exactProvider;
+  return group.terms.length
+    ? providers.find((provider) => providerMatchesAny(provider, group.terms))
+    : null;
+}
+
 function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
+  const [activeSection, setActiveSection] = useState("account");
   const [accountForm, setAccountForm] = useState({
     email: user?.email || "",
     name: getProfileDisplayName(user, ""),
@@ -54,11 +115,83 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
   const [accountEditing, setAccountEditing] = useState(false);
   const [passwordEditing, setPasswordEditing] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [llmKeyPayload, setLlmKeyPayload] = useState(emptyLlmKeyPayload);
+  const [llmKeyDialogOpen, setLlmKeyDialogOpen] = useState(false);
+  const [llmKeyDeleteTarget, setLlmKeyDeleteTarget] = useState(null);
+  const [llmKeyError, setLlmKeyError] = useState("");
+  const [llmKeyLoading, setLlmKeyLoading] = useState(false);
+  const [llmKeySaving, setLlmKeySaving] = useState(false);
+  const [llmKeyVisible, setLlmKeyVisible] = useState(false);
+  const [llmProviderBrowserOpen, setLlmProviderBrowserOpen] = useState(false);
+  const [llmProviderBrowserSearch, setLlmProviderBrowserSearch] = useState("");
+  const [llmDisconnectedProviders, setLlmDisconnectedProviders] = useState(() => new Set());
+  const [pinnedLlmProviderIds, setPinnedLlmProviderIds] = useState(() => new Set());
+  const [selectedLlmProviderId, setSelectedLlmProviderId] = useState("");
+  const [llmKeyForm, setLlmKeyForm] = useState({
+    apiKey: "",
+    id: "",
+    label: "",
+    model: "",
+    providerId: "",
+    reuseKeyId: "",
+  });
   const profileName = getProfileDisplayName(user, "Account");
   const profilePhoto = getProfileAvatarUrl(user);
   const hasPassword = Boolean(user?.hasPassword);
   const usesSupabaseAccount = Array.isArray(user?.authProviders) && user.authProviders.includes("supabase");
   const displayedEmail = emailRevealed ? user?.email : maskEmail(user?.email);
+  const selectedLlmProvider =
+    llmKeyPayload.providers.find((provider) => provider.id === selectedLlmProviderId) ||
+    getFirstLlmProvider(llmKeyPayload);
+  const commonLlmProviders = useMemo(() => {
+    const byId = new Map();
+    for (const group of commonLlmProviderGroups) {
+      const match = findCommonProvider(llmKeyPayload.providers, group);
+      if (match) byId.set(match.id, match);
+    }
+    for (const key of llmKeyPayload.keys) {
+      const provider = llmKeyPayload.providers.find((candidate) => candidate.id === key.providerId);
+      if (provider) byId.set(provider.id, provider);
+    }
+    for (const providerId of pinnedLlmProviderIds) {
+      const provider = llmKeyPayload.providers.find((candidate) => candidate.id === providerId);
+      if (provider) byId.set(provider.id, provider);
+    }
+    if (selectedLlmProvider) byId.set(selectedLlmProvider.id, selectedLlmProvider);
+    const providers = [...byId.values()];
+    return providers.length ? providers.slice(0, 11) : llmKeyPayload.providers.slice(0, 10);
+  }, [llmKeyPayload.keys, llmKeyPayload.providers, pinnedLlmProviderIds, selectedLlmProviderId]);
+  const filteredLlmProviderBrowserProviders = useMemo(() => {
+    const search = llmProviderBrowserSearch.trim().toLowerCase();
+    return llmKeyPayload.providers.filter((provider) => {
+      if (!search) return true;
+      return getProviderSearchText(provider).includes(search);
+    });
+  }, [llmKeyPayload.providers, llmProviderBrowserSearch]);
+  const selectedLlmKeys = selectedLlmProvider
+    ? llmKeyPayload.keys.filter((key) => key.providerId === selectedLlmProvider.id)
+    : [];
+  const selectedLlmStatus = selectedLlmKeys.length
+    ? "connected"
+    : selectedLlmProvider && llmDisconnectedProviders.has(selectedLlmProvider.id)
+      ? "disconnected"
+      : "not-connected";
+  const selectedLlmStatusLabel =
+    selectedLlmStatus === "connected"
+      ? "Connected"
+      : selectedLlmStatus === "disconnected"
+        ? "Disconnected"
+        : "Not Connected";
+  const formLlmProvider =
+    llmKeyPayload.providers.find((provider) => provider.id === llmKeyForm.providerId) ||
+    selectedLlmProvider;
+  const editingLlmKey = llmKeyForm.id
+    ? llmKeyPayload.keys.find((key) => key.id === llmKeyForm.id)
+    : null;
+  const formLlmModelOptions = (formLlmProvider?.models || []).map((model) => ({
+    label: formatModelLabel(model),
+    value: model,
+  }));
 
   useEffect(() => {
     setAccountForm({
@@ -75,6 +208,44 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [onClose]);
+
+  useEffect(() => {
+    if (activeSection !== "llmKeys") return undefined;
+
+    // LLM key metadata is fetched lazily so Account Settings stays cheap until the BYOK tab is opened.
+    let cancelled = false;
+    setLlmKeyLoading(true);
+    setLlmKeyError("");
+
+    api.getLlmApiKeys()
+      .then((payload) => {
+        if (cancelled) return;
+        const nextPayload = {
+          ...emptyLlmKeyPayload,
+          ...payload,
+          providers: Array.isArray(payload.providers) ? payload.providers : [],
+          keys: Array.isArray(payload.keys) ? payload.keys : [],
+        };
+        setLlmKeyPayload(nextPayload);
+
+        const firstProvider = getFirstLlmProvider(nextPayload);
+        if (firstProvider && !selectedLlmProviderId) {
+          setSelectedLlmProviderId(firstProvider.id);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLlmKeyError(error.message || "Unable to load LLM API keys.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLlmKeyLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection]);
 
   function updateAccountField(event) {
     const { name, value } = event.target;
@@ -100,6 +271,69 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
     setPasswordError("");
   }
 
+  function getLlmKeysForProvider(providerId) {
+    return llmKeyPayload.keys.filter((key) => key.providerId === providerId);
+  }
+
+  function getLlmKeyStripTitle(key, provider) {
+    const providerName = String(provider?.providerName || "").trim();
+    const label = String(key?.label || "").trim();
+    const modelLabel = formatModelLabel(key?.model);
+
+    if (label && label.toLowerCase() !== providerName.toLowerCase()) return label;
+    return modelLabel || label || providerName || "LLM model";
+  }
+
+  // Opens the shared small-dialog shell with provider-specific defaults and redacted saved state.
+  function openLlmKeyDialog(providerId = selectedLlmProvider?.id, keyId = "") {
+    const provider =
+      llmKeyPayload.providers.find((candidate) => candidate.id === providerId) ||
+      selectedLlmProvider ||
+      getFirstLlmProvider(llmKeyPayload);
+    const providerKeys = provider ? getLlmKeysForProvider(provider.id) : [];
+    const savedKey = keyId ? providerKeys.find((key) => key.id === keyId) : null;
+    if (!provider) return;
+
+    setLlmKeyError("");
+    setLlmKeyVisible(false);
+    setLlmKeyForm({
+      apiKey: "",
+      id: savedKey?.id || "",
+      label: savedKey?.label || "",
+      model: savedKey?.model || provider.defaultModel || provider.models?.[0] || "",
+      providerId: provider.id,
+      reuseKeyId: "",
+    });
+    setLlmKeyDialogOpen(true);
+  }
+
+  // Clears secret form state whenever the dialog closes so keys never linger in the UI.
+  function closeLlmKeyDialog() {
+    setLlmKeyDialogOpen(false);
+    setLlmKeyError("");
+    setLlmKeyVisible(false);
+  }
+
+  function updateLlmKeyField(event) {
+    const { name, value } = event.target;
+    setLlmKeyForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function selectLlmModel(model) {
+    setLlmKeyForm((current) => ({ ...current, model }));
+  }
+
+  function selectProviderFromBrowser(providerId) {
+    setPinnedLlmProviderIds((current) => {
+      const next = new Set(current);
+      next.add(providerId);
+      return next;
+    });
+    setSelectedLlmProviderId(providerId);
+    setLlmProviderBrowserOpen(false);
+    setLlmProviderBrowserSearch("");
+  }
+
   function renderPasswordInput({ autoComplete, label, name, required = true }) {
     const visible = Boolean(visiblePasswordFields[name]);
     const inputId = `account-${name}`;
@@ -121,11 +355,44 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
           />
           <button
             aria-label={visible ? "Hide password" : "Show password"}
+            className="account-password-toggle"
+            data-tooltip={visible ? `Hide ${label}` : `Show ${label}`}
             onClick={() => togglePasswordVisibility(name)}
-            title={visible ? `Hide ${label}` : `Show ${label}`}
             type="button"
           >
             {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  // The API-key field reuses the password visibility shell so tooltip and layout behavior stay shared.
+  function renderLlmApiKeyInput({ required = true } = {}) {
+    return (
+      <div className="field account-password-field">
+        <label htmlFor="llm-api-key">
+          API Key
+          {required ? <em aria-hidden="true">*</em> : null}
+        </label>
+        <span className="account-password-input">
+          <input
+            autoComplete="off"
+            id="llm-api-key"
+            name="apiKey"
+            onChange={updateLlmKeyField}
+            placeholder={required ? "" : "Leave blank to keep the saved key"}
+            type={llmKeyVisible ? "text" : "password"}
+            value={llmKeyForm.apiKey}
+          />
+          <button
+            aria-label={llmKeyVisible ? "Hide API Key" : "Show API Key"}
+            className="account-password-toggle"
+            data-tooltip={llmKeyVisible ? "Hide API Key" : "Show API Key"}
+            onClick={() => setLlmKeyVisible((current) => !current)}
+            type="button"
+          >
+            {llmKeyVisible ? <EyeOff size={18} /> : <Eye size={18} />}
           </button>
         </span>
       </div>
@@ -196,6 +463,77 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
     }
   }
 
+  // Persists only through the server endpoint; the returned payload is redacted metadata.
+  async function saveLlmKey(event) {
+    event.preventDefault();
+    setLlmKeySaving(true);
+    setLlmKeyError("");
+
+    if (
+      !llmKeyForm.providerId ||
+      !llmKeyForm.model.trim() ||
+      (!llmKeyForm.id && !llmKeyForm.apiKey.trim())
+    ) {
+      setLlmKeyError("Choose a provider, model, and API key.");
+      setLlmKeySaving(false);
+      return;
+    }
+
+    try {
+      const payload = await api.saveLlmApiKey({
+        id: llmKeyForm.id,
+        providerId: llmKeyForm.providerId,
+        label: llmKeyForm.label,
+        model: llmKeyForm.model,
+        apiKey: llmKeyForm.apiKey,
+        reuseKeyId: llmKeyForm.reuseKeyId,
+      });
+      setLlmKeyPayload((current) => ({
+        ...current,
+        keys: Array.isArray(payload.keys) ? payload.keys : current.keys,
+      }));
+      setLlmDisconnectedProviders((current) => {
+        const next = new Set(current);
+        next.delete(llmKeyForm.providerId);
+        return next;
+      });
+      setLlmKeyDialogOpen(false);
+      setLlmKeyForm({ apiKey: "", id: "", label: "", model: "", providerId: "", reuseKeyId: "" });
+    } catch (error: any) {
+      setLlmKeyError(error.message || "Unable to save this LLM API key.");
+    } finally {
+      setLlmKeySaving(false);
+    }
+  }
+
+  // Delete uses the shared confirm dialog and refreshes the redacted key list after success.
+  async function deleteLlmKey() {
+    if (!llmKeyDeleteTarget?.id) return;
+
+    try {
+      const payload = await api.deleteLlmApiKey(llmKeyDeleteTarget.id);
+      setLlmKeyPayload((current) => ({
+        ...current,
+        keys: Array.isArray(payload.keys) ? payload.keys : current.keys,
+      }));
+      setLlmDisconnectedProviders((current) => {
+        const next = new Set(current);
+        const nextKeys = Array.isArray(payload.keys) ? payload.keys : [];
+        if (nextKeys.some((key) => key.providerId === llmKeyDeleteTarget.providerId)) {
+          next.delete(llmKeyDeleteTarget.providerId);
+        } else {
+          next.add(llmKeyDeleteTarget.providerId);
+        }
+        return next;
+      });
+      setLlmKeyDeleteTarget(null);
+      setLlmKeyDialogOpen(false);
+    } catch (error: any) {
+      setLlmKeyError(error.message || "Unable to delete this LLM API key.");
+      setLlmKeyDeleteTarget(null);
+    }
+  }
+
   async function deleteAccount() {
     setDeletingAccount(true);
     try {
@@ -237,9 +575,21 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
           </button>
 
           <nav className="account-settings-nav">
-            <button className="active" type="button">
+            <button
+              className={activeSection === "account" ? "active" : ""}
+              onClick={() => setActiveSection("account")}
+              type="button"
+            >
               <UserRound size={17} />
               Account
+            </button>
+            <button
+              className={activeSection === "llmKeys" ? "active" : ""}
+              onClick={() => setActiveSection("llmKeys")}
+              type="button"
+            >
+              <KeyRound size={17} />
+              LLM API Keys
             </button>
             <button className="account-settings-logout" onClick={onLogout} type="button">
               <LogOut size={16} />
@@ -261,89 +611,233 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
 
         <div className="account-settings-content">
           <header className="room-settings-header account-settings-header">
-            <h1 id="account-settings-title">Account</h1>
+            <h1 id="account-settings-title">
+              {activeSection === "llmKeys" ? "LLM API Keys" : "Account"}
+            </h1>
           </header>
 
-          <section className="account-settings-section" aria-labelledby="account-info-title">
-            <div className="settings-section-heading">
-              <h2 id="account-info-title">Account Information</h2>
-            </div>
+          {activeSection === "account" ? (
+            <>
+              <section className="account-settings-section" aria-labelledby="account-info-title">
+                <div className="settings-section-heading">
+                  <h2 id="account-info-title">Account Information</h2>
+                </div>
 
-            <div className="account-settings-list">
-              <div className="account-settings-row">
-                <span>Username</span>
-                <strong>{profileName}</strong>
-                <button
-                  className="secondary-button compact"
-                  onClick={() => setAccountEditing(true)}
-                  type="button"
-                >
-                  Edit
-                </button>
-              </div>
+                <div className="account-settings-list">
+                  <div className="account-settings-row">
+                    <span>Username</span>
+                    <strong>{profileName}</strong>
+                    <button
+                      className="secondary-button compact"
+                      onClick={() => setAccountEditing(true)}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                  </div>
 
-              <div className="account-settings-row">
-                <span>Email</span>
-                <strong>
-                  {displayedEmail}
+                  <div className="account-settings-row">
+                    <span>Email</span>
+                    <strong>
+                      {displayedEmail}
+                      <button
+                        className="account-settings-inline-link"
+                        onClick={() => setEmailRevealed((current) => !current)}
+                        type="button"
+                      >
+                        {emailRevealed ? "Hide" : "Reveal"}
+                      </button>
+                    </strong>
+                    <button
+                      className="secondary-button compact"
+                      disabled
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </div>
+
+                {accountError ? <p className="form-error">{accountError}</p> : null}
+              </section>
+
+              <section className="account-settings-section" aria-labelledby="account-password-title">
+                <div className="settings-section-heading">
+                  <h2 id="account-password-title">Password & Security</h2>
+                </div>
+
+                <div className="account-settings-list">
+                  <div className="account-settings-row account-settings-password-row">
+                    <span>Password</span>
+                    <button
+                      className="secondary-button compact"
+                      onClick={() => setPasswordEditing(true)}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </div>
+
+                {passwordError ? <p className="form-error">{passwordError}</p> : null}
+              </section>
+
+              <section className="account-settings-section account-danger-section" aria-labelledby="account-danger-title">
+                <div className="account-delete-panel">
+                  <div>
+                    <h2 id="account-danger-title">Delete Your Account</h2>
+                    <p>Permanently close your account.</p>
+                  </div>
                   <button
-                    className="account-settings-inline-link"
-                    onClick={() => setEmailRevealed((current) => !current)}
+                    className="danger-button compact"
+                    disabled={deletingAccount}
+                    onClick={() => setDeleteConfirmOpen(true)}
                     type="button"
                   >
-                    {emailRevealed ? "Hide" : "Reveal"}
+                    Delete
                   </button>
-                </strong>
+                </div>
+              </section>
+            </>
+          ) : (
+            <section className="account-settings-section llm-provider-settings-section" aria-labelledby="llm-keys-title">
+              <div className="settings-section-heading">
+                <h2 id="llm-keys-title">Add LLM providers tied to your account</h2>
+                <p>API keys added to Diffriendtiate are encrypted at rest and are only used to route your Intelligrate requests.</p>
+              </div>
+
+              {llmKeyError ? (
+                <div className="form-error account-settings-error" role="alert">
+                  <CircleX size={18} aria-hidden="true" />
+                  <p>{llmKeyError}</p>
+                </div>
+              ) : null}
+
+              {!llmKeyPayload.encryptionAvailable ? (
+                <p className="account-settings-muted">
+                  LLM API key encryption is not configured on this server.
+                </p>
+              ) : null}
+
+              {!llmKeyPayload.providerCatalogAvailable ? (
+                <p className="account-settings-muted">
+                  {llmKeyPayload.providerCatalogError || "LiteLLM providers are unavailable right now."}
+                </p>
+              ) : null}
+
+              <div className="llm-provider-grid-row">
+                <div className="llm-provider-grid" aria-label="Common LLM providers">
+                  {llmKeyLoading ? (
+                    <span className="account-settings-muted">Loading providers</span>
+                  ) : commonLlmProviders.length ? (
+                    commonLlmProviders.map((provider) => {
+                      const savedKeyCount = getLlmKeysForProvider(provider.id).length;
+                      const active = selectedLlmProvider?.id === provider.id;
+                      return (
+                        <button
+                          aria-label={`Select ${provider.providerName}`}
+                          aria-pressed={active}
+                          className={active ? "active" : ""}
+                          data-tooltip={provider.providerName}
+                          key={provider.id}
+                          onClick={() => setSelectedLlmProviderId(provider.id)}
+                          type="button"
+                        >
+                          <ProviderIcon provider={provider} />
+                          {savedKeyCount ? <CheckCircle2 size={13} aria-hidden="true" /> : null}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <span className="account-settings-muted">No providers available.</span>
+                  )}
+                </div>
                 <button
-                  className="secondary-button compact"
-                  disabled
+                  className="llm-provider-more-button"
+                  disabled={llmKeyLoading || !llmKeyPayload.providers.length}
+                  onClick={() => setLlmProviderBrowserOpen(true)}
                   type="button"
                 >
-                  Edit
+                  <ListPlus size={18} aria-hidden="true" />
+                  View More
                 </button>
               </div>
-            </div>
 
-            {accountError ? <p className="form-error">{accountError}</p> : null}
-          </section>
+              <div className="llm-provider-strip-area">
+                {selectedLlmProvider ? (
+                  <>
+                    {selectedLlmKeys.length ? (
+                      selectedLlmKeys.map((key) => {
+                        const stripTitle = getLlmKeyStripTitle(key, selectedLlmProvider);
+                        const stripModel = formatModelLabel(key.model);
+                        const showModelSubtitle =
+                          stripModel && stripModel.toLowerCase() !== stripTitle.toLowerCase();
 
-          <section className="account-settings-section" aria-labelledby="account-password-title">
-            <div className="settings-section-heading">
-              <h2 id="account-password-title">Password & Security</h2>
-            </div>
+                        return (
+                          <button
+                            aria-label={`Edit ${key.label || key.model}`}
+                            className="llm-provider-strip connected"
+                            key={key.id}
+                            disabled={!llmKeyPayload.encryptionAvailable || llmKeyLoading}
+                            onClick={() => openLlmKeyDialog(selectedLlmProvider.id, key.id)}
+                            type="button"
+                          >
+                            <ProviderIcon provider={selectedLlmProvider} />
+                            <span className="llm-provider-strip-copy">
+                              <strong>{stripTitle}</strong>
+                              {showModelSubtitle ? <span>{stripModel}</span> : null}
+                            </span>
+                            <span className="llm-provider-status connected">
+                              <CheckCircle2 size={15} />
+                              Connected
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <button
+                        className={`llm-provider-strip ${selectedLlmStatus}`}
+                        disabled={!llmKeyPayload.encryptionAvailable || llmKeyLoading}
+                        onClick={() => openLlmKeyDialog(selectedLlmProvider.id)}
+                        type="button"
+                      >
+                        <ProviderIcon provider={selectedLlmProvider} />
+                        <span className="llm-provider-strip-copy">
+                          <strong>{selectedLlmProvider.providerName}</strong>
+                          <span>{selectedLlmProvider.models?.length || 0} variants available</span>
+                        </span>
+                        <span className={`llm-provider-status ${selectedLlmStatus}`}>
+                          {selectedLlmStatus === "disconnected" ? <CircleMinus size={15} /> : null}
+                          {selectedLlmStatus === "not-connected" ? <PlugZap size={15} /> : null}
+                          {selectedLlmStatusLabel}
+                        </span>
+                      </button>
+                    )}
 
-            <div className="account-settings-list">
-              <div className="account-settings-row account-settings-password-row">
-                <span>Password</span>
-                <button
-                  className="secondary-button compact"
-                  onClick={() => setPasswordEditing(true)}
-                  type="button"
-                >
-                  Edit
-                </button>
+                    {selectedLlmKeys.length ? (
+                      <div className="llm-provider-add-row">
+                        <button
+                          aria-label={`Add ${selectedLlmProvider.providerName} model, ${selectedLlmProvider.models?.length || 0} variants available`}
+                          className="llm-provider-add-model-button"
+                          data-tooltip={`${selectedLlmProvider.models?.length || 0} variants available`}
+                          disabled={!llmKeyPayload.encryptionAvailable || llmKeyLoading}
+                          onClick={() => openLlmKeyDialog(selectedLlmProvider.id)}
+                          type="button"
+                        >
+                          <Plus size={16} aria-hidden="true" />
+                          Add Model
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div className="llm-provider-strip-placeholder">
+                    <span>Select a provider to configure its API key.</span>
+                  </div>
+                )}
               </div>
-            </div>
-
-            {passwordError ? <p className="form-error">{passwordError}</p> : null}
-          </section>
-
-          <section className="account-settings-section account-danger-section" aria-labelledby="account-danger-title">
-            <div className="account-delete-panel">
-              <div>
-                <h2 id="account-danger-title">Delete Your Account</h2>
-                <p>Permanently close your account.</p>
-              </div>
-              <button
-                className="danger-button compact"
-                disabled={deletingAccount}
-                onClick={() => setDeleteConfirmOpen(true)}
-                type="button"
-              >
-                Delete
-              </button>
-            </div>
-          </section>
+            </section>
+          )}
         </div>
 
         {accountEditing ? createPortal(
@@ -418,6 +912,145 @@ function AccountSettingsScreen({ onClose, onLogout, onUserUpdated, user }) {
               </div>
           </SmallSettingsDialog>,
           document.body,
+        ) : null}
+
+        {llmProviderBrowserOpen ? createPortal(
+          <SmallSettingsDialog
+            ariaLabel="Add LLM Provider"
+            className="medium-dialog llm-provider-browser-dialog"
+            description="Choose a provider to pin it to your quick provider row."
+            onClose={() => {
+              setLlmProviderBrowserOpen(false);
+              setLlmProviderBrowserSearch("");
+            }}
+            title="Add LLM Provider"
+          >
+            <label className="llm-provider-search">
+              <Search size={17} aria-hidden="true" />
+              <span className="sr-only">Search LLM providers</span>
+              <input
+                autoFocus
+                onChange={(event) => setLlmProviderBrowserSearch(event.target.value)}
+                placeholder="Search providers"
+                value={llmProviderBrowserSearch}
+              />
+            </label>
+
+            <div className="llm-provider-browser-list">
+              {filteredLlmProviderBrowserProviders.length ? (
+                filteredLlmProviderBrowserProviders.map((provider) => {
+                  const savedKeyCount = getLlmKeysForProvider(provider.id).length;
+                  const pinned = commonLlmProviders.some((candidate) => candidate.id === provider.id);
+                  return (
+                    <button
+                      key={provider.id}
+                      onClick={() => selectProviderFromBrowser(provider.id)}
+                      type="button"
+                    >
+                      <ProviderIcon provider={provider} />
+                      <span>
+                        <strong>{provider.providerName}</strong>
+                        <small>{provider.models?.length || 0} variants available</small>
+                      </span>
+                      {savedKeyCount ? <em>{savedKeyCount} saved</em> : pinned ? <em>Pinned</em> : null}
+                    </button>
+                  );
+                })
+              ) : (
+                <p className="account-settings-muted">No providers match your search.</p>
+              )}
+            </div>
+          </SmallSettingsDialog>,
+          document.body,
+        ) : null}
+
+        {llmKeyDialogOpen ? createPortal(
+          <SmallSettingsDialog
+            ariaLabel={`Edit ${formLlmProvider?.providerName || "LLM Provider"}`}
+            description="Saved keys become selectable in Intelligrate."
+            footer={
+              <>
+                {llmKeyForm.id ? (
+                  <button
+                    className="danger-button compact"
+                    disabled={llmKeySaving}
+                    onClick={() => setLlmKeyDeleteTarget({
+                      ...editingLlmKey,
+                      id: llmKeyForm.id,
+                      label: llmKeyForm.label || editingLlmKey?.label || formatModelLabel(llmKeyForm.model),
+                      providerId: llmKeyForm.providerId,
+                    })}
+                    type="button"
+                  >
+                    <Unplug size={15} />
+                    Disconnect
+                  </button>
+                ) : null}
+                <button className="primary-button compact" disabled={llmKeySaving} type="submit">
+                  {llmKeySaving ? "Saving" : "Save Changes"}
+                </button>
+              </>
+            }
+            onClose={closeLlmKeyDialog}
+            onSubmit={saveLlmKey}
+            title={`Edit: ${formLlmProvider?.providerName || "LLM Provider"}`}
+          >
+              {llmKeyError ? (
+                <div className="form-error account-settings-error" role="alert">
+                  <CircleX size={18} aria-hidden="true" />
+                  <p>{llmKeyError}</p>
+                </div>
+              ) : null}
+
+              <div className="create-room-form account-settings-password-form llm-key-form">
+                <label className="field">
+                  <span>Display Name</span>
+                  <input
+                    maxLength={80}
+                    name="label"
+                    onChange={updateLlmKeyField}
+                    placeholder={formLlmProvider?.defaultLabel || formLlmProvider?.providerName || "Provider"}
+                    value={llmKeyForm.label}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Provider</span>
+                  <input
+                    readOnly
+                    value={formLlmProvider?.providerName || ""}
+                  />
+                </label>
+
+                <AppSelectMenu
+                  ariaLabel="Model or Variant"
+                  className="llm-model-select"
+                  label="Model / Variant"
+                  maxMenuHeight={300}
+                  onChange={selectLlmModel}
+                  options={formLlmModelOptions}
+                  placeholder="Choose a model"
+                  portal
+                  searchable
+                  searchPlaceholder="Search models"
+                  value={llmKeyForm.model}
+                />
+
+                {renderLlmApiKeyInput({ required: !llmKeyForm.id })}
+              </div>
+          </SmallSettingsDialog>,
+          document.body,
+        ) : null}
+
+        {llmKeyDeleteTarget ? (
+          <ConfirmDialog
+            confirmLabel="Delete"
+            message={`Delete ${llmKeyDeleteTarget.label}? Intelligrate will stop offering this provider for your messages.`}
+            onCancel={() => setLlmKeyDeleteTarget(null)}
+            onConfirm={deleteLlmKey}
+            submittingLabel="Deleting"
+            title="Delete LLM API Key"
+          />
         ) : null}
 
         {deleteConfirmOpen ? (

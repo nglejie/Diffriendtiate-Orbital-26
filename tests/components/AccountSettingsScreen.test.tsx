@@ -10,9 +10,12 @@ import {
 
 vi.mock("../../apps/client/src/api.ts", () => ({
   api: {
+    deleteLlmApiKey: vi.fn(),
     updateAccount: vi.fn(),
     updatePassword: vi.fn(),
     deleteAccount: vi.fn(),
+    getLlmApiKeys: vi.fn(),
+    saveLlmApiKey: vi.fn(),
   },
 }));
 
@@ -35,6 +38,22 @@ const user = {
 describe("AccountSettingsScreen", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getLlmApiKeys).mockResolvedValue({
+      encryptionAvailable: true,
+      providerCatalogAvailable: true,
+      providerCatalogError: "",
+      providerCatalogStale: false,
+      providers: [
+        {
+          id: "openai",
+          providerName: "OpenAI",
+          defaultLabel: "OpenAI",
+          defaultModel: "openai/gpt-4o-mini",
+          models: ["openai/gpt-4o-mini", "openai/gpt-4o"],
+        },
+      ],
+      keys: [],
+    });
   });
 
   it("edits username only and keeps email changes disabled", async () => {
@@ -100,5 +119,106 @@ describe("AccountSettingsScreen", () => {
       newPassword: "new-oauth-password",
     });
     expect(onUserUpdated).toHaveBeenCalledWith({ ...user, authProviders: ["supabase"], hasPassword: true });
+  });
+
+  it("adds and deletes an encrypted LLM API key through the shared settings dialogs", async () => {
+    const firstKey = {
+      id: "llmkey_openai",
+      providerId: "openai",
+      providerName: "OpenAI",
+      label: "Project OpenAI",
+      model: "openai/gpt-4o-mini",
+      keyPreview: "sk-t...7890",
+    };
+    const secondKey = {
+      id: "llmkey_openai_gpt4o",
+      providerId: "openai",
+      providerName: "OpenAI",
+      label: "OpenAI",
+      model: "openai/gpt-4o",
+      keyPreview: "sk-t...7890",
+    };
+    vi.mocked(api.saveLlmApiKey)
+      .mockResolvedValueOnce({
+      key: {
+        ...firstKey,
+      },
+        keys: [firstKey],
+      })
+      .mockResolvedValueOnce({
+        key: secondKey,
+        keys: [secondKey, firstKey],
+      });
+    vi.mocked(api.deleteLlmApiKey).mockResolvedValue({ keys: [secondKey] });
+    const tester = userEvent.setup();
+
+    render(
+      <AccountSettingsScreen
+        onClose={vi.fn()}
+        onLogout={vi.fn()}
+        onUserUpdated={vi.fn()}
+        user={user}
+      />,
+    );
+
+    await tester.click(screen.getByRole("button", { name: /llm api keys/i }));
+    await waitFor(() => expect(api.getLlmApiKeys).toHaveBeenCalled());
+    await tester.click(screen.getByRole("button", { name: /2 variants available/i }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit OpenAI" });
+    expect(within(dialog).getByLabelText("Provider")).toHaveValue("OpenAI");
+    await tester.type(within(dialog).getByLabelText("Display Name"), "Project OpenAI");
+    await tester.type(
+      within(dialog).getByLabelText(/api key/i, { selector: "input" }),
+      "sk-test-secret-1234567890",
+    );
+    await tester.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(api.saveLlmApiKey).toHaveBeenCalledWith({
+        id: "",
+        providerId: "openai",
+        label: "Project OpenAI",
+        model: "openai/gpt-4o-mini",
+        apiKey: "sk-test-secret-1234567890",
+        reuseKeyId: "",
+      }),
+    );
+    expect(await screen.findByText("Project OpenAI")).toBeInTheDocument();
+    expect(screen.queryByText(/sk-t/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add another model/i })).not.toBeInTheDocument();
+
+    await tester.click(screen.getByRole("button", { name: /add openai model/i }));
+    const addModelDialog = screen.getByRole("dialog", { name: "Edit OpenAI" });
+    expect(within(addModelDialog).getByLabelText(/api key/i, { selector: "input" })).toBeInTheDocument();
+    expect(within(addModelDialog).queryByLabelText("Credential")).not.toBeInTheDocument();
+    expect(within(addModelDialog).queryByText(/saved credential/i)).not.toBeInTheDocument();
+
+    await tester.click(within(addModelDialog).getByRole("button", { name: "Model or Variant" }));
+    await tester.click(screen.getByRole("option", { name: "gpt-4o" }));
+    await tester.type(
+      within(addModelDialog).getByLabelText(/api key/i, { selector: "input" }),
+      "sk-test-secret-gpt4o",
+    );
+    await tester.click(within(addModelDialog).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(api.saveLlmApiKey).toHaveBeenLastCalledWith({
+        id: "",
+        providerId: "openai",
+        label: "",
+        model: "openai/gpt-4o",
+        apiKey: "sk-test-secret-gpt4o",
+        reuseKeyId: "",
+      }),
+    );
+    expect(await screen.findByText("gpt-4o")).toBeInTheDocument();
+
+    await tester.click(screen.getByRole("button", { name: /project openai/i }));
+    const connectedDialog = screen.getByRole("dialog", { name: "Edit OpenAI" });
+    await tester.click(within(connectedDialog).getByRole("button", { name: /disconnect/i }));
+    await tester.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(api.deleteLlmApiKey).toHaveBeenCalledWith("llmkey_openai"));
   });
 });

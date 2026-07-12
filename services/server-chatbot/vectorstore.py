@@ -5,8 +5,10 @@ from typing import Optional
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from pptx import Presentation
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -16,9 +18,15 @@ CHROMA_DIR = os.getenv("CHROMA_DIR", "/app/chroma_db")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 
+PLACEHOLDER_SECRETS = {"", "your-key-here", "ci-placeholder", "qa-compose-validation-placeholder"}
+
+def normalise_optional_secret(value: str | None) -> str | None:
+    """Treat local/CI placeholders as missing secrets before provider clients see them."""
+    candidate = (value or "").strip()
+    return None if candidate in PLACEHOLDER_SECRETS else candidate
+
 USE_GEMINI_EMBEDDINGS = os.getenv("USE_GEMINI_EMBEDDINGS", "false").lower() == "true"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_KEY = None if GEMINI_API_KEY == "your-key-here" else GEMINI_API_KEY # check if gemini key was changed or still default
+GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
 GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-2")
 
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
@@ -26,13 +34,15 @@ SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
 
 class VectorStore:
     def __init__(self):
-        if USE_GEMINI_EMBEDDINGS:
+        if USE_GEMINI_EMBEDDINGS and GEMINI_API_KEY:
             logger.info(f"Using Gemini Embeddings | model: {GEMINI_EMBED_MODEL}")
             self.embeddings = GoogleGenerativeAIEmbeddings(
                 model = GEMINI_EMBED_MODEL,
                 google_api_key = GEMINI_API_KEY,
             )
         else:
+            if USE_GEMINI_EMBEDDINGS and not GEMINI_API_KEY:
+                logger.warning("Gemini embeddings requested without a real GEMINI_API_KEY; falling back to Ollama embeddings.")
             logger.info(f"Using Ollama Embeddings | model: {EMBED_MODEL} | url: {OLLAMA_BASE_URL}")
             self.embeddings = OllamaEmbeddings(
                 model = EMBED_MODEL,
@@ -49,6 +59,42 @@ class VectorStore:
             persist_directory = CHROMA_DIR,
             embedding_function = self.embeddings,
         )
+
+    def _load_pptx_file(self, file_path: str, file_name: str) -> list[Document]:
+        """Extract readable text from slides and tables in a PowerPoint deck."""
+        presentation = Presentation(file_path)
+        documents = []
+
+        for index, slide in enumerate(presentation.slides, start=1):
+            parts = []
+            for shape in slide.shapes:
+                if getattr(shape, "has_text_frame", False):
+                    text = "\n".join(
+                        paragraph.text.strip()
+                        for paragraph in shape.text_frame.paragraphs
+                        if paragraph.text and paragraph.text.strip()
+                    )
+                    if text:
+                        parts.append(text)
+                if getattr(shape, "has_table", False):
+                    for row in shape.table.rows:
+                        cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
+                        if cells:
+                            parts.append(" | ".join(cells))
+
+            page_content = "\n\n".join(parts).strip()
+            if page_content:
+                documents.append(
+                    Document(
+                        page_content=page_content,
+                        metadata={"file_name": file_name, "slide": index},
+                    )
+                )
+
+        if not documents:
+            raise ValueError("PowerPoint file did not contain readable text")
+
+        return documents
     
     def _load_file(self, file_path: str, file_name: str) -> list:
         """Load a file into LangChain documents based on file extention
@@ -67,6 +113,8 @@ class VectorStore:
             loader = TextLoader(file_path)
         elif ext == ".docx":
             loader = Docx2txtLoader(file_path)
+        elif ext == ".pptx":
+            return self._load_pptx_file(file_path, file_name)
         else:
             raise ValueError(f"Unsupported file type: {ext}")
         docs = loader.load()

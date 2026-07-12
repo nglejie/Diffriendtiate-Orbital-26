@@ -44,13 +44,6 @@ export function formatBuddyResponseText(value) {
     .replace(/\$\s*\n\s*([0-9])/g, (_match, digit) => `$${digit}`)
     .replace(/(\d)\s*\n\s*\.(\d)/g, "$1.$2")
     .replace(/(^|\n)(\s*)(\d+)\.(?=\S)/g, "$1$2$3. ")
-    .replace(/([.!?])\s*(-\s+\*\*)/g, "$1\n$2")
-    .replace(/([.!?])\s*(\d+\.\s+\*\*)/g, "$1\n\n$2")
-    .replace(/([^\n:])\s+-\s+/g, "$1\n- ")
-    .replace(/([A-Za-z)])([.!?])(?=[A-Z])/g, "$1$2 ")
-    .replace(/(^|[^\n])(\s*)(\d+)\.\s+/g, (match, prefix, _space, number) =>
-      prefix.trim() ? `${prefix}\n${number}. ` : `${prefix}${number}. `,
-    )
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -573,7 +566,7 @@ export function getBuddyThoughtSummary(message: any) {
  * the chat view.
  */
 export function normalizeBuddyMarkdown(text) {
-  return normalizeMathGlyphs(formatBuddyResponseText(text))
+  const normalized = cleanBuddyMarkdownArtifacts(normalizeMathGlyphs(formatBuddyResponseText(text)))
     .replace(/\\(#{1,6})/g, "$1")
     .replace(/(^|\n)[ \t]+(#{1,6}\s+)/g, "$1$2")
     .replace(/(^|\n)\s*\d+\.\s*(#{1,6}\s+)/g, "$1$2")
@@ -589,6 +582,190 @@ export function normalizeBuddyMarkdown(text) {
     .replace(/\\\\\)/g, () => "$")
     .replace(/\\\(/g, () => "$")
     .replace(/\\\)/g, () => "$");
+
+  return cleanBuddyMarkdownArtifacts(normalized);
+}
+
+const BUDDY_TOOL_CALL_NAMES = new Set([
+  "search_corpus",
+  "read_file",
+  "embed_room_documents",
+  "sync_resources",
+]);
+
+function tryParseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeToolCallInput(value) {
+  if (value == null) return {};
+  if (typeof value === "string") {
+    const parsed = tryParseJson(value);
+    if (parsed && typeof parsed === "object") return parsed;
+    return { query: value };
+  }
+  if (typeof value === "object") return value;
+  return { value };
+}
+
+function normalizeLeakedToolCall(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const functionCall = value.function_call || value.functionCall || value.function || {};
+  const toolName = String(
+    value.action || value.tool || value.name || functionCall.name || "",
+  ).trim();
+  if (!BUDDY_TOOL_CALL_NAMES.has(toolName)) return null;
+
+  const input = normalizeToolCallInput(
+    value.action_input ??
+      value.actionInput ??
+      value.input ??
+      value.args ??
+      value.arguments ??
+      functionCall.arguments ??
+      {},
+  );
+
+  return {
+    event: "tool_start",
+    tool: toolName,
+    input,
+    status: "running",
+  };
+}
+
+function findJsonObjectSpans(text) {
+  const spans = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        spans.push({ start, end: index + 1, text: text.slice(start, index + 1) });
+        start = -1;
+      }
+    }
+  }
+
+  return spans;
+}
+
+function tidyExtractedToolText(text) {
+  return String(text || "")
+    .replace(/^[ \t]*(?:Self-correction:\s*)?$/gim, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Defensively separates provider-leaked tool-call objects from answer prose.
+ * Real tool execution must still come from backend tool events; this only keeps
+ * malformed model text from rendering as a final answer while preserving an
+ * honest progress row for the attempted tool call.
+ */
+export function extractBuddyToolCallsFromText(text) {
+  const raw = String(text || "");
+  if (!raw.includes("{") || !raw.includes("}")) {
+    const cleaned = tidyExtractedToolText(raw);
+    return { text: cleaned, preToolText: "", postToolText: cleaned, toolCalls: [] };
+  }
+
+  const acceptedSpans = findJsonObjectSpans(raw)
+    .map((span) => {
+      const call = normalizeLeakedToolCall(tryParseJson(span.text));
+      return call ? { ...span, call } : null;
+    })
+    .filter(Boolean);
+
+  if (!acceptedSpans.length) {
+    const cleaned = tidyExtractedToolText(raw);
+    return { text: cleaned, preToolText: "", postToolText: cleaned, toolCalls: [] };
+  }
+
+  const firstSpan = acceptedSpans[0];
+  const lastSpan = acceptedSpans[acceptedSpans.length - 1];
+  let cleaned = raw;
+
+  [...acceptedSpans].reverse().forEach((span) => {
+    cleaned = `${cleaned.slice(0, span.start)}${cleaned.slice(span.end)}`;
+  });
+
+  return {
+    text: tidyExtractedToolText(cleaned),
+    preToolText: tidyExtractedToolText(raw.slice(0, firstSpan.start)),
+    postToolText: tidyExtractedToolText(raw.slice(lastSpan.end)),
+    toolCalls: acceptedSpans.map((span) => span.call),
+  };
+}
+
+function visibleMarkdownLine(value) {
+  return String(value || "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .trim();
+}
+
+function isMarkdownSeparatorArtifact(line) {
+  const visible = visibleMarkdownLine(line);
+  if (!visible) return false;
+
+  // These lines are transport/retrieval separators, not meaningful prose or
+  // markdown. Filtering them before the renderer prevents empty-looking
+  // paragraphs or orphan list markers without touching fenced code blocks.
+  return /^[.\u3002\uFF0E\u00B7*\-_•]+$/u.test(visible);
+}
+
+/**
+ * Removes structural noise from model/retrieval output before markdown parsing.
+ * The cleanup is intentionally line-oriented so real prose and code fences are
+ * preserved while separator-only artifact lines are discarded.
+ */
+export function cleanBuddyMarkdownArtifacts(markdown) {
+  const lines = String(markdown || "").split("\n");
+  let inFence = false;
+
+  return lines
+    .filter((line) => {
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
+        return true;
+      }
+      return inFence || !isMarkdownSeparatorArtifact(line);
+    })
+    .join("\n");
 }
 
 export function normalizeSourceKey(value) {
@@ -622,4 +799,71 @@ export function buildSourceResourceMap(resources: any[] = []) {
   });
 
   return map;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getResourceSourceCandidates(resource) {
+  const candidates = [];
+  [resource?.title, resource?.originalName, resource?.storageName, resource?.url].forEach((value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return;
+
+    const withoutQuery = raw.split(/[?#]/)[0];
+    const fileName = withoutQuery.split(/[\\/]/).pop() || withoutQuery;
+    [raw, fileName].forEach((candidate) => {
+      const trimmed = candidate.trim();
+      if (trimmed && !candidates.includes(trimmed)) candidates.push(trimmed);
+    });
+  });
+
+  return candidates.filter((candidate) => {
+    if (/\.[a-z0-9]{2,8}$/i.test(candidate)) return true;
+    return candidate.length >= 8;
+  });
+}
+
+/**
+ * Falls back to answer-text resource mentions when the stream did not include a
+ * separate `sources` event. This keeps source pills tied to actual known Domain
+ * resources without inventing citations.
+ */
+export function inferMentionedBuddySources(text, resources: any[] = []) {
+  const haystack = String(text || "");
+  if (!haystack.trim() || !Array.isArray(resources) || !resources.length) return [];
+
+  const found = [];
+  resources.forEach((resource) => {
+    const candidate = getResourceSourceCandidates(resource).find((sourceName) => {
+      const pattern = new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(sourceName)}(?=$|[^A-Za-z0-9])`, "i");
+      return pattern.test(haystack);
+    });
+
+    if (candidate && !found.some((source) => normalizeSourceKey(source) === normalizeSourceKey(candidate))) {
+      found.push(candidate);
+    }
+  });
+
+  return found;
+}
+
+/**
+ * Combines backend-provided source names with resource names that are visibly
+ * cited in the answer text, preserving explicit stream payloads first.
+ */
+export function mergeBuddySources(explicitSources: any[] = [], text = "", resources: any[] = []) {
+  const merged = [];
+  [...(Array.isArray(explicitSources) ? explicitSources : []), ...inferMentionedBuddySources(text, resources)]
+    .map((source) => String(source || "").trim())
+    .filter(Boolean)
+    .forEach((source) => {
+      const key = normalizeSourceKey(source);
+      if (!merged.some((existing) => normalizeSourceKey(existing) === key)) {
+        merged.push(source);
+      }
+    });
+
+  return merged;
 }

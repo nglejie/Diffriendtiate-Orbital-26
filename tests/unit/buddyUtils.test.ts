@@ -3,8 +3,11 @@ import {
   buildSourceResourceMap,
   cleanBuddyThinkingArtifacts,
   createBuddyThoughtItem,
+  extractBuddyToolCallsFromText,
   formatBuddyToolEvent,
   getBuddyChainFinalVisibleResponse,
+  inferMentionedBuddySources,
+  mergeBuddySources,
   mergeBuddyThoughtSteps,
   normalizeBuddyMarkdown,
   normalizeSourceKey,
@@ -104,5 +107,58 @@ describe("Intelligrate presentation utilities", () => {
   it("cleans transport artifacts while preserving markdown structure", () => {
     expect(cleanBuddyThinkingArtifacts("<thinking>search</thinking>\nActual answer")).toBe("search\nActual answer");
     expect(normalizeBuddyMarkdown("Line 1\n- item")).toBe("Line 1\n- item");
+    expect(normalizeBuddyMarkdown("First paragraph.\n\n.\n\nSecond paragraph.")).toBe(
+      "First paragraph.\n\nSecond paragraph.",
+    );
+    expect(normalizeBuddyMarkdown("```txt\n.\n```\n\nDone.")).toBe("```txt\n.\n```\n\nDone.");
+  });
+
+  it("infers source pills only from known resources cited in the answer text", () => {
+    const resources = [
+      {
+        id: "res_static",
+        originalName: "Static1Hazard.pdf",
+        storageName: "upload-static.pdf",
+        title: "Static Hazard Notes",
+        url: "/uploads/Static1Hazard.pdf",
+      },
+      {
+        id: "res_other",
+        originalName: "Other.pdf",
+        title: "Other",
+      },
+    ];
+
+    expect(
+      inferMentionedBuddySources("From Static1Hazard.pdf: hazards can be eliminated.", resources),
+    ).toEqual(["Static1Hazard.pdf"]);
+    expect(mergeBuddySources(["ManualSource.pdf"], "From Static1Hazard.pdf", resources)).toEqual([
+      "ManualSource.pdf",
+      "Static1Hazard.pdf",
+    ]);
+  });
+
+  it("separates provider-leaked tool-call JSON from visible answer text", () => {
+    const result = extractBuddyToolCallsFromText(
+      [
+        "I need to inspect the Domain resources first.",
+        "",
+        '{ "action": "search_corpus", "action_input": { "query": "Orbital" } }',
+        "",
+        "Orbital is the project context mentioned in the notes.",
+      ].join("\n"),
+    );
+
+    expect(result.preToolText).toBe("I need to inspect the Domain resources first.");
+    expect(result.postToolText).toBe("Orbital is the project context mentioned in the notes.");
+    expect(result.text).not.toContain("search_corpus");
+    expect(result.toolCalls).toEqual([
+      {
+        event: "tool_start",
+        tool: "search_corpus",
+        input: { query: "Orbital" },
+        status: "running",
+      },
+    ]);
   });
 });

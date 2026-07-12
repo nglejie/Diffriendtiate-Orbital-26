@@ -27,6 +27,19 @@ class PredictResponse(BaseModel):
     sources: list[str] = []
     message_chain: list[dict] = []
 
+class LlmProviderCatalogProvider(BaseModel):
+    """One LiteLLM provider and the model variants LiteLLM currently exposes."""
+    id: str
+    providerName: str
+    defaultLabel: str
+    defaultModel: str
+    models: list[str]
+
+class LlmProviderCatalogResponse(BaseModel):
+    """The LiteLLM provider catalog returned to the Node API for BYOK settings."""
+    providers: list[LlmProviderCatalogProvider]
+    source: str
+
 class HistoryMessage(BaseModel):
     """
     A single message in the message chain

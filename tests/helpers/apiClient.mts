@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { fetch as nodeFetch } from "undici";
 
 type ApiRequestOptions = Omit<RequestInit, "body" | "headers"> & {
   body?: any;
@@ -23,6 +25,59 @@ export function makeUser(prefix = "qa") {
   };
 }
 
+function isMultipartFormBody(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof value.append === "function" &&
+      typeof value.entries === "function",
+  );
+}
+
+function escapeMultipartHeaderValue(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, "%22")
+    .replace(/\r|\n/g, " ");
+}
+
+async function encodeMultipartFormData(formData) {
+  const boundary = `----diffriendtiate-test-${uniqueId("multipart")}`;
+  const chunks: Buffer[] = [];
+
+  for (const [name, value] of formData.entries()) {
+    const escapedName = escapeMultipartHeaderValue(name);
+    chunks.push(Buffer.from(`--${boundary}\r\n`, "utf8"));
+
+    if (value && typeof value === "object" && typeof value.arrayBuffer === "function") {
+      const fileName = escapeMultipartHeaderValue(value.name || "blob");
+      const contentType = value.type || "application/octet-stream";
+      chunks.push(
+        Buffer.from(
+          `Content-Disposition: form-data; name="${escapedName}"; filename="${fileName}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+          "utf8",
+        ),
+      );
+      chunks.push(Buffer.from(await value.arrayBuffer()));
+      chunks.push(Buffer.from("\r\n", "utf8"));
+      continue;
+    }
+
+    chunks.push(
+      Buffer.from(
+        `Content-Disposition: form-data; name="${escapedName}"\r\n\r\n${String(value ?? "")}\r\n`,
+        "utf8",
+      ),
+    );
+  }
+
+  chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf8"));
+  return {
+    body: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
 export async function apiRequest(baseUrl, path, options: ApiRequestOptions = {}) {
   // Small fetch wrapper shared by integration-style tests. It handles bearer
   // tokens, JSON bodies, FormData uploads, and returns both status and parsed
@@ -37,14 +92,19 @@ export async function apiRequest(baseUrl, path, options: ApiRequestOptions = {})
     headers.Authorization = `Bearer ${options.token}`;
   }
 
-  if (options.body instanceof FormData) {
-    init.body = options.body;
+  const multipartBody = isMultipartFormBody(options.body);
+
+  if (multipartBody) {
+    const encoded = await encodeMultipartFormData(options.body);
+    headers["Content-Type"] = encoded.contentType;
+    init.body = encoded.body as any;
   } else if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(`${baseUrl}${path}`, init);
+  const requestFetch = multipartBody ? nodeFetch : fetch;
+  const response = await requestFetch(`${baseUrl}${path}`, init);
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
   return { headers: response.headers, payload, status: response.status };
@@ -130,7 +190,7 @@ export async function uploadTextResource(baseUrl, token, roomId, fileName, text,
   // Uploads an in-memory text file through the resource upload API. This avoids
   // fixture files on disk while still exercising multipart upload handling.
   const formData = new FormData();
-  formData.append("file", new Blob([text], { type: "text/plain" }), fileName);
+  formData.append("file", new File([text], fileName, { type: "text/plain" }));
   formData.append("folder", folder);
 
   const result = await apiRequest(baseUrl, `/api/rooms/${roomId}/resources/file`, {

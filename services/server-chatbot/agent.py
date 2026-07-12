@@ -7,6 +7,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_litellm import ChatLiteLLM
+from litellm import supports_function_calling
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
@@ -17,8 +18,14 @@ logger = get_logger(__name__)
 
 # Fallback Gemini Model stuff
 GPU_ENABLED = os.getenv("GPU_ENABLED") == "true"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_KEY = None if GEMINI_API_KEY == "your-key-here" else GEMINI_API_KEY # check if gemini key was changed or still default
+PLACEHOLDER_SECRETS = {"", "your-key-here", "ci-placeholder", "qa-compose-validation-placeholder"}
+
+def normalise_optional_secret(value: str | None) -> str | None:
+    """Treat local/CI placeholders as missing secrets before provider clients see them."""
+    candidate = (value or "").strip()
+    return None if candidate in PLACEHOLDER_SECRETS else candidate
+
+GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Ollama model stuff
@@ -42,6 +49,15 @@ Rules for answering:
 - When answering please also reply with which document the part of the response is from to help with grounding the response
 - If tool return no relevant information, tell the user when replying and answer from general knowledge if possible
 - Always be honest if you don't know something
+"""
+
+NO_TOOL_SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room.
+
+Rules for answering:
+- Answer from the conversation context and general knowledge only.
+- Do not claim to search, read, or call tools unless a tool result is present in the conversation.
+- If the user asks for information that requires uploaded documents or room resources, explain that this model is not connected to document tools for this request.
+- Always be honest if you don't know something.
 """
 
 class Agent:
@@ -96,22 +112,44 @@ class Agent:
             llm_api_key (Optional[str]): API key for custom model. Defaults to None
         """
         llm = self._build_LLM(llm_model = llm_model, llm_api_key = llm_api_key)
+        effective_tools_enabled = enable_agent_tools
+        if llm_model and llm_api_key and enable_agent_tools:
+            try:
+                effective_tools_enabled = supports_function_calling(model=llm_model)
+            except Exception as error:
+                logger.warning(
+                    f"Unable to verify BYOK tool support; attempting tools anyway | model: {llm_model} | error: {error}"
+                )
+                effective_tools_enabled = True
+            if not effective_tools_enabled:
+                logger.info(f"BYOK model does not advertise tool calling support | model: {llm_model}")
         
-        tools = build_global_tools() if enable_agent_tools else []
-        if room_id and enable_agent_tools:
+        tools = build_global_tools() if effective_tools_enabled else []
+        if room_id and effective_tools_enabled:
             tools += build_room_tools(self.vectorstore, room_id)
-        if file_bytes and file_name and enable_agent_tools:
+        if file_bytes and file_name and effective_tools_enabled:
             tools += build_file_tool(file_bytes, file_name, self.vectorstore)
             
+        prompt_room_id = room_id if effective_tools_enabled else None
+        prompt_has_file = bool(file_bytes and file_name and effective_tools_enabled)
         logger.debug(f"Agent built | tools: {[t.name for t in tools]} | room_id: {room_id} | has_file: {file_bytes is not None}")
             
         @dynamic_prompt
         def generate_system_prompt_middleware(request) -> str:
-            return self._build_system_prompt(room_id = room_id, has_file = file_bytes != None)
+            return self._build_system_prompt(
+                room_id = prompt_room_id,
+                has_file = prompt_has_file,
+                tools_enabled = effective_tools_enabled,
+            )
         
         return create_agent(model = llm, tools = tools, middleware = [generate_system_prompt_middleware])
     
-    def _build_system_prompt(self, has_file: bool = False, room_id: Optional[str] = None) -> list:
+    def _build_system_prompt(
+        self,
+        has_file: bool = False,
+        room_id: Optional[str] = None,
+        tools_enabled: bool = True,
+    ) -> list:
         """Build system prompt, letting the model know if there is uploaded file or corpus available
 
         Args:
@@ -121,14 +159,14 @@ class Agent:
         Returns:
             list: List of messages
         """
-        system_content = SYSTEM_PROMPT
+        system_content = SYSTEM_PROMPT if tools_enabled else NO_TOOL_SYSTEM_PROMPT
         
         # Additional context
         system_content += "\n\n Additional Context for this request (if any):"
         
-        if room_id:
+        if tools_enabled and room_id:
             system_content += f"\n- A room corpus is available (room_id: {room_id}). If you need more context to provide an answer, you should search_corpus before answering"
-        if has_file:
+        if tools_enabled and has_file:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
         return system_content
@@ -296,6 +334,7 @@ class Agent:
         
         sources = []
         all_messages = list(messages)
+        streamed_answer_parts = []
         
         tool_call_in_progress = {}
         
@@ -306,7 +345,9 @@ class Agent:
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
-                    yield f"[TOKEN]{self._extract_text_content(chunk.content)}"
+                    token_text = self._extract_text_content(chunk.content)
+                    streamed_answer_parts.append(token_text)
+                    yield f"[TOKEN]{token_text}"
             
             # Handle Tool starting
             elif event_type == "on_tool_start":
@@ -346,6 +387,12 @@ class Agent:
                     ai_message = event["data"]["output"]
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
+                    final_text = self._extract_text_content(getattr(ai_message, "content", ""))
+                    if final_text and not "".join(streamed_answer_parts).strip():
+                        # Some LiteLLM providers produce a final message without token chunks.
+                        # Emit it once so the web UI never has to invent a fallback answer.
+                        logger.debug("Model produced final content without token chunks; emitting final text once.")
+                        yield f"[TOKEN]{final_text}"
             
             else: # catch any other events
                 logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")
@@ -375,9 +422,11 @@ class Agent:
         Returns:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
-        agent = self._build_agent(room_id = room_id, 
-                            file_bytes = file_bytes, 
-                            file_name = file_name, 
+        # BYOK providers currently answer from chat history only. The RAG tools
+        # rely on system embeddings and should not run with a member API key.
+        agent = self._build_agent(room_id = room_id,
+                            file_bytes = file_bytes,
+                            file_name = file_name,
                             enable_agent_tools = True,
                             llm_model = llm_model,
                             llm_api_key = llm_api_key,)

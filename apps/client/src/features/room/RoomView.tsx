@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   Bed,
-  Bot,
   CalendarDays,
   CalendarPlus,
   Check,
@@ -57,6 +56,7 @@ import { io } from "socket.io-client";
 import { API_BASE, api, resolveServerAssetUrl } from "../../api.ts";
 import AppLoadingScreen from "../../shared/ui/AppLoadingScreen.tsx";
 import { BuddyPanel } from "./BuddyPanel.tsx";
+import IntelligrateIcon from "./IntelligrateIcon.tsx";
 import { UPLOADS_FOLDER } from "./roomConstants.ts";
 import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.ts";
 import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.tsx";
@@ -154,7 +154,7 @@ import {
 const BASE_ROOM_TABS = [
   { id: "space", label: "Domain", icon: MapIcon },
   { id: "chat", label: "Convolution", icon: MessageCircle },
-  { id: "buddy", label: "Intelligrate", icon: Bot },
+  { id: "buddy", label: "Intelligrate", icon: IntelligrateIcon },
   { id: "resources", label: "Infilenite", icon: FolderOpen },
   { id: "calendar", label: "Coordidate", icon: CalendarDays },
 ];
@@ -199,6 +199,7 @@ const CANVAS_ACCESS_TOKEN_HELP =
   "In Canvas, open Account → Settings, then choose New access token. Copy that token here so Diffriendtiate can extract your course resources. The token is stored only in your browser and never sent to our server.";
 const CANVAS_ACCESS_TOKEN_IMAGE = "/assets/canvas-access-token.png";
 const ROOM_ACTIVE_TAB_STORAGE_KEY = "activeTab";
+const BUDDY_SELECTED_PROVIDER_STORAGE_KEY = "buddySelectedProvider";
 const LIMEETS_MEETING_AREA_STORAGE_KEY = "limeetsMeetingArea";
 
 /** Reads optional room-local UI state without involving the shared backend. */
@@ -271,6 +272,25 @@ function readStoredRoomActiveTab(roomId) {
 function writeStoredRoomActiveTab(roomId, tabId) {
   if (!roomId || !isKnownRoomTab(tabId)) return;
   writeRoomStorage(roomId, ROOM_ACTIVE_TAB_STORAGE_KEY, tabId);
+}
+
+function normalizeBuddySelectedProviderId(providerId) {
+  return String(providerId || "intelligrate").trim() || "intelligrate";
+}
+
+function readStoredBuddySelectedProviderId(roomId) {
+  return normalizeBuddySelectedProviderId(
+    readRoomStorage(roomId, BUDDY_SELECTED_PROVIDER_STORAGE_KEY, "intelligrate"),
+  );
+}
+
+function writeStoredBuddySelectedProviderId(roomId, providerId) {
+  if (!roomId) return;
+  writeRoomStorage(
+    roomId,
+    BUDDY_SELECTED_PROVIDER_STORAGE_KEY,
+    normalizeBuddySelectedProviderId(providerId),
+  );
 }
 
 /** Narrows unknown API/local values to an array so render paths cannot crash on map/filter. */
@@ -418,6 +438,8 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const [activeBuddyThreadId, setActiveBuddyThreadId] = useState("");
   const [draftBuddyThread, setDraftBuddyThread] = useState(null);
   const [buddyAvailability, setBuddyAvailability] = useState(DEFAULT_BUDDY_AVAILABILITY);
+  const [buddyProviderOptions, setBuddyProviderOptions] = useState([]);
+  const [buddySelectedProviderId, setBuddySelectedProviderId] = useState("intelligrate");
   const [buddyRenameTarget, setBuddyRenameTarget] = useState(null);
   const [buddyDeleteTarget, setBuddyDeleteTarget] = useState(null);
   const [roomToast, setRoomToast] = useState(null);
@@ -1025,6 +1047,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           coordinatePayload,
           buddyPayload,
           buddyHealthPayload,
+          buddyProvidersPayload,
         ] = await Promise.all([
           api.getMessages(loadedRoom.id),
           api.getResources(loadedRoom.id, { includeDeleted: true }),
@@ -1040,6 +1063,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
             canConfigure: loadedRoom.isOwner,
             message: err.message || "Unable to check Intelligrate availability.",
           })),
+          api.getBuddyProviders(loadedRoom.id).catch(() => ({ providers: [] })),
         ]);
         setMessages(asArray(messagePayload.messages));
         setAnnotations([]);
@@ -1056,10 +1080,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           available: Boolean(buddyHealthPayload.available ?? buddyHealthPayload.ok),
           ok: Boolean(buddyHealthPayload.ok),
         });
+        setBuddyProviderOptions(asArray(buddyProvidersPayload.providers));
         const loadedThreads = asArray(buddyPayload.threads).map((thread) =>
           normalizeBuddyThread(thread, user),
         );
-        const buddyAvailable = Boolean(buddyHealthPayload.available ?? buddyHealthPayload.ok);
 
         if (loadedThreads.length) {
           setBuddyThreads(loadedThreads);
@@ -1071,7 +1095,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         } else {
           setBuddyThreads([]);
           setActiveBuddyThreadId("");
-          setDraftBuddyThread(buddyAvailable ? createDraftBuddyThread() : null);
+          setDraftBuddyThread(createDraftBuddyThread());
         }
       } else {
         setMessages([]);
@@ -1083,6 +1107,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         setActiveBuddyThreadId("");
         setDraftBuddyThread(null);
         setBuddyAvailability(DEFAULT_BUDDY_AVAILABILITY);
+        setBuddyProviderOptions([]);
       }
     } catch (err) {
       setError(err.message);
@@ -1155,7 +1180,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     }));
 
     try {
-      const payload = await api.getBuddyHealth(nextRoomId);
+      const [payload, providersPayload] = await Promise.all([
+        api.getBuddyHealth(nextRoomId),
+        api.getBuddyProviders(nextRoomId).catch(() => ({ providers: [] })),
+      ]);
       const nextAvailability = {
         ...DEFAULT_BUDDY_AVAILABILITY,
         ...payload,
@@ -1163,6 +1191,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
         ok: Boolean(payload.ok),
       };
       setBuddyAvailability(nextAvailability);
+      setBuddyProviderOptions(asArray(providersPayload.providers));
       return nextAvailability;
     } catch (err) {
       const nextAvailability = {
@@ -1284,8 +1313,25 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       {
         messages: messagesForThread,
         attachmentResourceIds: attachmentResources.map((resource) => resource.id),
+        providerKeyId:
+          handlers.provider?.providerKeyId &&
+          handlers.provider.providerKeyId !== "intelligrate"
+            ? handlers.provider.providerKeyId
+            : undefined,
       },
       (event, data) => {
+        if (event === "error") {
+          try {
+            const payload = JSON.parse(data || "{}");
+            throw new Error(payload.message || "Unable to stream a response from Intelligrate.");
+          } catch (error) {
+            if (error instanceof SyntaxError) {
+              throw new Error(data || "Unable to stream a response from Intelligrate.");
+            }
+            throw error;
+          }
+        }
+
         if (event === "token") {
           handlers.onToken?.(data);
           return;
@@ -1727,6 +1773,13 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setContextOpen(true);
   }
 
+  /** Persists the member's Intelligrate model choice outside the unmounted chat panel. */
+  function handleBuddySelectedProviderChange(providerId) {
+    const nextProviderId = normalizeBuddySelectedProviderId(providerId);
+    setBuddySelectedProviderId(nextProviderId);
+    writeStoredBuddySelectedProviderId(room?.id, nextProviderId);
+  }
+
   function joinWorldMeetingFromCalendar(session) {
     const area = findSessionWorldMeetingArea(session, room);
     const target = getAreaTeleportTarget(area, room);
@@ -1782,6 +1835,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setActiveMeetingArea(storedMeetingArea);
     const storedActiveTab = readStoredRoomActiveTab(room?.id);
     setActiveTab(storedActiveTab === "meetings" && !storedMeetingArea ? "space" : storedActiveTab);
+    setBuddySelectedProviderId(readStoredBuddySelectedProviderId(room?.id));
     meetingRejoinKeyRef.current = "";
   }, [room?.id]);
 
@@ -2156,11 +2210,14 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
       buddyRenameTarget ||
       leaveWorldConfirmOpen,
   );
+  const intelligrateHasAvailableProvider =
+    asArray(buddyProviderOptions).some((provider) => provider?.available !== false) ||
+    Boolean(buddyAvailability.available);
   const spaceContext = {
     activeBuddyThreadTitle: activeBuddyThread?.title || "",
     activeChatChannel,
     calendarAvailable: true,
-    intelligrateAvailable: Boolean(buddyAvailability.available),
+    intelligrateAvailable: intelligrateHasAvailableProvider,
     intelligrateProviderLabel: buddyAvailability.providerLabel || "",
     resourceCount: visibleResourceCount,
     sessionCount: safeSessions.length,
@@ -2454,7 +2511,10 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
                 onSyncResources={syncBuddyResources}
                 onUploadFiles={uploadSharedFiles}
                 onNotify={showRoomToast}
+                onSelectedProviderIdChange={handleBuddySelectedProviderChange}
+                providerOptions={buddyProviderOptions}
                 resources={resources}
+                selectedProviderId={buddySelectedProviderId}
                 syncingResources={buddySyncing}
                 threadId={activeBuddyThread.id}
                 threadTitle={activeBuddyThread.title || "New Chat"}

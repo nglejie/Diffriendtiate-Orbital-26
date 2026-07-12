@@ -38,10 +38,13 @@ services:
       NODE_ENV: production
       PORT: 4000
       JWT_SECRET: ${JWT_SECRET:-change-this-before-deploying}
+      LLM_API_KEY_ENCRYPTION_KEY: ${LLM_API_KEY_ENCRYPTION_KEY:-diffriendtiate-local-byok-key-change-before-production-2026}
       DATABASE_URL: postgres://${POSTGRES_USER:-diffriendtiate}:${POSTGRES_PASSWORD:-diffriendtiate_password}@db:5432/${POSTGRES_DB:-diffriendtiate}
       CHATBOT_BASE_URL: http://server-chatbot:5000
       INTELLIGRATE_GPU_ENABLED: ${INTELLIGRATE_GPU_ENABLED:-false}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-ci-placeholder}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
       VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
@@ -131,7 +134,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-ci-placeholder}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-models/gemini-embedding-2}
-      USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment
+      USE_GEMINI_EMBEDDINGS: ${USE_GEMINI_EMBEDDINGS:-false}
       PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FILE: ${CHATBOT_LOG_FILE:-} # if no log file is set, logs wont be saved to any file

@@ -13,6 +13,24 @@ import multer from "multer";
 import nodemailer from "nodemailer";
 import { Server } from "socket.io";
 import {
+  BUILT_IN_LLM_PROVIDER_ID,
+  LLM_KEY_LIMIT_PER_USER,
+  buildBuddyProviderOptions,
+  buddyProviderMeta,
+  canEncryptLlmApiKeys,
+  encryptLlmApiKey,
+  getLlmProvider,
+  hashLlmApiKeySecret,
+  normalizeLlmApiSecret,
+  normalizeLlmLabel,
+  normalizeLlmModel,
+  normalizeLlmProviderCatalog,
+  normalizeStoredLlmApiKeys,
+  previewLlmApiKey,
+  publicLlmApiKeysDto,
+  resolveBuddyProviderSelection,
+} from "./llmProviders.js";
+import {
   buildClientAuthRedirectUrl,
   buildClientEmailVerificationUrl,
   buildClientPasswordResetUrl,
@@ -84,7 +102,7 @@ const chatbotWarmupBaseUrl = String(
 )
   .trim()
   .replace(/\/+$/, "");
-const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx"]);
+const chatbotDocumentExtensions = new Set([".pdf", ".txt", ".docx", ".pptx"]);
 const chatbotHealthTimeoutMs = readPositiveNumber(
   process.env.CHATBOT_HEALTH_TIMEOUT_MS,
   90_000,
@@ -106,6 +124,8 @@ const intelligrateGpuEnabled =
   String(process.env.INTELLIGRATE_GPU_ENABLED || process.env.GPU_ENABLED || "")
     .trim()
     .toLowerCase() === "true";
+const builtInOllamaModel = String(process.env.LLM_MODEL || "qwen2.5:7b").trim() || "qwen2.5:7b";
+const builtInGeminiModel = String(process.env.GEMINI_MODEL || "gemini-3.5-flash").trim() || "gemini-3.5-flash";
 const geminiApiKey = String(process.env.GEMINI_API_KEY || "").trim();
 const geminiApiKeyConfigured = Boolean(
   geminiApiKey &&
@@ -242,7 +262,8 @@ function getBuddyProviderStatus() {
       available: true,
       code: "local_gpu",
       provider: "ollama",
-      providerLabel: "Built-in local GPU model",
+      providerLabel: "Ollama",
+      model: builtInOllamaModel,
       message: "Intelligrate is using the app's built-in local model.",
     };
   }
@@ -252,7 +273,8 @@ function getBuddyProviderStatus() {
       available: true,
       code: "gemini_configured",
       provider: "gemini",
-      providerLabel: "Gemini API key",
+      providerLabel: "Gemini",
+      model: builtInGeminiModel,
       message: "Intelligrate is using the configured Gemini API key.",
     };
   }
@@ -262,6 +284,7 @@ function getBuddyProviderStatus() {
     code: "provider_required",
     provider: "none",
     providerLabel: "No LLM provider configured",
+    model: "",
     message:
       "Intelligrate needs GPU mode or a configured Gemini API key before it can be used.",
   };
@@ -1322,6 +1345,12 @@ function normalizeBuddyThreadMessages(value: any, actor: any = null) {
               .filter(Boolean)
               .slice(0, 40)
           : [];
+      const providerName =
+        role === "assistant"
+          ? String(message?.providerName || message?.provider || "Intelligrate")
+              .trim()
+              .slice(0, 80) || "Intelligrate"
+          : "";
 
       return {
         id: String(message?.id || createId("bmsg")),
@@ -1332,6 +1361,23 @@ function normalizeBuddyThreadMessages(value: any, actor: any = null) {
         sources,
         thinkingSteps,
         isThinking: false,
+        providerKeyId:
+          role === "assistant"
+            ? String(message?.providerKeyId || BUILT_IN_LLM_PROVIDER_ID).slice(0, 80)
+            : "",
+        providerId:
+          role === "assistant"
+            ? String(message?.providerId || message?.provider || BUILT_IN_LLM_PROVIDER_ID).slice(0, 80)
+            : "",
+        providerName,
+        providerLabel:
+          role === "assistant"
+            ? String(message?.providerLabel || message?.label || "").trim().slice(0, 80)
+            : "",
+        model:
+          role === "assistant"
+            ? String(message?.model || "").trim().slice(0, 180)
+            : "",
         authorId: role === "user" ? String(message?.authorId || actor?.id || "") : null,
         authorName: role === "user" ? String(message?.authorName || actor?.name || "") : null,
         createdAt: message?.createdAt || new Date().toISOString(),
@@ -2620,7 +2666,7 @@ function resolveBuddyMessagePayload(db, room, body) {
   if (attachedResources.length && !directResources.length) {
     throw createHttpError(
       400,
-      "Intelligrate can currently read one PDF, TXT, or DOCX attachment at a time.",
+      "Intelligrate can currently read one PDF, TXT, DOCX, or PPTX attachment at a time.",
     );
   }
 
@@ -2767,6 +2813,81 @@ async function readChatbotPayload(response) {
   return payload;
 }
 
+const llmProviderCatalogCacheTtlMs = 5 * 60 * 1000;
+const llmProviderCatalogCache = {
+  fetchedAt: 0,
+  providers: [],
+};
+
+/**
+ * Reads the LiteLLM provider/model catalog from the chatbot service. A short
+ * cache keeps settings responsive without turning the Node app into the source
+ * of truth for provider variants.
+ */
+async function fetchLlmProviderCatalog({ allowStale = false } = {}) {
+  const now = Date.now();
+  if (
+    llmProviderCatalogCache.providers.length &&
+    now - llmProviderCatalogCache.fetchedAt < llmProviderCatalogCacheTtlMs
+  ) {
+    return {
+      available: true,
+      error: "",
+      providers: llmProviderCatalogCache.providers,
+      stale: false,
+    };
+  }
+
+  try {
+    const response = await fetch(chatbotUrl("/llm/providers"), {
+      signal: AbortSignal.timeout(20_000),
+    });
+    const payload = await readChatbotPayload(response);
+    const providers = normalizeLlmProviderCatalog(payload);
+    if (!providers.length) {
+      throw new Error("LiteLLM returned an empty provider catalog.");
+    }
+
+    llmProviderCatalogCache.fetchedAt = now;
+    llmProviderCatalogCache.providers = providers;
+    return {
+      available: true,
+      error: "",
+      providers,
+      stale: false,
+    };
+  } catch (error) {
+    const message = error?.message || "Unable to load LiteLLM provider catalog.";
+    console.warn(`[llm-keys] Provider catalog unavailable: ${message}`);
+    if (allowStale && llmProviderCatalogCache.providers.length) {
+      return {
+        available: false,
+        error: message,
+        providers: llmProviderCatalogCache.providers,
+        stale: true,
+      };
+    }
+
+    return {
+      available: false,
+      error: message,
+      providers: [],
+      stale: false,
+    };
+  }
+}
+
+/** Requires the service catalog for writes and BYOK sends so provider/model choices are validated. */
+async function requireLlmProviderCatalog() {
+  const catalog = await fetchLlmProviderCatalog({ allowStale: true });
+  if (catalog.providers.length) return catalog;
+
+  throw createHttpError(
+    503,
+    "Unable to load LiteLLM providers right now. Please try again once the Intelligrate service is ready.",
+  );
+}
+
 function wait(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -2891,15 +3012,25 @@ async function clearChatbotCorpus(roomId) {
   return readChatbotPayload(response);
 }
 
-async function createChatbotPredictRequest(pathname, { messageChain, roomId, resource }) {
+async function createChatbotPredictRequest(pathname, { messageChain, roomId, resource, llmModel = "", llmApiKey = "" }) {
   const url = chatbotUrl(pathname);
   url.searchParams.set("message_chain", JSON.stringify(messageChain));
   url.searchParams.set("room_id", roomId);
+  if (llmModel) url.searchParams.set("llm_model", llmModel);
+
+  const headers: Record<string, string> = {};
+  if (llmApiKey) {
+    // Keep BYOK secrets out of URLs so access logs never echo a member's provider key.
+    headers["X-Diffriendtiate-Llm-Api-Key"] = llmApiKey;
+  }
 
   const init: RequestInit = {
     method: "POST",
     signal: AbortSignal.timeout(240_000),
   };
+  if (Object.keys(headers).length > 0) {
+    init.headers = headers;
+  }
 
   if (resource) {
     const filePath = safeUploadPath(resource.storageName);
@@ -2923,11 +3054,13 @@ async function createChatbotPredictRequest(pathname, { messageChain, roomId, res
 /**
  * Non-streaming Intelligrate request path retained for simpler API callers and debugging.
  */
-async function askChatbot({ messageChain, roomId, resource }) {
+async function askChatbot({ messageChain, roomId, resource, llmModel = "", llmApiKey = "" }) {
   const { url, init } = await createChatbotPredictRequest("/predict", {
     messageChain,
     roomId,
     resource,
+    llmModel,
+    llmApiKey,
   });
   const response = await fetch(url, init);
   return readChatbotPayload(response);
@@ -2936,11 +3069,13 @@ async function askChatbot({ messageChain, roomId, resource }) {
 /**
  * Streaming Intelligrate request path used by the web UI for token-by-token responses.
  */
-async function streamChatbot({ messageChain, roomId, resource }) {
+async function streamChatbot({ messageChain, roomId, resource, llmModel = "", llmApiKey = "" }) {
   const { url, init } = await createChatbotPredictRequest("/predict/stream", {
     messageChain,
     roomId,
     resource,
+    llmModel,
+    llmApiKey,
   });
   const response = await fetch(url, init);
 
@@ -3784,6 +3919,147 @@ app.patch("/api/auth/password", requireAuth, async (req, res) => {
     message: alreadyHadPassword ? "Password updated." : "Password set.",
     user: publicUser(user),
   });
+});
+
+app.get("/api/auth/llm-api-keys", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const catalog = await fetchLlmProviderCatalog({ allowStale: true });
+  res.json({
+    encryptionAvailable: canEncryptLlmApiKeys(),
+    providerCatalogAvailable: catalog.available,
+    providerCatalogError: catalog.available ? "" : catalog.error,
+    providerCatalogStale: catalog.stale,
+    providers: catalog.providers,
+    keys: publicLlmApiKeysDto(user.llmApiKeys, catalog.providers),
+  });
+});
+
+app.post("/api/auth/llm-api-keys", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  try {
+    const catalog = await requireLlmProviderCatalog();
+    const provider = getLlmProvider(catalog.providers, req.body.providerId);
+    if (!provider) {
+      return res.status(400).json({ message: "Choose a supported LLM provider." });
+    }
+
+    const rawApiKey = String(req.body.apiKey || "").trim();
+    const apiKey = rawApiKey ? normalizeLlmApiSecret(rawApiKey) : "";
+    const keyId = String(req.body.id || req.body.keyId || "").trim();
+    const reuseKeyId = String(req.body.reuseKeyId || "").trim();
+    const now = new Date().toISOString();
+    const keys = normalizeStoredLlmApiKeys(user.llmApiKeys);
+    const existingIndex = keyId ? keys.findIndex((record) => record.id === keyId) : -1;
+    const existingRecord = existingIndex >= 0 ? keys[existingIndex] : null;
+    const reusedCredentialRecord = !existingRecord && reuseKeyId
+      ? keys.find((record) => record.id === reuseKeyId && record.providerId === provider.id)
+      : null;
+
+    if (!existingRecord && keys.length >= LLM_KEY_LIMIT_PER_USER) {
+      return res.status(400).json({
+        message: `You can save up to ${LLM_KEY_LIMIT_PER_USER} LLM API keys.`,
+      });
+    }
+    if (reuseKeyId && !reusedCredentialRecord) {
+      return res.status(400).json({ message: "Choose a saved credential for this provider." });
+    }
+
+    const model = normalizeLlmModel(req.body.model, provider);
+    const duplicateModelRecord = keys.find(
+      (record) =>
+        record.id !== (existingRecord?.id || "") &&
+        record.providerId === provider.id &&
+        record.model === model,
+    );
+    if (duplicateModelRecord) {
+      return res.status(409).json({ message: "This model is already saved for this provider." });
+    }
+
+    const nextRecord = {
+      ...(existingRecord || {
+        id: createId("llmkey"),
+        createdAt: now,
+      }),
+      providerId: provider.id,
+      providerName: provider.providerName,
+      label: normalizeLlmLabel(req.body.label, provider.defaultLabel),
+      model,
+      updatedAt: now,
+    };
+
+    if (apiKey) {
+      const keyFingerprint = hashLlmApiKeySecret(apiKey);
+      const duplicateRecord = keys.find(
+        (record) =>
+          record.id !== nextRecord.id &&
+          record.providerId === provider.id &&
+          record.model === nextRecord.model &&
+          record.keyFingerprint === keyFingerprint,
+      );
+      if (duplicateRecord) {
+        return res.status(409).json({ message: "This provider/model key is already saved." });
+      }
+
+      nextRecord.encryptedApiKey = encryptLlmApiKey(apiKey);
+      nextRecord.keyFingerprint = keyFingerprint;
+      nextRecord.keyPreview = previewLlmApiKey(apiKey);
+    } else if (reusedCredentialRecord) {
+      nextRecord.encryptedApiKey = reusedCredentialRecord.encryptedApiKey;
+      nextRecord.keyFingerprint = reusedCredentialRecord.keyFingerprint;
+      nextRecord.keyPreview = reusedCredentialRecord.keyPreview;
+    } else if (!existingRecord?.encryptedApiKey) {
+      return res.status(400).json({ message: "Enter the API key for this provider." });
+    }
+
+    if (existingIndex >= 0) keys[existingIndex] = nextRecord;
+    else keys.unshift(nextRecord);
+    user.llmApiKeys = normalizeStoredLlmApiKeys(keys);
+
+    await writeDb(db);
+    console.info(`[llm-keys] Saved ${provider.id} key metadata for user ${user.id}.`);
+
+    res.status(existingRecord ? 200 : 201).json({
+      key: publicLlmApiKeysDto([nextRecord], catalog.providers)[0],
+      keys: publicLlmApiKeysDto(user.llmApiKeys, catalog.providers),
+    });
+  } catch (error) {
+    const llmKeyError = error as Error & { status?: number };
+    console.warn(`[llm-keys] Save failed for user ${req.user.id}: ${llmKeyError.message}`);
+    res.status(llmKeyError.status || 400).json({
+      message: llmKeyError.message || "Unable to save this LLM API key.",
+    });
+  }
+});
+
+app.delete("/api/auth/llm-api-keys/:keyId", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const keyId = String(req.params.keyId || "").trim();
+  const keys = normalizeStoredLlmApiKeys(user.llmApiKeys);
+  const nextKeys = keys.filter((record) => record.id !== keyId);
+  if (nextKeys.length === keys.length) {
+    return res.status(404).json({ message: "LLM API key not found." });
+  }
+
+  user.llmApiKeys = nextKeys;
+  await writeDb(db);
+  console.info(`[llm-keys] Deleted key metadata for user ${user.id}.`);
+  const catalog = await fetchLlmProviderCatalog({ allowStale: true });
+  res.json({ keys: publicLlmApiKeysDto(user.llmApiKeys, catalog.providers) });
 });
 
 app.delete("/api/auth/me", requireAuth, async (req, res) => {
@@ -4873,6 +5149,32 @@ app.get("/api/rooms/:roomId/buddy/threads", requireAuth, async (req, res) => {
   res.json({ threads });
 });
 
+app.get("/api/rooms/:roomId/buddy/providers", requireAuth, async (req, res) => {
+  const db = await readDb();
+  const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
+  if (!room) return;
+
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  const providerStatus = getBuddyProviderStatus();
+  const catalog = await fetchLlmProviderCatalog({ allowStale: true });
+
+  res.json({
+    providers: buildBuddyProviderOptions(user, {
+      catalog: catalog.providers,
+      providerStatus,
+      byokRoutingAvailable: catalog.providers.length > 0,
+    }),
+    builtIn: providerStatus,
+    providerCatalogAvailable: catalog.available,
+    providerCatalogError: catalog.available ? "" : catalog.error,
+    byokRouting: "server-chatbot",
+  });
+});
+
 app.post("/api/rooms/:roomId/buddy/threads", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
@@ -5039,17 +5341,38 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
-  if (!assertBuddyProviderAvailable(res)) return;
 
   try {
+    const user = db.users.find((candidate) => candidate.id === req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: "Account not found." });
+    }
+    const requestedProviderKeyId = String(req.body.providerKeyId || BUILT_IN_LLM_PROVIDER_ID).trim();
+    const providerStatus = getBuddyProviderStatus();
+    const catalog =
+      requestedProviderKeyId && requestedProviderKeyId !== BUILT_IN_LLM_PROVIDER_ID
+        ? await requireLlmProviderCatalog()
+        : { providers: [] };
+    const providerSelection = resolveBuddyProviderSelection(
+      user,
+      requestedProviderKeyId,
+      catalog.providers,
+      process.env,
+      providerStatus,
+    );
     const { messageChain, directResource, attachedResources } = resolveBuddyMessagePayload(
       db,
       room,
       req.body,
     );
+
+    if (providerSelection.kind === "built-in") {
+      if (!assertBuddyProviderAvailable(res)) return;
+    }
     await syncRoomResourcesWithChatbot(db, room);
+
     console.info(
-      `[buddy] Asking room ${room.id} with ${
+      `[buddy] Asking room ${room.id} via ${buddyProviderMeta(providerSelection).providerName} with ${
         directResource
           ? directResource.title
           : attachedResources.length
@@ -5057,17 +5380,28 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
             : "corpus only"
       }`,
     );
-    const payload = await askChatbot({
-      messageChain,
-      roomId: room.id,
-      resource: directResource,
-    });
+    const payload =
+      providerSelection.kind === "built-in"
+        ? await askChatbot({
+            messageChain,
+            roomId: room.id,
+            resource: directResource,
+          })
+        : await askChatbot({
+            messageChain,
+            roomId: room.id,
+            resource: directResource,
+            llmModel: buddyProviderMeta(providerSelection).model,
+            llmApiKey: providerSelection.apiKey,
+          });
+    const provider = buddyProviderMeta(providerSelection);
 
     res.json({
       answer: payload.answer || "",
       sources: payload.sources || [],
       messageChain: payload.message_chain || [],
       directAttachment: directResource ? resourceDto(db, directResource) : null,
+      provider,
     });
   } catch (error) {
     if (error.status) {
@@ -5085,14 +5419,34 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
-  if (!assertBuddyProviderAvailable(res)) return;
 
   try {
+    const user = db.users.find((candidate) => candidate.id === req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: "Account not found." });
+    }
+    const requestedProviderKeyId = String(req.body.providerKeyId || BUILT_IN_LLM_PROVIDER_ID).trim();
+    const providerStatus = getBuddyProviderStatus();
+    const catalog =
+      requestedProviderKeyId && requestedProviderKeyId !== BUILT_IN_LLM_PROVIDER_ID
+        ? await requireLlmProviderCatalog()
+        : { providers: [] };
+    const providerSelection = resolveBuddyProviderSelection(
+      user,
+      requestedProviderKeyId,
+      catalog.providers,
+      process.env,
+      providerStatus,
+    );
     const { messageChain, directResource, attachedResources } = resolveBuddyMessagePayload(
       db,
       room,
       req.body,
     );
+
+    if (providerSelection.kind === "built-in") {
+      if (!assertBuddyProviderAvailable(res)) return;
+    }
 
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -5113,7 +5467,7 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
     await syncRoomResourcesWithChatbot(db, room);
 
     console.info(
-      `[buddy] Streaming room ${room.id} with ${
+      `[buddy] Streaming room ${room.id} via ${buddyProviderMeta(providerSelection).providerName} with ${
         directResource
           ? directResource.title
           : attachedResources.length
@@ -5121,10 +5475,13 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
             : "corpus only"
       }`,
     );
+
     const response = await streamChatbot({
       messageChain,
       roomId: room.id,
       resource: directResource,
+      llmModel: providerSelection.kind === "built-in" ? "" : buddyProviderMeta(providerSelection).model,
+      llmApiKey: providerSelection.kind === "built-in" ? "" : providerSelection.apiKey,
     });
 
     const reader = response.body.getReader();
