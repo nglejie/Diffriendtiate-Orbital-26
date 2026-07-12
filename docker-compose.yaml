@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: apps/client/Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-4000}:80"
@@ -38,12 +41,39 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-diffriendtiate}:${POSTGRES_PASSWORD:-diffriendtiate_password}@db:5432/${POSTGRES_DB:-diffriendtiate}
       CHATBOT_BASE_URL: http://server-chatbot:5000
       INTELLIGRATE_GPU_ENABLED: ${INTELLIGRATE_GPU_ENABLED:-false}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-ci-placeholder}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+      VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+      OAUTH_PUBLIC_BASE_URL: ${OAUTH_PUBLIC_BASE_URL:-}
+      OAUTH_CLIENT_REDIRECT_URL: ${OAUTH_CLIENT_REDIRECT_URL:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      MICROSOFT_OAUTH_CLIENT_ID: ${MICROSOFT_OAUTH_CLIENT_ID:-}
+      MICROSOFT_OAUTH_CLIENT_SECRET: ${MICROSOFT_OAUTH_CLIENT_SECRET:-}
+      MICROSOFT_OAUTH_PUBLIC_BASE_URL: ${MICROSOFT_OAUTH_PUBLIC_BASE_URL:-}
+      MICROSOFT_TENANT_ID: ${MICROSOFT_TENANT_ID:-organizations}
+      MICROSOFT_ALLOWED_EMAIL_DOMAINS: ${MICROSOFT_ALLOWED_EMAIL_DOMAINS:-nus.edu.sg,u.nus.edu}
+      AUTH_DEV_ACTION_LINKS: ${AUTH_DEV_ACTION_LINKS:-false}
+      AUTH_DEV_RESET_LINKS: ${AUTH_DEV_RESET_LINKS:-false}
+      AUTH_MAILBOX_URL: ${AUTH_MAILBOX_URL:-http://127.0.0.1:8025}
+      AUTH_EMAIL_FROM: ${AUTH_EMAIL_FROM:-Diffriendtiate <no-reply@example.com>}
+      SMTP_URL: ${SMTP_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
     volumes:
       - uploads_data:/app/apps/server/uploads
     depends_on:
       db:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     healthcheck:
       test:
         [
@@ -56,6 +86,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_WEB_PORT:-8025}:8025"
 
   db:
     image: postgres:16-alpine
@@ -91,7 +128,7 @@ services:
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
       GPU_ENABLED: false
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-ci-placeholder}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-models/gemini-embedding-2}
       USE_GEMINI_EMBEDDINGS: true # use gemini embeddings in deployment

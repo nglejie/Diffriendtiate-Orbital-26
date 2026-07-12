@@ -74,18 +74,35 @@ describe("worldConfig", () => {
     });
   });
 
-  it("allows blank zone names while editing but supplies fallbacks for missing names", () => {
+  it("allows in-progress zone names while editing but supplies fallbacks for missing names", () => {
     // Blank names are allowed in the editor; save logic can later auto-name the
-    // zone. Missing names still receive a readable fallback.
+    // zone. Trailing spaces are also allowed while typing, because trimming on
+    // every keystroke prevents owners from entering multi-word names.
     const config = normalizeWorldConfig({
       rooms: [
         { id: "blank", name: "", columns: 12, rows: 10 },
+        { id: "draft", name: "Lecture ", columns: 12, rows: 10 },
         { id: "missing", columns: 12, rows: 10 },
       ],
     });
 
     expect(config.rooms[0].name).toBe("");
-    expect(config.rooms[1].name).toBe("Zone 2");
+    expect(config.rooms[1].name).toBe("Lecture ");
+    expect(config.rooms[2].name).toBe("Zone 3");
+  });
+
+  it("allows in-progress area names while editing but supplies fallbacks for missing names", () => {
+    const config = normalizeWorldConfig({
+      privateAreas: [
+        { id: "blank", name: "", bounds: { col: 1, row: 1, width: 2, height: 2 } },
+        { id: "draft", label: "Study ", bounds: { col: 4, row: 1, width: 2, height: 2 } },
+        { id: "missing", bounds: { col: 7, row: 1, width: 2, height: 2 } },
+      ],
+    });
+
+    expect(config.privateAreas[0].name).toBe("");
+    expect(config.privateAreas[1].name).toBe("Study ");
+    expect(config.privateAreas[2].name).toBe("Area");
   });
 
   it("normalizes tile entries and drops malformed or out-of-bounds placements", () => {

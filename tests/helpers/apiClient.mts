@@ -63,13 +63,25 @@ export async function expectStatus(result, expectedStatus, context = "request") 
 
 export async function registerUser(baseUrl, overrides = {}) {
   // Registers a fresh user through the public API and returns the test fixture
-  // fields alongside the API token/user payload.
+  // fields alongside the API token/user payload. Test harnesses explicitly set
+  // AUTH_TEST_ACTION_LINKS so helpers can keep downstream tests authenticated
+  // while still covering the verification boundary.
   const user = { ...makeUser("user"), ...overrides };
   const result = await apiRequest(baseUrl, "/api/auth/register", {
     method: "POST",
     body: user,
   });
   const payload = await expectStatus(result, 201, "register user");
+
+  if (payload.verificationToken) {
+    const verification = await apiRequest(baseUrl, "/api/auth/email-verification/confirm", {
+      method: "POST",
+      body: { token: payload.verificationToken },
+    });
+    const verifiedPayload = await expectStatus(verification, 200, "verify user email");
+    return { ...user, ...verifiedPayload };
+  }
+
   return { ...user, ...payload };
 }
 

@@ -22,6 +22,7 @@ describe("room shared utilities", () => {
 
     expect(members.map((member) => member.role)).toEqual(["Owner", "Member", "You"]);
     expect(members.map((member) => member.initial)).toEqual(["F", "M", "G"]);
+    expect(members.map((member) => member.owner)).toEqual([true, false, false]);
   });
 
   // Covers small formatting helpers shared by chat, resources, and attachments.

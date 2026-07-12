@@ -1,10 +1,9 @@
 import {
   Download,
-  FileText,
   Image as ImageIcon,
-  Maximize2,
   Minus,
   Plus,
+  Scan,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent, WheelEvent } from "react";
@@ -14,6 +13,7 @@ import {
   ANNOTATION_TYPES,
   AnnotationSidebar,
   getAnnotationType,
+  RichAnnotationComposer,
 } from "./AnnotationSidebar.tsx";
 import type {
   Annotation,
@@ -42,6 +42,7 @@ export interface ImageAnnotatorPanelProps {
   ) => Promise<void>;
   onDeleteAnnotation: (id: string) => Promise<void>;
   onAddReply: (annotationId: string, comment: string) => Promise<void>;
+  onDeleteReply: (annotationId: string, replyId: string) => Promise<void>;
   onError: (message: string) => void;
   onPageChange: (page: number) => void;
   isOwner?: boolean;
@@ -119,7 +120,7 @@ function isOverlayControl(target: EventTarget | null) {
   return target instanceof HTMLElement
     ? Boolean(
         target.closest(
-          "[data-annotation-id], .image-annotation-create-popover, button, input, label, select, textarea",
+          "[data-annotation-id], .image-annotation-create-popover, .annotation-selection-toolbar, .discord-emoji-picker, .small-settings-dialog, .app-select-option-list, button, input, label, select, textarea",
         ),
       )
     : false;
@@ -215,6 +216,7 @@ export function ImageAnnotatorPanel({
   onAddReply,
   onCreateAnnotation,
   onDeleteAnnotation,
+  onDeleteReply,
   onError,
   onPageChange,
   onUpdateAnnotation,
@@ -226,19 +228,23 @@ export function ImageAnnotatorPanel({
   const [imageSrc, setImageSrc] = useState(resourceUrl);
   const [imageError, setImageError] = useState("");
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+  const [fitScale, setFitScale] = useState(1);
+  const [sidebarWidth, setSidebarWidth] = useState(360);
   const [zoom, setZoom] = useState(1);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawRect, setDrawRect] = useState<ImageRect | null>(null);
   const [draftRect, setDraftRect] = useState<ImageRect | null>(null);
   const [draftType, setDraftType] = useState<AnnotationType>("general");
-  const [draftComment, setDraftComment] = useState("");
   const [saving, setSaving] = useState(false);
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState("");
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState("");
   const [popoverSize, setPopoverSize] = useState({ width: 280, height: 220 });
   const imageRef = useRef<HTMLImageElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const sidebarRef = useRef<AnnotationSidebarHandle | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const drawRectRef = useRef<ImageRect | null>(null);
 
@@ -258,6 +264,43 @@ export function ImageAnnotatorPanel({
   }, [activeChannel, onPageChange, resourceId]);
 
   useEffect(() => {
+    let frameId = 0;
+
+    function updateFitScale() {
+      if (!stageRef.current || !naturalSize.width || !naturalSize.height) {
+        setFitScale(1);
+        return;
+      }
+
+      const rect = stageRef.current.getBoundingClientRect();
+      const availableWidth = Math.max(160, rect.width - 36);
+      const availableHeight = Math.max(160, rect.height - 36);
+      const rawScale = Math.min(availableWidth / naturalSize.width, availableHeight / naturalSize.height);
+      const nextScale = clamp(
+        rawScale >= 1 ? rawScale : Math.max(rawScale, 0.2),
+        0.2,
+        8,
+      );
+      setFitScale(nextScale);
+    }
+
+    function scheduleFitScaleUpdate() {
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(updateFitScale);
+    }
+
+    scheduleFitScaleUpdate();
+    const observer = new ResizeObserver(scheduleFitScaleUpdate);
+    if (stageRef.current) observer.observe(stageRef.current);
+    window.addEventListener("resize", scheduleFitScaleUpdate);
+    return () => {
+      cancelAnimationFrame(frameId);
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleFitScaleUpdate);
+    };
+  }, [naturalSize.height, naturalSize.width, sidebarWidth]);
+
+  useEffect(() => {
     if (!draftRect || !popoverRef.current) return;
 
     const rect = popoverRef.current.getBoundingClientRect();
@@ -271,7 +314,7 @@ export function ImageAnnotatorPanel({
         ? current
         : nextSize,
     );
-  }, [draftComment, draftRect, draftType, popoverSize.height, popoverSize.width]);
+  }, [draftRect, draftType, popoverSize.height, popoverSize.width]);
 
   useEffect(() => {
     let cancelled = false;
@@ -352,11 +395,11 @@ export function ImageAnnotatorPanel({
     setDrawRect(null);
   }
 
-  async function saveAnnotation() {
+  async function saveAnnotation(commentHtml: string) {
     if (!draftRect || !imageRef.current) return;
     const imageWidth = imageRef.current.offsetWidth;
     const imageHeight = imageRef.current.offsetHeight;
-    const comment = draftComment.trim();
+    const comment = commentHtml.trim();
     if (!comment || !imageWidth || !imageHeight) return;
 
     setSaving(true);
@@ -376,7 +419,6 @@ export function ImageAnnotatorPanel({
         resourceId,
       });
       setDraftRect(null);
-      setDraftComment("");
       setDraftType("general");
     } catch (error) {
       onError(error instanceof Error ? error.message : "Unable to save annotation.");
@@ -420,15 +462,45 @@ export function ImageAnnotatorPanel({
   }
 
   function openThread(annotationId: string) {
+    setSelectedAnnotationId(annotationId);
     sidebarRef.current?.openThread(annotationId);
+  }
+
+  function jumpToAnnotation(annotationId: string) {
+    setSelectedAnnotationId(annotationId);
+    setHoveredAnnotationId(annotationId);
+    window.setTimeout(() => {
+      Array.from(overlayRef.current?.querySelectorAll<HTMLElement>("[data-annotation-id]") || [])
+        .find((node) => node.dataset.annotationId === annotationId)
+        ?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }, 0);
+  }
+
+  function beginSidebarResize(event: PointerEvent<HTMLDivElement>) {
+    const panel = panelRef.current;
+    if (!panel) return;
+    event.preventDefault();
+
+    const panelRect = panel.getBoundingClientRect();
+    function handlePointerMove(moveEvent: globalThis.PointerEvent) {
+      const nextWidth = clamp(panelRect.right - moveEvent.clientX, 300, Math.min(560, panelRect.width * 0.48));
+      setSidebarWidth(nextWidth);
+    }
+    function stopResize() {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
   }
 
   function getCreatePopoverStyle(rect: ImageRect): CSSProperties {
     const overlayWidth = overlayRef.current?.clientWidth || imageRef.current?.offsetWidth || 0;
     const overlayHeight = overlayRef.current?.clientHeight || imageRef.current?.offsetHeight || 0;
     const gap = 12;
-    const availableWidth = overlayWidth ? Math.max(80, overlayWidth - gap * 2) : popoverSize.width;
-    const availableHeight = overlayHeight ? Math.max(80, overlayHeight - gap * 2) : popoverSize.height;
+    const availableWidth = overlayWidth ? Math.max(popoverSize.width, overlayWidth - gap * 2) : popoverSize.width;
+    const availableHeight = overlayHeight ? Math.max(popoverSize.height, overlayHeight - gap * 2) : popoverSize.height;
     const popoverWidth = Math.min(popoverSize.width, availableWidth);
     const popoverHeight = Math.min(popoverSize.height, availableHeight);
     let left = rect.x + rect.width + gap;
@@ -462,6 +534,7 @@ export function ImageAnnotatorPanel({
 
   const activeDraftRect = draftRect || drawRect;
   const draftColor = getAnnotationType(draftType).color;
+  const renderedZoom = fitScale * zoom;
   const overlayHandlers = {
     onMouseDown: beginDraw as any,
     onMouseMove: updateDraw as any,
@@ -472,7 +545,12 @@ export function ImageAnnotatorPanel({
   };
 
   return (
-    <section className="document-channel-panel image-channel-panel" aria-label={`${resourceTitle} image channel`}>
+    <section
+      className="document-channel-panel image-channel-panel"
+      aria-label={`${resourceTitle} image channel`}
+      ref={panelRef}
+      style={{ "--document-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
       <div className="document-viewer-pane">
         <header className="document-channel-header">
           <div>
@@ -482,36 +560,63 @@ export function ImageAnnotatorPanel({
               <small>#{activeChannel}</small>
             </span>
           </div>
+          <div className="document-channel-header-actions" aria-label="Image Controls">
+            <button
+              aria-label="Zoom Out"
+              data-tooltip="Zoom Out"
+              data-tooltip-placement="bottom"
+              onClick={() => setZoom((current) => clamp(current - 0.1, 0.4, 3))}
+              type="button"
+            >
+              <Minus size={15} />
+            </button>
+            <output>{Math.round(renderedZoom * 100)}%</output>
+            <button
+              aria-label="Zoom In"
+              data-tooltip="Zoom In"
+              data-tooltip-placement="bottom"
+              onClick={() => setZoom((current) => clamp(current + 0.1, 0.4, 3))}
+              type="button"
+            >
+              <Plus size={15} />
+            </button>
+            <button
+              aria-label="Fit To View"
+              data-tooltip="Fit To View"
+              data-tooltip-placement="bottom"
+              onClick={() => setZoom(1)}
+              type="button"
+            >
+              <Scan size={15} />
+            </button>
+            <button
+              aria-label="Download Original"
+              data-tooltip="Download Original"
+              data-tooltip-placement="bottom"
+              onClick={downloadOriginal}
+              type="button"
+            >
+              <Download size={15} />
+            </button>
+          </div>
         </header>
 
         <div className="document-pdf-area image-annotation-area">
           <ImagePresenceBar members={Array.isArray(documentPresence) ? documentPresence : []} />
-          <div className="image-annotation-toolbar">
-            <span title={resourceTitle}>{resourceTitle || "Image"}</span>
-            <div>
-              <button aria-label="Zoom out" onClick={() => setZoom((current) => clamp(current - 0.1, 0.4, 3))} type="button">
-                <Minus size={15} />
-              </button>
-              <output>{Math.round(zoom * 100)}%</output>
-              <button aria-label="Zoom in" onClick={() => setZoom((current) => clamp(current + 0.1, 0.4, 3))} type="button">
-                <Plus size={15} />
-              </button>
-              <button aria-label="Fit to screen" onClick={() => setZoom(1)} type="button">
-                <Maximize2 size={15} />
-              </button>
-              <button aria-label="Download original" onClick={downloadOriginal} type="button">
-                <Download size={15} />
-              </button>
-            </div>
-          </div>
-
-          <div className="image-annotation-stage" onWheel={handleWheel}>
+          <div className="image-annotation-stage" onWheel={handleWheel} ref={stageRef}>
             {imageError ? (
               <div className="document-pdf-state">{imageError}</div>
             ) : (
               <div
                 className="image-annotation-frame"
-                style={{ "--image-zoom": zoom } as CSSProperties}
+                style={
+                  naturalSize.width && naturalSize.height
+                    ? ({
+                        height: `${naturalSize.height * fitScale * zoom}px`,
+                        width: `${naturalSize.width * fitScale * zoom}px`,
+                      } as CSSProperties)
+                    : undefined
+                }
               >
                 <img
                   alt={resourceTitle || "Document image"}
@@ -537,7 +642,7 @@ export function ImageAnnotatorPanel({
                     return (
                       <button
                         aria-label={`Open ${type.label} annotation`}
-                        className="image-annotation-rect"
+                        className={`image-annotation-rect ${selectedAnnotationId === annotation.id ? "selected" : ""}`}
                         data-annotation-id={annotation.id}
                         key={annotation.id}
                         onClick={() => openThread(annotation.id)}
@@ -589,9 +694,6 @@ export function ImageAnnotatorPanel({
                           >
                             <strong>{annotation.author?.name || "Unknown"}</strong>
                             <p>{truncate(annotation.comment || "Image annotation")}</p>
-                            <button onClick={() => openThread(annotation.id)} type="button">
-                              Open thread
-                            </button>
                           </div>
                         );
                       })
@@ -600,6 +702,9 @@ export function ImageAnnotatorPanel({
                   {draftRect ? (
                     <div
                       className="image-annotation-create-popover"
+                      onClick={(event) => event.stopPropagation()}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
                       onWheel={(event) => event.stopPropagation()}
                       ref={popoverRef}
                       style={getCreatePopoverStyle(draftRect)}
@@ -615,26 +720,14 @@ export function ImageAnnotatorPanel({
                         }))}
                         value={draftType}
                       />
-                      <textarea
+                      <RichAnnotationComposer
                         autoFocus
-                        onChange={(event) => setDraftComment(event.target.value)}
-                        placeholder="Add context for this region..."
-                        rows={3}
-                        value={draftComment}
+                        buttonLabel="Save Annotation"
+                        className="image-region-composer"
+                        disabled={saving}
+                        onSubmit={saveAnnotation}
+                        placeholder="Add context for this region"
                       />
-                      <div>
-                        <button className="secondary-button compact" onClick={() => setDraftRect(null)} type="button">
-                          Cancel
-                        </button>
-                        <button
-                          className="primary-button compact"
-                          disabled={!draftComment.trim() || saving}
-                          onClick={saveAnnotation}
-                          type="button"
-                        >
-                          Save Annotation
-                        </button>
-                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -650,6 +743,14 @@ export function ImageAnnotatorPanel({
         </div>
       </div>
 
+      <div
+        aria-label="Resize Annotations Panel"
+        aria-orientation="vertical"
+        className="document-sidebar-resizer"
+        onPointerDown={beginSidebarResize}
+        role="separator"
+      />
+
       <AnnotationSidebar
         activeChannel={activeChannel}
         annotations={annotations}
@@ -657,7 +758,9 @@ export function ImageAnnotatorPanel({
         isOwner={isOwner}
         onAddReply={onAddReply}
         onDeleteAnnotation={onDeleteAnnotation}
+        onDeleteReply={onDeleteReply}
         onError={onError}
+        onJumpToAnnotation={jumpToAnnotation}
         onUpdateAnnotation={onUpdateAnnotation}
         ref={sidebarRef}
         resourceId={resourceId}

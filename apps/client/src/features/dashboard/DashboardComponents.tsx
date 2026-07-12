@@ -1,28 +1,39 @@
 import {
+  AlertCircle,
   ArrowLeft,
   CheckCircle2,
   ChevronRight,
+  Crown,
   DoorOpen,
   Eye,
   EyeOff,
   Globe2,
   ImagePlus,
+  Info,
   Link2,
   Lock,
   Plus,
   Search,
-  Tag,
   Upload,
   Users,
   Wand2,
   X,
 } from "lucide-react";
-import { useRef, useState } from "react";
-import { MAX_ROOM_TAGS } from "./dashboardConstants.ts";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  MAX_ROOM_TAGS,
+  MAX_WORLD_DESCRIPTION_WORDS,
+  MAX_WORLD_NAME_CHARS,
+} from "./dashboardConstants.ts";
 import {
   createAcademicTermOptions,
   createFilterOptions,
+  getCourseCodeValidationMessage,
+  getNusmodsAcademicYear,
+  isCourseCodeFormatValid,
   matchesBackgroundFilters,
+  normaliseCourseCodeInput,
   normaliseTags,
 } from "./dashboardUtils.ts";
 import {
@@ -37,6 +48,9 @@ import {
 import { AppSelectMenu } from "../../shared/ui/AppSelectMenu.tsx";
 
 const DEFAULT_CARD_ACADEMIC_TERM = createAcademicTermOptions()[0] || "";
+const NUSMODS_API_BASE = "https://api.nusmods.com/v2";
+const nusmodsCourseCache = new Map();
+const COURSE_CODE_HELP_TEXT = "Course codes must follow the standard 2-3 letter prefix plus 4 digits format and an optional 1 letter suffix. e.g. CS2040S, ST2334. The prefix is case-insensitive.";
 
 /**
  * Keeps dashboard room cards compatible with older saved rooms while newer
@@ -49,12 +63,12 @@ function getRoomCardMeta(room) {
   };
 }
 
-/** Room card used by both My Rooms and Explore Rooms. */
+/** World card used by both My Worlds and Explore Worlds. */
 function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
   const theme = getTheme(room.theme);
   const background = getBackground(room.background);
   const ownerName = room.owner?.name || "Room owner";
-  const roomTags = (room.tags || []).slice(0, MAX_ROOM_TAGS);
+  const roomTags = normaliseTags(room.tags).slice(0, MAX_ROOM_TAGS);
   const { academicTerm } = getRoomCardMeta(room);
   const isExploreCard = mode === "explore";
   const VisibilityIcon = room.visibility === "private" ? Lock : Globe2;
@@ -79,13 +93,11 @@ function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
           {room.memberCount}
         </span>
 
-        <span className="room-card-tags">
-          {roomTags.length ? (
-            roomTags.map((tag) => <span key={tag}>{tag}</span>)
-          ) : (
-            <span>study</span>
-          )}
-        </span>
+        {roomTags.length > 0 ? (
+          <span className="room-card-tags">
+            {roomTags.map((tag) => <span key={tag}>{tag}</span>)}
+          </span>
+        ) : null}
 
         <span className="room-card-visibility" title={room.visibility}>
           <VisibilityIcon size={15} />
@@ -98,12 +110,12 @@ function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
 
         <span className="room-enter-action">
           {isExploreCard ? <Plus size={18} /> : <DoorOpen size={18} />}
-          {isExploreCard ? "View Details" : "Open Room"}
+          {isExploreCard ? "View Details" : "Enter"}
         </span>
       </button>
 
       <div className="gallery-card-meta">
-        <RoomLogoMark room={room} />
+        <RoomLogoMark room={room} showOwnerCrown={!isExploreCard && Boolean(room.isOwner)} />
         <div>
           <h2>{room.name}</h2>
           <p>{ownerName}</p>
@@ -114,13 +126,18 @@ function RoomTile({ mode, onOpenRoom, onPreviewRoom, room }) {
 }
 
 /** Shared room logo treatment used by dashboard cards and modal previews. */
-function RoomLogoMark({ room }) {
+function RoomLogoMark({ room, showOwnerCrown = false }) {
   const initial = String(room.name || "R").trim().charAt(0).toUpperCase() || "R";
   const { logo } = getRoomCardMeta(room);
 
   return (
-    <span className="room-avatar" aria-hidden="true">
+    <span className={showOwnerCrown ? "room-avatar owner-marked" : "room-avatar"} aria-hidden="true">
       {logo ? <img src={logo} alt="" /> : <span>{initial}</span>}
+      {showOwnerCrown ? (
+        <span className="room-owner-crown">
+          <Crown size={12} fill="currentColor" />
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -130,16 +147,275 @@ function RequiredMark() {
   return <span className="required-mark" aria-hidden="true">*</span>;
 }
 
-/** Modal shown before a member joins a public room from Explore Rooms. */
+function clampTooltipLeft(value, width) {
+  const margin = 12;
+
+  if (typeof window === "undefined") return value;
+  return Math.min(Math.max(value, margin), window.innerWidth - width - margin);
+}
+
+function clampTooltipArrow(value, width) {
+  const margin = 14;
+
+  return Math.min(Math.max(value, margin), width - margin);
+}
+
+function estimateTooltipWidth(message, maxWidth = 280) {
+  const textLength = typeof message === "string" ? message.length : 40;
+
+  return Math.min(maxWidth, Math.max(112, textLength * 7 + 24));
+}
+
+function FieldTooltipTrigger({
+  ariaLabel,
+  className = "",
+  icon: Icon = Info,
+  maxWidth: preferredMaxWidth = 280,
+  message,
+  tooltipClassName = "",
+}) {
+  const [active, setActive] = useState(false);
+  const [tooltipState, setTooltipState] = useState(null);
+  const triggerRef = useRef(null);
+  const tooltipRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!active || !triggerRef.current || typeof window === "undefined") {
+      setTooltipState(null);
+      return undefined;
+    }
+
+    function updateTooltipPosition() {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const maxWidth = Math.min(preferredMaxWidth, Math.max(112, window.innerWidth - 24));
+      const tooltipWidth = Math.min(
+        maxWidth,
+        tooltipRef.current?.offsetWidth || estimateTooltipWidth(message, maxWidth),
+      );
+      const minimumTooltipHeight = tooltipClassName.includes("canvas-token-tooltip") ? 304 : 44;
+      const tooltipHeight = Math.max(tooltipRef.current?.offsetHeight || 0, minimumTooltipHeight);
+      const triggerCenter = rect.left + rect.width / 2;
+      const left = clampTooltipLeft(triggerCenter - tooltipWidth / 2, tooltipWidth);
+      const arrowLeft = clampTooltipArrow(triggerCenter - left, tooltipWidth);
+      const roomAbove = rect.top - 12;
+      const roomBelow = window.innerHeight - rect.bottom - 12;
+      const placeAbove = roomAbove >= tooltipHeight || roomAbove >= roomBelow;
+      const top = placeAbove
+        ? Math.max(tooltipHeight + 12, rect.top - 8)
+        : Math.min(Math.max(12, rect.bottom + 8), window.innerHeight - tooltipHeight - 12);
+
+      setTooltipState({
+        placement: placeAbove ? "top" : "bottom",
+        style: {
+          "--tooltip-arrow-left": `${arrowLeft}px`,
+          left: `${left}px`,
+          maxWidth: `${maxWidth}px`,
+          top: `${top}px`,
+        },
+      });
+    }
+
+    updateTooltipPosition();
+    const frame = window.requestAnimationFrame(updateTooltipPosition);
+    window.addEventListener("resize", updateTooltipPosition);
+    window.addEventListener("scroll", updateTooltipPosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateTooltipPosition);
+      window.removeEventListener("scroll", updateTooltipPosition, true);
+    };
+  }, [active, message, preferredMaxWidth, tooltipClassName]);
+
+  const tooltipStyle = tooltipState?.style || {
+    left: "-9999px",
+    maxWidth: "min(280px, calc(100vw - 24px))",
+    top: "0px",
+    visibility: "hidden",
+  };
+
+  return (
+    <span
+      aria-label={ariaLabel}
+      aria-expanded={active}
+      aria-haspopup="true"
+      className={["field-help-indicator", className].filter(Boolean).join(" ")}
+      onBlur={() => setActive(false)}
+      onFocus={() => setActive(true)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          setActive((current) => !current);
+        }
+      }}
+      onMouseEnter={() => setActive(true)}
+      onMouseLeave={() => setActive(false)}
+      ref={triggerRef}
+      role="button"
+      tabIndex={0}
+    >
+      <Icon size={14} />
+      {active && typeof document !== "undefined"
+        ? createPortal(
+            <span
+              className={["field-tooltip", tooltipClassName].filter(Boolean).join(" ")}
+              data-placement={tooltipState?.placement || "top"}
+              ref={tooltipRef}
+              role="tooltip"
+              style={tooltipStyle}
+            >
+              {message}
+            </span>,
+            document.body,
+          )
+        : null}
+    </span>
+  );
+}
+
+function FieldInfoLabel({ children, message }) {
+  return (
+    <span className="field-label-row">
+      <span>{children}</span>
+      <FieldTooltipTrigger
+        ariaLabel={message}
+        message={message}
+      />
+    </span>
+  );
+}
+
+function CourseCodeLabel({ message = "", required = false }) {
+  const tooltipText = message || COURSE_CODE_HELP_TEXT;
+  const Icon = message ? AlertCircle : Info;
+
+  return (
+    <span className="field-label-row">
+      <span>
+        Course Code {required ? <RequiredMark /> : null}
+      </span>
+      <FieldTooltipTrigger
+        ariaLabel={message ? "Invalid NUS code format" : "NUS code format help"}
+        className={message ? "error" : ""}
+        icon={Icon}
+        message={tooltipText}
+      />
+    </span>
+  );
+}
+
+function JoinWorldForm({
+  error = "",
+  initialInviteValue = "",
+  joining = false,
+  onBack,
+  onJoinInvite,
+}) {
+  const [showInvitePassword, setShowInvitePassword] = useState(false);
+  const [inviteValue, setInviteValue] = useState(initialInviteValue);
+  const [invitePassword, setInvitePassword] = useState("");
+
+  useEffect(() => {
+    setInviteValue(initialInviteValue);
+  }, [initialInviteValue]);
+
+  function submitInvite(event) {
+    event.preventDefault();
+    onJoinInvite(inviteValue, invitePassword);
+  }
+
+  return (
+    <form autoComplete="off" className="join-invite-form" onSubmit={submitInvite}>
+      <label className="field">
+        <span>Invite link</span>
+        <input
+          autoComplete="off"
+          onChange={(event) => setInviteValue(event.target.value)}
+          placeholder="Paste an invite code or link"
+          value={inviteValue}
+        />
+      </label>
+      <label className="field">
+        <span>Domain password</span>
+        <div className="private-password-field join-password-field">
+          <input
+            aria-label="Domain invite password"
+            autoComplete="current-password"
+            onChange={(event) => setInvitePassword(event.target.value)}
+            placeholder="Enter password if required"
+            type={showInvitePassword ? "text" : "password"}
+            value={invitePassword}
+          />
+          <button
+            aria-label={showInvitePassword ? "Hide invite password" : "Show invite password"}
+            onClick={() => setShowInvitePassword((current) => !current)}
+            title={showInvitePassword ? "Hide password" : "Show password"}
+            type="button"
+          >
+            {showInvitePassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+      </label>
+      {error ? <p className="form-error">{error}</p> : null}
+      <div className="modal-actions guided-actions">
+        <button className="text-button" onClick={onBack} type="button">
+          <ArrowLeft className="arrow-left" size={16} />
+          Back
+        </button>
+        <button className="primary-button compact" disabled={joining} type="submit">
+          {joining ? "Joining" : "Join Domain"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function JoinWorldDialog({
+  error = "",
+  initialInviteValue = "",
+  joining = false,
+  onBack,
+  onClose,
+  onJoinInvite,
+}) {
+  const goBack = onBack || onClose;
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="create-modal room-builder guided-create-modal create-step-invite join-world-dialog" role="dialog" aria-modal="true" aria-labelledby="join-world-title">
+        <div className="modal-header">
+          <div>
+            <h2 id="join-world-title">Join a Domain</h2>
+            <p>Paste an invite code or link from a domain member.</p>
+          </div>
+          <button className="modal-close-button" onClick={onClose} title="Close" type="button">
+            <X size={24} />
+          </button>
+        </div>
+        <JoinWorldForm
+          error={error}
+          initialInviteValue={initialInviteValue}
+          joining={joining}
+          onBack={goBack}
+          onJoinInvite={onJoinInvite}
+        />
+      </section>
+    </div>
+  );
+}
+
+/** Modal shown before a member joins a public world from Explore Worlds. */
 function ExploreRoomModal({ onClose, onJoinRoom, room }) {
   const theme = getTheme(room.theme);
   const background = getBackground(room.background);
-  const roomTags = (room.tags || []).slice(0, MAX_ROOM_TAGS);
+  const roomTags = normaliseTags(room.tags).slice(0, MAX_ROOM_TAGS);
 
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section
-        className="room-details-modal"
+        className="room-details-modal world-preview-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="explore-room-title"
@@ -152,42 +428,44 @@ function ExploreRoomModal({ onClose, onJoinRoom, room }) {
       >
         <div className="modal-header">
           <div>
-            <h2 id="explore-room-title">{room.name}</h2>
+            <h2 id="explore-room-title">Preview</h2>
           </div>
-          <button className="icon-button subtle on-dark" onClick={onClose} title="Close" type="button">
-            <X size={18} />
+          <button className="modal-close-button" onClick={onClose} title="Close" type="button">
+            <X size={24} />
           </button>
         </div>
 
-        <div className="room-details-hero">
-          <span>
-            {room.moduleCode}
-            {room.academicTerm ? ` · ${room.academicTerm}` : ""}
-          </span>
+        <div className="world-preview-hero">
+          <div className="world-preview-hero-top">
+            <span className="world-preview-member-count">
+              <Users size={15} />
+              {room.memberCount}
+            </span>
+            {roomTags.length > 0 ? (
+              <div className="world-preview-tags" aria-label="Domain tags">
+                {roomTags.map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="world-preview-identity">
+            <RoomLogoMark room={room} />
+            <div className="world-preview-title-block">
+              <h3>{room.name}</h3>
+              <p className="world-preview-subtitle">
+                {room.moduleCode}
+                {room.academicTerm ? ` \u00b7 ${room.academicTerm}` : ""}
+              </p>
+            </div>
+          </div>
         </div>
 
         <p className="room-details-description">
-          {room.description || "This room has not added a description yet."}
+          {room.description || "This domain has not added a description yet."}
         </p>
 
-        <div className="room-details-meta">
-          <span>
-            <Globe2 size={16} />
-            Public
-          </span>
-          <span>
-            <Users size={16} />
-            {room.memberCount} members
-          </span>
-          {roomTags.map((tag) => (
-            <span key={tag}>
-              <Tag size={15} />
-              {tag}
-            </span>
-          ))}
-        </div>
-
-        <div className="modal-actions">
+        <div className="modal-actions world-preview-actions">
           <button className="secondary-button compact" onClick={onClose} type="button">
             Cancel
           </button>
@@ -201,7 +479,7 @@ function ExploreRoomModal({ onClose, onJoinRoom, room }) {
   );
 }
 
-/** Full room creation workflow, including visibility, tags, and theme choice. */
+/** Full world creation workflow, including visibility, tags, and theme choice. */
 function CreateRoomModal({
   academicTermOptions = [],
   creating,
@@ -224,7 +502,6 @@ function CreateRoomModal({
   });
   const [tagDraft, setTagDraft] = useState("");
   const [showPrivatePassword, setShowPrivatePassword] = useState(false);
-  const [inviteValue, setInviteValue] = useState("");
   const logoInputRef = useRef(null);
   const background = getBackground(form.background);
   const roomTags = normaliseTags(form.tags);
@@ -243,22 +520,23 @@ function CreateRoomModal({
     (item) => item.type !== "Gradient",
   );
   const stepTitle = {
-    start: "Create Your Room",
-    invite: "Join a Room",
-    details: "Customise Your Room",
+    start: "Create Your Domain",
+    invite: "Join a Domain",
+    details: "Customise Your Domain",
     theme: "Set the Scene",
   }[step];
   const stepDescription = {
-    start: "Create a module room tailored to your needs.",
-    invite: "Paste an invite code or link from a room member.",
-    details: "Set the identity for your study room.",
+    start: "Create a course domain tailored to your needs.",
+    invite: "Paste an invite code or link from a domain member.",
+    details: "Set the identity for your study domain.",
     theme: "Choose a background that describes the atmosphere.",
   }[step];
   const detailsReady =
     Boolean(form.name.trim()) &&
-    Boolean(form.moduleCode.trim()) &&
+    isCourseCodeFormatValid(form.moduleCode) &&
     Boolean(selectedAcademicTerm.trim()) &&
     (form.visibility !== "private" || Boolean(form.password.trim()));
+  const courseCodeValidationMessage = getCourseCodeValidationMessage(form.moduleCode);
 
   /** Updates a single room form value from non-input controls. */
   function updateFormValue(name, value) {
@@ -342,18 +620,18 @@ function CreateRoomModal({
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      setAlertMessage("Please upload an image file for the room logo.");
+      setAlertMessage("Please upload an image file for the domain logo.");
       return;
     }
 
     if (file.size > 500 * 1024) {
-      setAlertMessage("Please keep room logo images under 500KB for now.");
+      setAlertMessage("Please keep domain logo images under 500KB for now.");
       return;
     }
 
     const reader = new FileReader();
     reader.onload = () => updateFormValue("roomLogo", String(reader.result));
-    reader.onerror = () => setAlertMessage("Unable to read that room logo.");
+    reader.onerror = () => setAlertMessage("Unable to read that domain logo.");
     reader.readAsDataURL(file);
     event.target.value = "";
   }
@@ -405,12 +683,6 @@ function CreateRoomModal({
     }
   }
 
-  /** Accepts either a raw invite code or a full invite URL from the join step. */
-  function submitInvite(event) {
-    event.preventDefault();
-    onJoinInvite(inviteValue);
-  }
-
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className={`create-modal room-builder guided-create-modal create-step-${step}`} role="dialog" aria-modal="true" aria-labelledby="create-room-title">
@@ -439,33 +711,17 @@ function CreateRoomModal({
               <h3>Have an invite already?</h3>
               <button className="secondary-button" onClick={() => setStep("invite")} type="button">
                 <Link2 size={17} />
-                Join a Room
+                Join a Domain
               </button>
             </div>
           </div>
         ) : null}
 
         {step === "invite" ? (
-          <form autoComplete="off" className="join-invite-form" onSubmit={submitInvite}>
-            <label className="field">
-              <span>Invite link</span>
-              <input
-                autoComplete="off"
-                onChange={(event) => setInviteValue(event.target.value)}
-                placeholder="Paste an invite code or link"
-                value={inviteValue}
-              />
-            </label>
-            <div className="modal-actions guided-actions">
-              <button className="text-button" onClick={() => setStep("start")} type="button">
-                <ArrowLeft className="arrow-left" size={16} />
-                Back
-              </button>
-              <button className="primary-button compact" type="submit">
-                Join Room
-              </button>
-            </div>
-          </form>
+          <JoinWorldForm
+            onBack={() => setStep("start")}
+            onJoinInvite={onJoinInvite}
+          />
         ) : null}
 
         {step === "details" ? (
@@ -474,7 +730,7 @@ function CreateRoomModal({
               <button
                 className="room-logo-button"
                 onClick={handleLogoPreviewClick}
-                title={form.roomLogo ? "Click to remove room logo" : "Upload room logo"}
+                title={form.roomLogo ? "Click to remove domain logo" : "Upload domain logo"}
                 type="button"
               >
                 <span className="room-logo-preview">
@@ -489,16 +745,19 @@ function CreateRoomModal({
                 type="file"
               />
               <div>
-                <h3>Room Logo</h3>
-                <p>Upload a square image, or we will use the first letter of the room name.</p>
+                <h3>Domain Logo</h3>
+                <p>Upload a square image, or we will use the first letter of the domain name.</p>
               </div>
             </div>
 
             <div className="form-grid">
               <label className="field">
-                <span>Room Name <RequiredMark /></span>
+                <FieldInfoLabel message={`Maximum ${MAX_WORLD_NAME_CHARS} characters.`}>
+                  Domain Name <RequiredMark />
+                </FieldInfoLabel>
                 <input
                   autoComplete="off"
+                  maxLength={MAX_WORLD_NAME_CHARS}
                   name="name"
                   onChange={onUpdateField}
                   placeholder=""
@@ -507,8 +766,10 @@ function CreateRoomModal({
               </label>
 
               <label className="field">
-                <span>Module Code <RequiredMark /></span>
-                <ModuleCodeCombobox
+                <CourseCodeLabel message={courseCodeValidationMessage} required />
+                <CourseCodeCombobox
+                  academicTerm={selectedAcademicTerm}
+                  invalid={Boolean(courseCodeValidationMessage)}
                   onChange={(moduleCode) => updateFormValue("moduleCode", moduleCode)}
                   options={moduleCodeOptions}
                   value={form.moduleCode}
@@ -526,7 +787,9 @@ function CreateRoomModal({
             </label>
 
             <label className="field">
-              <span>Description</span>
+              <FieldInfoLabel message={`Maximum ${MAX_WORLD_DESCRIPTION_WORDS} words.`}>
+                Description
+              </FieldInfoLabel>
               <textarea
                 name="description"
                 autoComplete="off"
@@ -576,7 +839,7 @@ function CreateRoomModal({
             </div>
 
             <div className="visibility-settings">
-              <div className="segmented-control" role="group" aria-label="Room visibility">
+              <div className="segmented-control" role="group" aria-label="Domain visibility">
                 <button
                   className={form.visibility === "public" ? "active" : ""}
                   onClick={() => updateFormValue("visibility", "public")}
@@ -598,9 +861,9 @@ function CreateRoomModal({
               {form.visibility === "private" ? (
                 <label className="private-password-field">
                   <input
-                    aria-label="Private room password"
+                    aria-label="Private domain password"
                     autoComplete="new-password"
-                    name="private-room-passcode"
+                    name="private-world-passcode"
                     onChange={(event) => updateFormValue("password", event.target.value)}
                     placeholder="Password"
                     type={showPrivatePassword ? "text" : "password"}
@@ -635,7 +898,7 @@ function CreateRoomModal({
             <section className="custom-background-panel" aria-label="Custom background">
               <div>
                 <h4>Custom Background</h4>
-                <p>Upload an image or create a custom gradient for the whole room.</p>
+                <p>Upload an image or create a custom gradient for the whole domain.</p>
               </div>
 
               <label className="upload-dropzone">
@@ -700,7 +963,7 @@ function CreateRoomModal({
                 activeId={form.background}
                 items={ambientBackgrounds}
                 onSelect={(backgroundId) => updateFormValue("background", backgroundId)}
-                title="Ambient Worlds"
+                title="Ambient Domains"
               />
             </section>
 
@@ -713,10 +976,10 @@ function CreateRoomModal({
               <RoomLogoMark room={{ name: form.name, roomLogo: form.roomLogo }} />
               <div>
                 <p>
-                  {form.moduleCode || "MODULE"}
+                  {form.moduleCode || "COURSE"}
                   {selectedAcademicTerm ? ` · ${selectedAcademicTerm}` : ""}
                 </p>
-                <h3>{form.name || "Your Room"}</h3>
+                <h3>{form.name || "Your Domain"}</h3>
               </div>
             </div>
 
@@ -727,7 +990,7 @@ function CreateRoomModal({
               </button>
               <button className="primary-button compact" disabled={creating || !detailsReady} type="submit">
                 <Wand2 size={18} />
-                {creating ? "Creating" : "Create Room"}
+                {creating ? "Creating" : "Create Domain"}
               </button>
             </div>
           </form>
@@ -737,17 +1000,129 @@ function CreateRoomModal({
   );
 }
 
-/** Searchable module-code field with a few demo codes and free typing. */
-function ModuleCodeCombobox({ onChange, options, value }) {
-  const [open, setOpen] = useState(false);
-  const normalisedValue = value.trim().toLowerCase();
-  const filteredOptions = options
-    .filter((option) => option.toLowerCase().includes(normalisedValue))
-    .slice(0, 8);
+function normaliseCourseOption(option) {
+  if (typeof option === "string") {
+    const code = normaliseCourseCodeInput(option);
+    return isCourseCodeFormatValid(code) ? { code, title: "" } : null;
+  }
 
-  /** Selects one suggested module code and closes the option list. */
+  const code = normaliseCourseCodeInput(option?.moduleCode || option?.code || "");
+  if (!isCourseCodeFormatValid(code)) return null;
+
+  return {
+    code,
+    title: String(option?.title || option?.name || "").trim(),
+  };
+}
+
+function dedupeCourseOptions(options) {
+  const seen = new Set();
+  return options.filter((option) => {
+    if (!option || seen.has(option.code)) return false;
+    seen.add(option.code);
+    return true;
+  });
+}
+
+function rankCourseOption(option, query) {
+  if (!query) return 0;
+
+  const code = option.code.toUpperCase();
+  const title = option.title.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+
+  if (code === query) return 0;
+  if (code.startsWith(query)) return 1;
+  if (code.includes(query)) return 2;
+  if (title.startsWith(lowerQuery)) return 3;
+  if (title.includes(lowerQuery)) return 4;
+  return Number.POSITIVE_INFINITY;
+}
+
+/** Searchable NUS course-code field backed by NUSMods with a local fallback. */
+function CourseCodeCombobox({
+  academicTerm,
+  describedBy,
+  invalid = false,
+  onChange,
+  options,
+  value,
+}) {
+  const [open, setOpen] = useState(false);
+  const [nusmodsOptions, setNusmodsOptions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [fetchFailed, setFetchFailed] = useState(false);
+  const academicYear = getNusmodsAcademicYear(academicTerm);
+  const normalisedValue = normaliseCourseCodeInput(value);
+  const fallbackOptions = useMemo(
+    () => dedupeCourseOptions(options.map(normaliseCourseOption)),
+    [options],
+  );
+  const searchableOptions = nusmodsOptions.length ? nusmodsOptions : fetchFailed ? fallbackOptions : [];
+  const filteredOptions = useMemo(() => {
+    if (!normalisedValue) return [];
+
+    const rankedOptions = searchableOptions
+      .map((option) => ({
+        option,
+        score: rankCourseOption(option, normalisedValue),
+      }))
+      .filter(({ score }) => Number.isFinite(score))
+      .sort((left, right) => {
+        if (left.score !== right.score) return left.score - right.score;
+        if (left.option.code.length !== right.option.code.length) {
+          return left.option.code.length - right.option.code.length;
+        }
+        return left.option.code.localeCompare(right.option.code);
+      })
+      .map(({ option }) => option);
+
+    return rankedOptions.slice(0, 5);
+  }, [normalisedValue, searchableOptions]);
+
+  useEffect(() => {
+    if (!academicYear) return undefined;
+
+    const cachedOptions = nusmodsCourseCache.get(academicYear);
+    if (cachedOptions) {
+      setNusmodsOptions(cachedOptions);
+      setFetchFailed(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setLoading(true);
+    setFetchFailed(false);
+
+    fetch(`${NUSMODS_API_BASE}/${academicYear}/moduleList.json`, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Unable to load NUSMods courses.");
+        return response.json();
+      })
+      .then((payload) => {
+        const nextOptions = dedupeCourseOptions(
+          (Array.isArray(payload) ? payload : []).map(normaliseCourseOption),
+        );
+        nusmodsCourseCache.set(academicYear, nextOptions);
+        setNusmodsOptions(nextOptions);
+      })
+      .catch((error) => {
+        if (error.name === "AbortError") return;
+        setNusmodsOptions([]);
+        setFetchFailed(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [academicYear]);
+
+  /** Selects one suggested course code and closes the option list. */
   function chooseOption(option) {
-    onChange(option);
+    onChange(option.code);
     setOpen(false);
   }
 
@@ -758,10 +1133,12 @@ function ModuleCodeCombobox({ onChange, options, value }) {
     >
       <div className="input-with-icon">
         <input
+          aria-describedby={describedBy || undefined}
+          aria-invalid={invalid || undefined}
           autoComplete="off"
           name="moduleCode"
           onChange={(event) => {
-            onChange(event.target.value);
+            onChange(normaliseCourseCodeInput(event.target.value));
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
@@ -771,30 +1148,43 @@ function ModuleCodeCombobox({ onChange, options, value }) {
               chooseOption(filteredOptions[0]);
             }
           }}
-          placeholder=""
+          placeholder="e.g. CS2040S"
           value={value}
         />
         <Search size={17} />
       </div>
 
-      {open && filteredOptions.length ? (
-        <div className="custom-option-list" role="listbox">
-          {filteredOptions.map((option) => (
+      {open && normalisedValue ? (
+        <div className="custom-option-list course-option-list" role="listbox">
+          {filteredOptions.length ? filteredOptions.map((option) => (
             <button
-              key={option}
+              aria-selected={normalisedValue === option.code}
+              className={normalisedValue === option.code ? "active" : ""}
+              key={option.code}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => chooseOption(option)}
               role="option"
               type="button"
             >
-              {option}
+              <span className="course-option-code">{option.code}</span>
+              {option.title ? <span className="course-option-title">{option.title}</span> : null}
             </button>
-          ))}
+          )) : (
+            <p className="course-option-empty">
+              {loading
+                ? "Loading NUSMods courses..."
+                : fetchFailed
+                  ? "NUSMods suggestions are unavailable. You can still enter a valid code."
+                  : "No matching NUS courses found."}
+            </p>
+          )}
         </div>
       ) : null}
     </div>
   );
 }
+
+const ModuleCodeCombobox = CourseCodeCombobox;
 
 /** Small custom select used by the theme-library filters. */
 function SelectMenu({ label, onChange, options, value }) {
@@ -864,8 +1254,13 @@ function BackgroundSection({ activeId, items, onSelect, title }) {
 export {
   AcademicTermSelect,
   BackgroundSection,
+  CourseCodeLabel,
   CreateRoomModal,
+  CourseCodeCombobox,
   ExploreRoomModal,
+  FieldInfoLabel,
+  FieldTooltipTrigger,
+  JoinWorldDialog,
   ModuleCodeCombobox,
   RoomTile,
 };

@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Link as LinkIcon, MonitorUp, Users } from "lucide-react";
+import { Check, ChevronDown, Crown, Link as LinkIcon, MonitorUp, Users } from "lucide-react";
 import { normalizeProfileStatus } from "../profile/UserProfileControls.tsx";
 
 const ACTIVITY_LABELS = {
   buddy: "Intelligrate",
   calendar: "Coordidate",
   chat: "Convolution",
-  focus: "World",
+  focus: "Domain",
   meetings: "Limeets",
   resources: "Infilenite",
-  space: "World",
+  space: "Domain",
 };
 
 function getInitial(value) {
@@ -24,12 +24,17 @@ function avatarUrl(user) {
   return user?.avatarUrl || user?.avatar || user?.photoUrl || "";
 }
 
-function MiniAvatar({ user, active = true, showStatus = true, status = "offline" }) {
+function MiniAvatar({ user, active = true, owner = false, showStatus = true, status = "offline" }) {
   const displayName = getDisplayName(user);
   const statusClass = active ? normalizeProfileStatus(status) : "offline";
   return (
     <span className="limeets-sidebar-avatar" aria-hidden="true">
       {avatarUrl(user) ? <img src={avatarUrl(user)} alt="" /> : getInitial(displayName)}
+      {owner ? (
+        <span className="member-owner-crown">
+          <Crown size={12} fill="currentColor" />
+        </span>
+      ) : null}
       {showStatus ? <i className={statusClass} /> : null}
     </span>
   );
@@ -156,6 +161,7 @@ export function MeetingSidebarPanel({
   currentProfileStatus,
   inviteCopied,
   meeting,
+  onOpenMeeting,
   room,
   roomActivityMembers = [],
   user,
@@ -170,7 +176,7 @@ export function MeetingSidebarPanel({
   const hasMeetings = meetingSummaries.length > 0;
 
   return (
-    <section className="limeets-meeting-panel info" aria-label="World meeting information">
+    <section className="limeets-meeting-panel info" aria-label="Domain meeting information">
       <button
         className="room-invite-button"
         disabled={!room?.inviteCode}
@@ -190,20 +196,25 @@ export function MeetingSidebarPanel({
       {hasMeetings ? (
         <section className="limeets-sidebar-section">
           <button
+            aria-expanded={limeetsOpen}
             className="limeets-sidebar-section-heading toggle"
             onClick={() => setLimeetsOpen((open) => !open)}
             type="button"
           >
+            <ChevronDown size={14} />
             <span>Limeets</span>
-            <span>
-              <MonitorUp size={15} />
-              {limeetsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </span>
+            <MonitorUp size={15} />
           </button>
           {limeetsOpen ? (
             <div className="limeets-meeting-summary-list">
               {meetingSummaries.map((summary) => (
-                <article className="limeets-meeting-summary" key={summary.areaId}>
+                <button
+                  aria-label={`Open ${summary.name} in Limeets`}
+                  className="limeets-meeting-summary"
+                  key={summary.areaId}
+                  onClick={() => onOpenMeeting?.(summary)}
+                  type="button"
+                >
                   <strong>{summary.name}</strong>
                   <div className="limeets-meeting-avatar-stack" aria-label={`${summary.name} members`}>
                     {summary.participants.slice(0, 5).map((participant) => (
@@ -214,7 +225,7 @@ export function MeetingSidebarPanel({
                       />
                     ))}
                   </div>
-                </article>
+                </button>
               ))}
             </div>
           ) : null}
@@ -223,15 +234,14 @@ export function MeetingSidebarPanel({
 
       <section className="limeets-sidebar-section">
         <button
+          aria-expanded={membersOpen}
           className="limeets-sidebar-section-heading toggle"
           onClick={() => setMembersOpen((open) => !open)}
           type="button"
         >
+          <ChevronDown size={14} />
           <span>Members ({members.length})</span>
-          <span>
-            <Users size={15} />
-            {membersOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </span>
+          <Users size={15} />
         </button>
         {membersOpen ? (
           <div className="limeets-online-list">
@@ -240,18 +250,22 @@ export function MeetingSidebarPanel({
                 key={member.userId}
                 className={`limeets-online-member ${member.online ? "online" : "offline"}`}
               >
-                <MiniAvatar active={member.online} status={member.profileStatus} user={member.user} />
+                <MiniAvatar
+                  active={member.online}
+                  owner={member.owner}
+                  status={member.profileStatus}
+                  user={member.user}
+                />
                 <div>
                   <strong>{getDisplayName(member.user)}</strong>
                   <span>
                     {member.online
                       ? member.inMeeting
                         ? `In ${member.meetingAreaName || "Limeets"}`
-                        : `In ${ACTIVITY_LABELS[member.tabId] || "World"}`
+                        : `In ${ACTIVITY_LABELS[member.tabId] || "Domain"}`
                       : "Offline"}
                   </span>
                 </div>
-                {member.owner ? <small>Owner</small> : null}
               </article>
             ))}
           </div>

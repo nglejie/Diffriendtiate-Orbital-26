@@ -102,8 +102,8 @@ describe("security checks", () => {
   });
 
   // Sends malformed JSON directly with fetch to verify the Express error handler
-  // returns a generic payload. Stack traces, parser names, and node internals
-  // should not leak to clients.
+  // returns a generic client-error payload. Stack traces, parser names, and node
+  // internals should not leak to clients.
   it("rejects malformed JSON without leaking stack traces", async () => {
     const response = await fetch(`${app.baseUrl}/api/auth/login`, {
       method: "POST",
@@ -112,9 +112,9 @@ describe("security checks", () => {
     });
     const payload = await response.json();
 
-    expect(response.status).toBe(500);
-    expect(payload).toEqual({ message: "Something went wrong." });
-    expect(JSON.stringify(payload)).not.toMatch(/stack|SyntaxError|node_modules/i);
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({ message: "Malformed JSON request." });
+    expect(JSON.stringify(payload)).not.toMatch(/stack|SyntaxError|node_modules|Unexpected token/i);
   });
 
   // Confirms membership alone does not grant room-management powers. Members

@@ -9,6 +9,15 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
+class IntersectionObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query) => ({
@@ -28,6 +37,11 @@ Object.defineProperty(window, "ResizeObserver", {
   value: ResizeObserverMock,
 });
 
+Object.defineProperty(window, "IntersectionObserver", {
+  writable: true,
+  value: IntersectionObserverMock,
+});
+
 Object.defineProperty(window.URL, "createObjectURL", {
   writable: true,
   value: () => "blob:diffriendtiate-test",
@@ -39,3 +53,24 @@ Object.defineProperty(window.URL, "revokeObjectURL", {
 });
 
 window.scrollTo = () => {};
+
+Object.defineProperty(document, "elementFromPoint", {
+  writable: true,
+  value: () => document.querySelector(".ProseMirror") || document.body,
+});
+
+const emptyClientRects = {
+  length: 0,
+  item: () => null,
+  [Symbol.iterator]: function* iterator() {},
+};
+
+Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+  writable: true,
+  value: () => new DOMRect(0, 0, 0, 0),
+});
+
+Object.defineProperty(Range.prototype, "getClientRects", {
+  writable: true,
+  value: () => emptyClientRects,
+});

@@ -19,7 +19,7 @@ const room = {
 };
 
 describe("MeetingSidebarPanel", () => {
-  it("shows invite, ongoing named meetings, and all room members", () => {
+  it("shows invite, ongoing named meetings, and all domain members", () => {
     // Limeets sidebar should be useful outside the current meeting: it shows all
     // ongoing meeting areas plus all members, including offline members.
     render(
@@ -48,6 +48,13 @@ describe("MeetingSidebarPanel", () => {
     expect(screen.getByText("Fleming")).toBeInTheDocument();
     expect(screen.getByText("Durin")).toBeInTheDocument();
     expect(screen.getByText("Ellis")).toBeInTheDocument();
+
+    const membersToggle = screen.getByRole("button", { name: /members/i });
+    expect(Array.from(membersToggle.children).map((child) => child.tagName.toLowerCase())).toEqual([
+      "svg",
+      "span",
+      "svg",
+    ]);
   });
 
   it("does not duplicate profile status text beside member names", () => {
@@ -86,7 +93,35 @@ describe("MeetingSidebarPanel", () => {
     const durinRow = screen.getByText("Durin").closest("article");
     expect(durinRow).toHaveClass("offline");
     expect(within(durinRow!).getByText("Offline")).toBeInTheDocument();
-    expect(within(durinRow!).queryByText("In World")).not.toBeInTheDocument();
+    expect(within(durinRow!).queryByText("In Domain")).not.toBeInTheDocument();
+  });
+
+  it("opens Limeets when an active meeting area is selected", () => {
+    const onOpenMeeting = vi.fn();
+
+    render(
+      <MeetingSidebarPanel
+        copyInviteLink={vi.fn()}
+        currentProfileStatus="online"
+        inviteCopied={false}
+        meeting={{
+          activeAreaId: "area-1",
+          isActive: true,
+          meetings: [{ areaId: "area-1", users: [{ user: owner, userId: "owner" }] }],
+          participants: [{ user: owner, userId: "owner" }],
+        }}
+        onOpenMeeting={onOpenMeeting}
+        room={room}
+        roomActivityMembers={[]}
+        user={owner}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /open nautical huddle in limeets/i }));
+
+    expect(onOpenMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ areaId: "area-1", name: "Nautical Huddle" }),
+    );
   });
 
   it("collapses the Limeets and Members sections independently", () => {
@@ -106,7 +141,7 @@ describe("MeetingSidebarPanel", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /limeets/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^limeets$/i }));
     expect(screen.queryByText("Nautical Huddle")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /members/i }));

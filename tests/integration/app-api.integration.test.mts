@@ -7,6 +7,7 @@ import {
   createRoom,
   expectStatus,
   joinRoom,
+  makeUser,
   registerUser,
   uploadTextResource,
 } from "../helpers/apiClient.mts";
@@ -151,6 +152,197 @@ describe("app API integration", () => {
     expect(list.payload.rooms.some((item) => item.id === room.id)).toBe(true);
   });
 
+  // New password accounts must verify their email before receiving an app
+  // session. Test mode exposes the verification token instead of depending on
+  // SMTP credentials.
+  it("requires email verification before password login", async () => {
+    const verificationUser = makeUser("verify");
+    const registration = await apiRequest(app.baseUrl, "/api/auth/register", {
+      method: "POST",
+      body: verificationUser,
+    });
+    expect(registration.status).toBe(201);
+    expect(registration.payload.emailVerificationRequired).toBe(true);
+    expect(registration.payload.verificationToken).toBeTruthy();
+
+    const blockedLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: verificationUser.email, password: verificationUser.password },
+    });
+    expect(blockedLogin.status).toBe(403);
+    expect(blockedLogin.payload.emailVerificationRequired).toBe(true);
+    expect(blockedLogin.payload.verificationToken).toBeTruthy();
+
+    const verification = await apiRequest(app.baseUrl, "/api/auth/email-verification/confirm", {
+      method: "POST",
+      body: { token: blockedLogin.payload.verificationToken },
+    });
+    expect(verification.status).toBe(200);
+    expect(verification.payload.token).toBeTruthy();
+    expect(verification.payload.user.emailVerified).toBe(true);
+
+    const login = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: verificationUser.email, password: verificationUser.password },
+    });
+    expect(login.status).toBe(200);
+  });
+
+  // Password resets store only a token hash and should let a user replace their
+  // password without an active session. Test mode exposes the raw token so the
+  // flow can be verified without an email provider.
+  it("requests and confirms a password reset", async () => {
+    const resetUser = await registerUser(app.baseUrl, { name: "Reset User" });
+    const request = await apiRequest(app.baseUrl, "/api/auth/password-reset/request", {
+      method: "POST",
+      body: { email: resetUser.email },
+    });
+    expect(request.status).toBe(200);
+    expect(request.payload.resetToken).toBeTruthy();
+    expect(request.payload.resetLink).toContain("#/reset-password?token=");
+
+    const confirm = await apiRequest(app.baseUrl, "/api/auth/password-reset/confirm", {
+      method: "POST",
+      body: {
+        password: "new-correct-horse-123",
+        token: request.payload.resetToken,
+      },
+    });
+    expect(confirm.status).toBe(200);
+    expect(confirm.payload.message).toMatch(/password updated/i);
+
+    const oldPassword = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: resetUser.email, password: resetUser.password },
+    });
+    expect(oldPassword.status).toBe(401);
+
+    const newPassword = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: resetUser.email, password: "new-correct-horse-123" },
+    });
+    expect(newPassword.status).toBe(200);
+    expect(newPassword.payload.user.email).toBe(resetUser.email);
+  });
+
+  it("updates account information, changes password, and deletes the account", async () => {
+    const accountUser = await registerUser(app.baseUrl, { name: "Account Settings User" });
+    const nextEmail = `updated-${accountUser.email}`;
+
+    const accountUpdate = await apiRequest(app.baseUrl, "/api/auth/account", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        name: "Updated Account User",
+      },
+    });
+    expect(accountUpdate.status).toBe(200);
+    expect(accountUpdate.payload.user).toMatchObject({
+      email: accountUser.email,
+      hasPassword: true,
+      name: "Updated Account User",
+    });
+
+    const emailChange = await apiRequest(app.baseUrl, "/api/auth/account", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        email: nextEmail,
+        name: "Updated Account User",
+      },
+    });
+    expect(emailChange.status).toBe(501);
+
+    const wrongCurrentPassword = await apiRequest(app.baseUrl, "/api/auth/password", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        currentPassword: "wrong-password",
+        newPassword: "new-account-password-123",
+      },
+    });
+    expect(wrongCurrentPassword.status).toBe(403);
+
+    const passwordUpdate = await apiRequest(app.baseUrl, "/api/auth/password", {
+      method: "PATCH",
+      token: accountUser.token,
+      body: {
+        currentPassword: accountUser.password,
+        newPassword: "new-account-password-123",
+      },
+    });
+    expect(passwordUpdate.status).toBe(200);
+    expect(passwordUpdate.payload.user.hasPassword).toBe(true);
+
+    const oldPasswordLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: accountUser.email, password: accountUser.password },
+    });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: { email: accountUser.email, password: "new-account-password-123" },
+    });
+    expect(newPasswordLogin.status).toBe(200);
+
+    const deleteAccount = await apiRequest(app.baseUrl, "/api/auth/me", {
+      method: "DELETE",
+      token: newPasswordLogin.payload.token,
+    });
+    expect(deleteAccount.status).toBe(200);
+
+    const deletedMe = await apiRequest(app.baseUrl, "/api/auth/me", {
+      token: newPasswordLogin.payload.token,
+    });
+    expect(deletedMe.status).toBe(401);
+  });
+
+  // Account deletion must not erase an owned domain if other members can keep
+  // using it. Until admin roles exist, member order acts as the tenure signal.
+  it("transfers owned domains to the longest-tenured remaining member when deleting an account", async () => {
+    const deletingOwner = await registerUser(app.baseUrl, { name: "Deleting Domain Owner" });
+    const nextOwner = await registerUser(app.baseUrl, { name: "Next Domain Owner" });
+    const transferredRoom = await createRoom(app.baseUrl, deletingOwner.token, {
+      name: "Transferable Domain",
+      moduleCode: "CS2103T",
+    });
+    await joinRoom(app.baseUrl, nextOwner.token, transferredRoom.id);
+
+    const deleteOwner = await apiRequest(app.baseUrl, "/api/auth/me", {
+      method: "DELETE",
+      token: deletingOwner.token,
+    });
+    expect(deleteOwner.status).toBe(200);
+
+    const remainingRoom = await apiRequest(app.baseUrl, `/api/rooms/${transferredRoom.id}`, {
+      token: nextOwner.token,
+    });
+    expect(remainingRoom.status).toBe(200);
+    expect(remainingRoom.payload.room).toMatchObject({
+      id: transferredRoom.id,
+      isOwner: true,
+      memberCount: 1,
+      owner: {
+        id: nextOwner.user.id,
+        name: "Next Domain Owner",
+      },
+    });
+    expect(remainingRoom.payload.room.members.map((member) => member.id)).toEqual([nextOwner.user.id]);
+  });
+
+  // Provider auth is config-gated. A missing OAuth client should guide the
+  // browser back to the app's auth callback route with a readable error.
+  it("redirects unconfigured OAuth providers back to the auth screen", async () => {
+    const response = await fetch(`${app.baseUrl}/api/auth/oauth/google`, { redirect: "manual" });
+    const location = response.headers.get("location") || "";
+    const callbackParams = new URLSearchParams(new URL(location).hash.replace(/^#\/auth\/callback\?/, ""));
+
+    expect(response.status).toBe(302);
+    expect(location).toContain("#/auth/callback?");
+    expect(callbackParams.get("error")).toBe("Google sign-in is not configured yet.");
+  });
+
   // Covers common malformed auth and room-creation edge cases that otherwise
   // tend to regress silently: duplicate accounts, weak passwords, missing room
   // identifiers, and private rooms without passwords should all fail cleanly.
@@ -226,6 +418,169 @@ describe("app API integration", () => {
       description: "Updated through integration test",
       isOwner: true,
       name: "API Integration Room Updated",
+    });
+  });
+
+  // Open Link area settings must survive server normalization; otherwise the
+  // editor shows controls that silently reset after editing or saving.
+  it("preserves working Open Link area options when saving world config", async () => {
+    const areaWorld = await createRoom(app.baseUrl, owner.token, {
+      name: "Open Link Area World",
+      moduleCode: "CS2100",
+    });
+    const worldConfig = {
+      enabled: true,
+      version: 2,
+      privateAreas: [
+        {
+          id: "area-link",
+          name: "Link Area",
+          bounds: { col: 3, row: 4, width: 2, height: 2 },
+          effects: { openLink: true },
+          linkUrl: "https://example.edu",
+          openLinkInteraction: "enter",
+          openLinkNewTab: true,
+          openLinkAllowApi: true,
+          openLinkClosable: false,
+          openLinkHideUrl: true,
+          openLinkWidth: 75,
+        },
+      ],
+    };
+
+    const saved = await apiRequest(app.baseUrl, `/api/rooms/${areaWorld.id}`, {
+      method: "PATCH",
+      token: owner.token,
+      body: {
+        ...areaWorld,
+        worldConfig,
+      },
+    });
+    expect(saved.status).toBe(200);
+
+    const loaded = await apiRequest(app.baseUrl, `/api/rooms/${areaWorld.id}`, {
+      token: owner.token,
+    });
+    expect(loaded.status).toBe(200);
+    expect(loaded.payload.room.worldConfig.privateAreas[0]).toMatchObject({
+      linkUrl: "https://example.edu",
+      openLinkInteraction: "enter",
+      openLinkNewTab: true,
+    });
+    expect(loaded.payload.room.worldConfig.privateAreas[0]).not.toHaveProperty("openLinkAllowApi");
+    expect(loaded.payload.room.worldConfig.privateAreas[0]).not.toHaveProperty("openLinkClosable");
+    expect(loaded.payload.room.worldConfig.privateAreas[0]).not.toHaveProperty("openLinkHideUrl");
+    expect(loaded.payload.room.worldConfig.privateAreas[0]).not.toHaveProperty("openLinkWidth");
+  });
+
+  // Leaving a world must be a real membership mutation, not a client-only hide.
+  // This protects the non-owner sidebar action and ensures member-only APIs are
+  // immediately blocked after the user leaves.
+  it("lets non-owner members leave a world and blocks owners from leaving theirs", async () => {
+    const leavingMember = await registerUser(app.baseUrl, { name: "Leaving Member" });
+    const leaveRoom = await createRoom(app.baseUrl, owner.token, {
+      name: "Leave World API",
+      moduleCode: "CS1231S",
+    });
+    await joinRoom(app.baseUrl, leavingMember.token, leaveRoom.id);
+
+    const leave = await apiRequest(app.baseUrl, `/api/rooms/${leaveRoom.id}/leave`, {
+      method: "POST",
+      token: leavingMember.token,
+    });
+    expect(leave.status).toBe(200);
+    expect(leave.payload.room).toMatchObject({
+      id: leaveRoom.id,
+      isMember: false,
+      isOwner: false,
+      memberCount: 1,
+    });
+
+    const memberView = await apiRequest(app.baseUrl, `/api/rooms/${leaveRoom.id}`, {
+      token: leavingMember.token,
+    });
+    expect(memberView.status).toBe(403);
+    expect(memberView.payload.message).toMatch(/invite link/i);
+
+    const blockedMessages = await apiRequest(app.baseUrl, `/api/rooms/${leaveRoom.id}/messages`, {
+      token: leavingMember.token,
+    });
+    expect(blockedMessages.status).toBe(403);
+
+    const ownerLeave = await apiRequest(app.baseUrl, `/api/rooms/${leaveRoom.id}/leave`, {
+      method: "POST",
+      token: owner.token,
+    });
+    expect(ownerLeave.status).toBe(400);
+    expect(ownerLeave.payload.message).toMatch(/owners cannot leave/i);
+  });
+
+  // Public worlds can appear in Explore Worlds and can be joined through the
+  // join/invite flows, but direct /rooms/:id access must not expose the world
+  // shell to a non-member who pasted the route URL.
+  it("blocks direct room fetches for non-members while keeping discover and invite joins available", async () => {
+    const outsider = await registerUser(app.baseUrl, { name: "Direct Link Outsider" });
+    const publicRoom = await createRoom(app.baseUrl, owner.token, {
+      name: "Direct Link Public World",
+      moduleCode: "CS2100",
+      visibility: "public",
+    });
+    const privateRoom = await createRoom(app.baseUrl, owner.token, {
+      name: "Invite Only World",
+      moduleCode: "CS1231S",
+      password: "private-pass",
+      visibility: "private",
+    });
+
+    const discover = await apiRequest(app.baseUrl, "/api/rooms", {
+      token: outsider.token,
+    });
+    expect(discover.status).toBe(200);
+    expect(discover.payload.rooms.map((room) => room.id)).toContain(publicRoom.id);
+    expect(discover.payload.rooms.map((room) => room.id)).not.toContain(privateRoom.id);
+
+    const directFetch = await apiRequest(app.baseUrl, `/api/rooms/${publicRoom.id}`, {
+      token: outsider.token,
+    });
+    expect(directFetch.status).toBe(403);
+    expect(directFetch.payload.message).toMatch(/invite link/i);
+
+    const privateDirectFetch = await apiRequest(app.baseUrl, `/api/rooms/${privateRoom.id}`, {
+      token: outsider.token,
+    });
+    expect(privateDirectFetch.status).toBe(403);
+    expect(privateDirectFetch.payload.message).toMatch(/invite link/i);
+
+    const explicitJoin = await apiRequest(app.baseUrl, `/api/rooms/${publicRoom.id}/join`, {
+      method: "POST",
+      token: outsider.token,
+    });
+    expect(explicitJoin.status).toBe(200);
+    expect(explicitJoin.payload.room).toMatchObject({
+      id: publicRoom.id,
+      isMember: true,
+    });
+
+    const privateInviteWithoutPassword = await apiRequest(
+      app.baseUrl,
+      `/api/invites/${privateRoom.inviteCode}/join`,
+      {
+        method: "POST",
+        token: outsider.token,
+      },
+    );
+    expect(privateInviteWithoutPassword.status).toBe(403);
+    expect(privateInviteWithoutPassword.payload.message).toMatch(/password/i);
+
+    const privateInviteJoin = await apiRequest(app.baseUrl, `/api/invites/${privateRoom.inviteCode}/join`, {
+      method: "POST",
+      token: outsider.token,
+      body: { password: "private-pass" },
+    });
+    expect(privateInviteJoin.status).toBe(200);
+    expect(privateInviteJoin.payload.room).toMatchObject({
+      id: privateRoom.id,
+      isMember: true,
     });
   });
 
@@ -630,7 +985,7 @@ describe("app API integration", () => {
 
   // Covers the ordinary chat write/read loop for a non-owner member. The message
   // should be stored in the requested channel and returned with sender metadata
-  // so the UI can render the display name and grouping correctly.
+  // so the UI can render the username and grouping correctly.
   it("stores and retrieves channel messages with sender metadata", async () => {
     const createChannel = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/channels`, {
       method: "POST",
@@ -767,6 +1122,15 @@ describe("app API integration", () => {
       comment: "Added this to the recap checklist.",
     });
 
+    const deleteReply = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/${channelName}/annotations/${annotationId}/replies/${reply.payload.reply.id}`,
+      { method: "DELETE", token: owner.token },
+    );
+    expect(deleteReply.status).toBe(200);
+    expect(deleteReply.payload.id).toBe(reply.payload.reply.id);
+    expect(deleteReply.payload.annotation.replies).toHaveLength(0);
+
     const listed = await apiRequest(
       app.baseUrl,
       `/api/rooms/${room.id}/channels/${channelName}/annotations`,
@@ -782,6 +1146,47 @@ describe("app API integration", () => {
     );
     expect(deleted.status).toBe(200);
     expect(deleted.payload).toEqual({ id: annotationId, channel: channelName });
+  });
+
+  it("deletes annotation replies without deleting the parent thread", async () => {
+    const created = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/general/annotations`,
+      {
+        method: "POST",
+        token: member.token,
+        body: {
+          annotationType: "question",
+          comment: "Can we discuss this annotation?",
+          content: { text: "discussion anchor" },
+          position: { pageNumber: 1 },
+        },
+      },
+    );
+    expect(created.status).toBe(201);
+
+    const annotationId = created.payload.annotation.id;
+    const reply = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/general/annotations/${annotationId}/replies`,
+      {
+        method: "POST",
+        token: owner.token,
+        body: { comment: "Yes, this should be removable." },
+      },
+    );
+    expect(reply.status).toBe(201);
+    expect(reply.payload.annotation.replies).toHaveLength(1);
+
+    const deletedReply = await apiRequest(
+      app.baseUrl,
+      `/api/rooms/${room.id}/channels/general/annotations/${annotationId}/replies/${reply.payload.reply.id}`,
+      { method: "DELETE", token: owner.token },
+    );
+    expect(deletedReply.status).toBe(200);
+    expect(deletedReply.payload).toMatchObject({ id: reply.payload.reply.id });
+    expect(deletedReply.payload.annotation).toMatchObject({ id: annotationId, comment: "Can we discuss this annotation?" });
+    expect(deletedReply.payload.annotation.replies).toHaveLength(0);
   });
 
   // The Socket.IO annotation events mirror the REST behavior used for initial
@@ -913,6 +1318,60 @@ describe("app API integration", () => {
     }
   });
 
+  // A user can only be actively connected from one browser instance globally.
+  // Opening the same account in another world should replace the older socket,
+  // clear that user's old room activity, and leave the newer world socket alive.
+  it("replaces a user's older room socket across all worlds", async () => {
+    const secondRoom = await createRoom(app.baseUrl, owner.token, {
+      name: "Second Active Instance World",
+      moduleCode: "CS2100",
+    });
+    await joinRoom(app.baseUrl, member.token, secondRoom.id);
+
+    const observerSocket = await connectRoomSocket(app.baseUrl, member.token, room.id);
+    const ownerOldSocket = await connectRoomSocket(app.baseUrl, owner.token, room.id);
+
+    try {
+      const initialState = waitForSocketEvent(observerSocket, "room:activity:state");
+      const initialAck = await emitWithAck(ownerOldSocket, "room:activity:set", {
+        profileStatus: "online",
+        roomId: room.id,
+        tabId: "space",
+      });
+      expect(initialAck).toMatchObject({ ok: true });
+      const initialPayload = await initialState;
+      expect(initialPayload.members.map((entry) => entry.userId)).toContain(owner.user.id);
+
+      const replacedEvent = waitForSocketEvent(ownerOldSocket, "session:replaced");
+      const oldDisconnect = waitForSocketEvent(ownerOldSocket, "disconnect");
+      const clearedState = waitForSocketEvent(observerSocket, "room:activity:state");
+      const ownerNewSocket = await connectRoomSocket(app.baseUrl, owner.token, secondRoom.id);
+
+      try {
+        await expect(replacedEvent).resolves.toMatchObject({
+          message: expect.stringMatching(/another tab or window/i),
+        });
+        await expect(oldDisconnect).resolves.toBe("io server disconnect");
+
+        const clearedPayload = await clearedState;
+        expect(clearedPayload.members.map((entry) => entry.userId)).not.toContain(owner.user.id);
+
+        const newAck = await emitWithAck(ownerNewSocket, "room:activity:set", {
+          profileStatus: "online",
+          roomId: secondRoom.id,
+          tabId: "chat",
+        });
+        expect(newAck).toMatchObject({ ok: true });
+        expect(ownerNewSocket.connected).toBe(true);
+      } finally {
+        ownerNewSocket.disconnect();
+      }
+    } finally {
+      observerSocket.disconnect();
+      ownerOldSocket.disconnect();
+    }
+  });
+
   // Validates the room resource lifecycle used by the Resources tab. It uploads
   // a file, proves duplicate content is deduplicated by hash, lists it as a
   // member, soft-deletes it, restores it, and finally permanently deletes it.
@@ -962,6 +1421,44 @@ describe("app API integration", () => {
     expect(listed.status).toBe(200);
     expect(listed.payload.resources.map((resource) => resource.id)).toContain(upload.resource.id);
 
+    const edited = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
+      method: "PATCH",
+      token: owner.token,
+      body: {
+        title: "Graph Traversal Reference.txt",
+        folder: "References/Graphs",
+        metadata: {
+          resourceType: "Reference",
+          topic: "graph traversal",
+          tags: ["graphs", "bfs"],
+        },
+      },
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.payload.resource).toMatchObject({
+      folder: "References/Graphs",
+      title: "Graph Traversal Reference.txt",
+      metadata: {
+        resourceType: "Reference",
+        topic: "graph traversal",
+      },
+    });
+    expect(edited.payload.resource.updatedAt).toBeTruthy();
+
+    const movedFolder = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources/folders`, {
+      method: "PATCH",
+      token: owner.token,
+      body: {
+        from: "References",
+        to: "Archive",
+      },
+    });
+    expect(movedFolder.status).toBe(200);
+    expect(movedFolder.payload.resources[0]).toMatchObject({
+      id: upload.resource.id,
+      folder: "Archive/Graphs",
+    });
+
     const deleted = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
       method: "DELETE",
       token: owner.token,
@@ -973,6 +1470,8 @@ describe("app API integration", () => {
     });
     expect(deletedOnly.status).toBe(200);
     expect(deletedOnly.payload.resources[0].deletedAt).toBeTruthy();
+    expect(deletedOnly.payload.resources[0].originalFolder).toBe("Archive/Graphs");
+    expect(deletedOnly.payload.resources[0].deletedBy).toMatchObject({ name: "Owner Fleming" });
 
     const restored = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}/restore`, {
       method: "PATCH",
@@ -980,6 +1479,7 @@ describe("app API integration", () => {
     });
     expect(restored.status).toBe(200);
     expect(restored.payload.resource.deletedAt).toBe("");
+    expect(restored.payload.resource.deletedBy).toBeNull();
 
     await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
       method: "DELETE",
@@ -1018,5 +1518,226 @@ describe("app API integration", () => {
     });
     expect(stillVisible.status).toBe(200);
     expect(stillVisible.payload.resources.map((item) => item.id)).toContain(upload.resource.id);
+  });
+
+  // Canvas files are sync-owned. Members can still read/download them, but
+  // normal resource APIs must not let anyone edit, move, delete, or upload into
+  // the Canvas folder because the next sync is the source of truth.
+  it("keeps Canvas-synced resources read-only while allowing file access", async () => {
+    const upload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "Canvas Lecture.txt",
+      "Canvas managed content",
+      "Lecture Notes",
+    );
+    const dbPath = path.join(app.dataDir, "db.json");
+    const db = JSON.parse(await fs.readFile(dbPath, "utf8"));
+    const savedResource = db.resources.find((item) => item.id === upload.resource.id);
+    savedResource.folder = "Canvas/Course Files";
+    savedResource.metadata = {
+      ...(savedResource.metadata || {}),
+      source: "canvas-file",
+    };
+    await fs.writeFile(dbPath, JSON.stringify(db, null, 2));
+
+    const fileRead = await fetch(`${app.baseUrl}/api/resources/${upload.resource.id}/file`, {
+      headers: { Authorization: `Bearer ${member.token}` },
+    });
+    expect(fileRead.status).toBe(200);
+    expect(await fileRead.text()).toBe("Canvas managed content");
+
+    const edit = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
+      method: "PATCH",
+      token: owner.token,
+      body: { title: "Edited Canvas Lecture.txt", folder: "Archive" },
+    });
+    expect(edit.status).toBe(403);
+    expect(edit.payload.message).toMatch(/canvas resources/i);
+
+    const softDelete = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
+      method: "DELETE",
+      token: owner.token,
+    });
+    expect(softDelete.status).toBe(403);
+    expect(softDelete.payload.message).toMatch(/canvas resources/i);
+
+    const permanentDelete = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}/permanent`, {
+      method: "DELETE",
+      token: owner.token,
+    });
+    expect(permanentDelete.status).toBe(403);
+    expect(permanentDelete.payload.message).toMatch(/canvas resources/i);
+
+    const moveCanvasFolder = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources/folders`, {
+      method: "PATCH",
+      token: owner.token,
+      body: { from: "Canvas", to: "Archive" },
+    });
+    expect(moveCanvasFolder.status).toBe(403);
+    expect(moveCanvasFolder.payload.message).toMatch(/canvas folders/i);
+
+    const normalUpload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "Normal Resource.txt",
+      "Normal content",
+      "Reference",
+    );
+    const moveIntoCanvas = await apiRequest(app.baseUrl, `/api/resources/${normalUpload.resource.id}`, {
+      method: "PATCH",
+      token: owner.token,
+      body: { folder: "Canvas/Manual" },
+    });
+    expect(moveIntoCanvas.status).toBe(403);
+    expect(moveIntoCanvas.payload.message).toMatch(/canvas resources/i);
+
+    const urlIntoCanvas = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources/url`, {
+      method: "POST",
+      token: owner.token,
+      body: {
+        title: "Canvas URL",
+        url: "https://example.com/canvas",
+        folder: "Canvas/Links",
+      },
+    });
+    expect(urlIntoCanvas.status).toBe(403);
+    expect(urlIntoCanvas.payload.message).toMatch(/canvas folders/i);
+
+    const uploadForm = new FormData();
+    uploadForm.append("file", new Blob(["Manual Canvas upload"], { type: "text/plain" }), "ManualCanvas.txt");
+    uploadForm.append("folder", "Canvas/Uploads");
+    const fileIntoCanvas = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources/file`, {
+      method: "POST",
+      token: owner.token,
+      body: uploadForm,
+    });
+    expect(fileIntoCanvas.status).toBe(403);
+    expect(fileIntoCanvas.payload.message).toMatch(/canvas folders/i);
+
+    const sameBytesUpload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "Canvas Lecture Copy.txt",
+      "Canvas managed content",
+      "Reference",
+    );
+    expect(sameBytesUpload.resource.id).not.toBe(upload.resource.id);
+    expect(sameBytesUpload.resource).toMatchObject({
+      folder: "Reference",
+      title: "Canvas Lecture Copy.txt",
+    });
+
+    const listed = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources`, {
+      token: owner.token,
+    });
+    expect(listed.status).toBe(200);
+    const canvasResource = listed.payload.resources.find((item) => item.id === upload.resource.id);
+    expect(canvasResource).toMatchObject({
+      deletedAt: "",
+      folder: "Canvas/Course Files",
+      title: "Canvas Lecture.txt",
+    });
+  });
+
+  // Resource changes should be visible to other members without a manual reload.
+  // This protects the Infilenite real-time update path used by uploads, edits,
+  // Canvas syncs, deletes, and conversion status changes.
+  it("broadcasts resource create and update events to room members", async () => {
+    const socket = await connectRoomSocket(app.baseUrl, member.token, room.id);
+    try {
+      const newEvent = waitForSocketEvent(socket, "resource:new");
+      const upload = await uploadTextResource(
+        app.baseUrl,
+        owner.token,
+        room.id,
+        "Realtime Resource.txt",
+        "Broadcast me",
+        "Reference",
+      );
+      await expect(newEvent).resolves.toMatchObject({
+        roomId: room.id,
+        resource: { id: upload.resource.id, title: "Realtime Resource.txt" },
+      });
+
+      const updateEvent = waitForSocketEvent(socket, "resource:updated");
+      const updated = await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
+        method: "PATCH",
+        token: owner.token,
+        body: { folder: "Realtime/Updated" },
+      });
+      expect(updated.status).toBe(200);
+      await expect(updateEvent).resolves.toMatchObject({
+        roomId: room.id,
+        resource: { id: upload.resource.id, folder: "Realtime/Updated" },
+      });
+    } finally {
+      socket.disconnect();
+    }
+  });
+
+  // Upload failures should explain what went wrong. Members should not have to
+  // infer "bad file type" or "too large" from a generic app error.
+  it("returns clear resource upload errors for blocked file types and oversized files", async () => {
+    const executableForm = new FormData();
+    executableForm.append("file", new Blob(["MZ"], { type: "application/octet-stream" }), "malware.exe");
+    const executable = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources/file`, {
+      method: "POST",
+      token: owner.token,
+      body: executableForm,
+    });
+    expect(executable.status).toBe(400);
+    expect(executable.payload.message).toMatch(/executable|script|\.exe/i);
+
+    const largeForm = new FormData();
+    largeForm.append(
+      "file",
+      new Blob([new Uint8Array(13 * 1024 * 1024)], { type: "application/pdf" }),
+      "too-large.pdf",
+    );
+    const large = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources/file`, {
+      method: "POST",
+      token: owner.token,
+      body: largeForm,
+    });
+    expect(large.status).toBe(413);
+    expect(large.payload.message).toMatch(/too large|12 MB/i);
+  });
+
+  // Deleted resources are a temporary trash area, not permanent storage. This
+  // simulates a file that has been in Deleted Files for more than 30 days and
+  // proves the next resource load purges it automatically.
+  it("purges resources that remain deleted beyond the retention window", async () => {
+    const upload = await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "Old Deleted Resource.txt",
+      "This should expire from deleted files.",
+      "Reference",
+    );
+    await expectStatus(
+      await apiRequest(app.baseUrl, `/api/resources/${upload.resource.id}`, {
+        method: "DELETE",
+        token: owner.token,
+      }),
+      204,
+      "soft delete expiring resource",
+    );
+
+    const dbPath = path.join(app.dataDir, "db.json");
+    const db = JSON.parse(await fs.readFile(dbPath, "utf8"));
+    const savedResource = db.resources.find((item) => item.id === upload.resource.id);
+    savedResource.deletedAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    await fs.writeFile(dbPath, JSON.stringify(db, null, 2));
+
+    const deletedOnly = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/resources?deleted=true`, {
+      token: owner.token,
+    });
+    expect(deletedOnly.status).toBe(200);
+    expect(deletedOnly.payload.resources.map((item) => item.id)).not.toContain(upload.resource.id);
   });
 });

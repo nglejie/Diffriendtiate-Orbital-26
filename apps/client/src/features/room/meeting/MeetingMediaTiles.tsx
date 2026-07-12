@@ -79,12 +79,12 @@ export function buildMeetingTiles(meeting, user) {
 }
 
 export function MeetingMediaTile({ deafened, onSelect, selected = false, tile }) {
-  const videoRef = useRef(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const participant = tile.participant;
   const displayName = getDisplayName(participant?.user);
   const isScreen = tile.kind === "screen";
   const hasVideo = hasLiveVideo(tile.stream) && (isScreen || !participant?.media?.cameraOff);
-  const className = `limeets-meeting-tile ${hasVideo ? "live" : ""} ${isScreen ? "screen" : ""} ${selected ? "selected" : ""}`.trim();
+  const className = `limeets-meeting-tile ${hasVideo ? "live" : ""} ${isScreen ? "screen" : ""} ${selected ? "selected" : ""} ${deafened ? "deafened" : ""}`.trim();
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -100,7 +100,7 @@ export function MeetingMediaTile({ deafened, onSelect, selected = false, tile })
         <video
           autoPlay
           className={hasVideo ? "" : "audio-only"}
-          muted={tile.isLocal || deafened}
+          muted
           playsInline
           ref={videoRef}
         />
@@ -146,6 +146,40 @@ export function MeetingMediaTile({ deafened, onSelect, selected = false, tile })
     <article className={className}>
       {content}
     </article>
+  );
+}
+
+function MeetingRemoteAudio({ muted = false, stream }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.srcObject = stream || null;
+    if (stream && !muted) {
+      void audioRef.current.play?.().catch(() => {});
+    }
+  }, [muted, stream]);
+
+  return <audio autoPlay muted={muted} ref={audioRef} />;
+}
+
+export function MeetingRemoteAudioSink({ meeting, user }) {
+  const participants = meeting?.participants || [];
+  const selfId = user?.id || "local-user";
+  if (!meeting?.isActive || meeting.deafened) return null;
+
+  return (
+    <div className="meeting-remote-audio-sink" aria-hidden="true">
+      {participants
+        .filter((participant) => participant?.userId && participant.userId !== selfId)
+        .map((participant) => (
+          <MeetingRemoteAudio
+            key={participant.userId}
+            muted={Boolean(participant?.media?.muted)}
+            stream={meeting.remoteStreams?.[participant.userId] || null}
+          />
+        ))}
+    </div>
   );
 }
 
@@ -326,7 +360,7 @@ export function MeetingDisplayStage({ meeting, meetingAreaName = "Meeting Area",
       ) : (
         <div className="meeting-display-empty">
           <Video size={28} />
-          <span>Enter a Meeting Area in World to connect.</span>
+          <span>Enter a Meeting Area in Domain to connect.</span>
         </div>
       )}
     </section>

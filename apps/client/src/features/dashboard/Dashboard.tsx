@@ -5,11 +5,20 @@ import TopBar from "./TopBar.tsx";
 import { CreateRoomModal, ExploreRoomModal, RoomTile } from "./DashboardComponents.tsx";
 import { MAX_ROOM_TAGS } from "./dashboardConstants.ts";
 import AlertDialog from "../../shared/ui/AlertDialog.tsx";
-import { createAcademicTermOptions, normaliseTags } from "./dashboardUtils.ts";
+import {
+  createAcademicTermOptions,
+  extractInviteCode,
+  isCourseCodeFormatValid,
+  limitWorldDescription,
+  limitWorldFieldValue,
+  limitWorldName,
+  normaliseCourseCodeInput,
+  normaliseTags,
+} from "./dashboardUtils.ts";
 import { emptyRoomForm } from "../../constants.ts";
 
-/** Main room browser for joined rooms and public rooms the user can explore. */
-function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
+/** Main world browser for joined worlds and public worlds the user can explore. */
+function Dashboard({ onLogout, onOpenRoom, onThemeChange, onUserUpdated, themeMode, user }) {
   const academicTermOptions = useMemo(() => createAcademicTermOptions(), []);
   const [rooms, setRooms] = useState([]);
   const [form, setForm] = useState(emptyRoomForm);
@@ -22,7 +31,7 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
   const [selectedRoom, setSelectedRoom] = useState(null);
 
   const myRooms = useMemo(() => rooms.filter((room) => room.isMember), [rooms]);
-  // Explore deliberately excludes private rooms; private discovery should happen by invite only.
+  // Explore deliberately excludes private worlds; private discovery should happen by invite only.
   const exploreRooms = useMemo(
     () => rooms.filter((room) => !room.isMember && room.visibility === "public"),
     [rooms],
@@ -39,8 +48,8 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
   }, [search]);
 
   /**
-   * Loads both joined and discoverable rooms. The client decides which tab shows
-   * each room so search stays consistent between My Rooms and Explore Rooms.
+   * Loads both joined and discoverable worlds. The client decides which tab shows
+   * each world so search stays consistent between My Worlds and Explore Worlds.
    */
   async function loadRooms(nextSearch = search) {
     setLoading(true);
@@ -61,9 +70,10 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
   }
 
   function updateForm(event) {
+    const { name, value } = event.target;
     setForm((current) => ({
       ...current,
-      [event.target.name]: event.target.value,
+      [name]: limitWorldFieldValue(name, value),
     }));
   }
 
@@ -75,12 +85,17 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
     const tags = normaliseTags(form.tags);
 
     if (!form.name.trim()) {
-      setAlertMessage("Room name is required.");
+      setAlertMessage("Domain name is required.");
       return false;
     }
 
     if (!form.moduleCode.trim()) {
-      setAlertMessage("Module code is required.");
+      setAlertMessage("Course code is required.");
+      return false;
+    }
+
+    if (!isCourseCodeFormatValid(form.moduleCode)) {
+      setAlertMessage("Enter a valid NUS course code, e.g. CS2040S.");
       return false;
     }
 
@@ -90,7 +105,7 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
     }
 
     if (form.visibility === "private" && !form.password.trim()) {
-      setAlertMessage("Password is required for private room.");
+      setAlertMessage("Password is required for private domain.");
       return false;
     }
 
@@ -114,6 +129,9 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
     try {
       const payload = await api.createRoom({
         ...form,
+        name: limitWorldName(form.name).trim(),
+        description: limitWorldDescription(form.description).trim(),
+        moduleCode: normaliseCourseCodeInput(form.moduleCode),
         // The API accepts either arrays or comma-separated tags; arrays keep the cap explicit here.
         tags: normaliseTags(form.tags),
       });
@@ -142,13 +160,9 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
     }
   }
 
-  /** Joins a room from an invite URL/code entered inside the create-room flow. */
-  async function joinInvite(inviteValue) {
-    const inviteCode = String(inviteValue || "")
-      .trim()
-      .split("/")
-      .filter(Boolean)
-      .at(-1);
+  /** Joins a world from an invite URL/code entered inside the create-world flow. */
+  async function joinInvite(inviteValue, password = "") {
+    const inviteCode = extractInviteCode(inviteValue);
 
     if (!inviteCode) {
       setAlertMessage("Invite link is required.");
@@ -156,7 +170,9 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
     }
 
     try {
-      const payload = await api.joinInvite(inviteCode, {});
+      const payload = await api.joinInvite(inviteCode, {
+        password: String(password || "").trim(),
+      });
       setCreateOpen(false);
       await loadRooms(search);
       onOpenRoom(payload.room.id);
@@ -171,10 +187,12 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
         onCreateRoom={openCreateModal}
         onLogout={onLogout}
         onThemeChange={onThemeChange}
+        onUserUpdated={onUserUpdated}
         themeMode={themeMode}
+        user={user}
       />
       <div className="home-page">
-      <section className="home-controls" aria-label="Room browser">
+      <section className="home-controls" aria-label="Domain browser">
         <div className="scope-tabs" role="tablist" aria-label="Room lists">
           <button
             aria-selected={activeScope === "my"}
@@ -183,7 +201,7 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
             role="tab"
             type="button"
           >
-            My Rooms
+            My Domains
           </button>
           <button
             aria-selected={activeScope === "explore"}
@@ -192,7 +210,7 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
             role="tab"
             type="button"
           >
-            Explore Rooms
+            Explore Domains
           </button>
         </div>
 
@@ -201,14 +219,14 @@ function Dashboard({ onLogout, onOpenRoom, onThemeChange, themeMode }) {
             <Search size={18} />
             <input
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search rooms, modules, or tags"
+              placeholder="Search domains..."
               value={search}
             />
           </label>
         </div>
       </section>
 
-      <section className="room-gallery" aria-label="Room gallery">
+      <section className="room-gallery" aria-label="Domain gallery">
         {visibleRooms.map((room) => (
           <RoomTile
             key={room.id}
