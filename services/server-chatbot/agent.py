@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AI
 from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_litellm import ChatLiteLLM
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
@@ -14,15 +15,17 @@ from logger import get_logger
 
 logger = get_logger(__name__)
 
+# Fallback Gemini Model stuff
 GPU_ENABLED = os.getenv("GPU_ENABLED") == "true"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_KEY = None if GEMINI_API_KEY == "your-key-here" else GEMINI_API_KEY # check if gemini key was changed or still default
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
+# Ollama model stuff
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 
-
+# System Prompt
 SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room. 
 
 You have access to tools to help answer questions:
@@ -44,29 +47,41 @@ Rules for answering:
 class Agent:
     def __init__(self, vectorstore: VectorStore):
         self.vectorstore = vectorstore
-        # Decide to use ollama / gemini
-        if GPU_ENABLED or not GEMINI_API_KEY:
-            # print("DEBUG: GPU Enabled / No GEMINI_API_KEY Detected, Using Ollama Model")
-            logger.info(f"Using Ollama LLM | model: {LLM_MODEL} | url: {OLLAMA_BASE_URL}")
-            self.llm = ChatOllama(
-                model = LLM_MODEL,
-                base_url=OLLAMA_BASE_URL,
-            )
-        else:
-            # print("DEBUG: NO GPU detected, using Gemini model")
-            logger.info(f"Using Gemini LLM | model: {GEMINI_MODEL}")
-            self.llm = ChatGoogleGenerativeAI(
-                model=GEMINI_MODEL,
-                google_api_key=GEMINI_API_KEY,
-            )
+    
+    def _build_LLM(self, llm_model: Optional[str] = None, llm_api_key: Optional[str] = None):
+        """Build LLM instance
+        LLM Priority:
+        1) User provided model + key via LiteLLM
+        2) Ollama (if GPU_ENABLED or no Gemini Key provided)
+        3) Gemini (fallback)
+
+        Args:
+            llm_model (Optional[str], optional): the LiteLLM model string, eg. "openai/gpt-4o". Defaults to None.
+            llm_api_key (Optional[str], optional): API key for the user provided model. Defaults to None.
+            
+        Returns:
+            LangChain chat model instance
+        """
+        if llm_model and llm_api_key:
+            logger.info(f"Using custom LLM via LiteLLM | model: {llm_model}")
+            return ChatLiteLLM(model = llm_model, api_key = llm_api_key)
         
+        if GPU_ENABLED or not GEMINI_API_KEY:
+            logger.info(f"Using system Ollama LLM | model: {LLM_MODEL} | url: {OLLAMA_BASE_URL}")
+            return ChatOllama(model = LLM_MODEL, base_url=OLLAMA_BASE_URL)
+            
+        logger.info(f"Using system Gemini LLM | model: {GEMINI_MODEL}")
+        return ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
         
     def _build_agent(
         self, 
         room_id: Optional[str] = None, 
         file_bytes: Optional[str] = None, 
         file_name: Optional[str] = None,
-        enable_agent_tools: Optional[bool] = True):
+        enable_agent_tools: Optional[bool] = True,
+        llm_model: Optional[str] = None,
+        llm_api_key: Optional[str] = None,
+    ):
         """Build a Langgraph agent with tools
         Global tools are always included
         Room tools only if room_id is provided
@@ -77,7 +92,11 @@ class Agent:
             file_bytes (Optional[bytes]): raw bytes of uploaded file. Defaults to None.
             file_name (Optional[str]): name of uploaded file. Defaults to None
             enable_agent_tools (Optional[bool]): Enable tools for models to use. Defaults to None
+            llm_model (Optional[str]): custom LiteLLM model string. Defaults to None
+            llm_api_key (Optional[str]): API key for custom model. Defaults to None
         """
+        llm = self._build_LLM(llm_model = llm_model, llm_api_key = llm_api_key)
+        
         tools = build_global_tools() if enable_agent_tools else []
         if room_id and enable_agent_tools:
             tools += build_room_tools(self.vectorstore, room_id)
@@ -90,7 +109,7 @@ class Agent:
         def generate_system_prompt_middleware(request) -> str:
             return self._build_system_prompt(room_id = room_id, has_file = file_bytes != None)
         
-        return create_agent(model = self.llm, tools = tools, middleware = [generate_system_prompt_middleware])
+        return create_agent(model = llm, tools = tools, middleware = [generate_system_prompt_middleware])
     
     def _build_system_prompt(self, has_file: bool = False, room_id: Optional[str] = None) -> list:
         """Build system prompt, letting the model know if there is uploaded file or corpus available
@@ -134,8 +153,7 @@ class Agent:
             text = "".join(parts)
             return text
 
-        text = str(content) if content else None
-        return text
+        return str(content) if content else None
 
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
@@ -244,7 +262,15 @@ class Agent:
         
         return messages
         
-    async def stream(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> AsyncIterator[str]:
+    async def stream(
+        self, 
+        message_chain: list[HistoryMessage], 
+        room_id: Optional[str] = None, 
+        file_bytes: Optional[bytes] = None, 
+        file_name: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        llm_api_key: Optional[str] = None,
+    ) -> AsyncIterator[str]:
         """Stream the agents responsetoken by token
 
         Args:
@@ -252,14 +278,21 @@ class Agent:
             room_id (Optional[str], optional): the room id scope. Defaults to None.
             file_bytes (Optional[bytes], optional): raw bytes of uploaded file (if any). Defaults to None.
             file_name (Optional[str]), optional): file name of uploaded file (if any). Defaults to None.
+            llm_model (Optional[str]): custom LiteLLM model string. Defaults to None
+            llm_api_key (Optional[str]): API key for custom model. Defaults to None
 
         Returns:
-            AsyncIterator[str]: yields generated string chunks, before yielding a [SOURCES] chunk, ending with a [DONE] indicating end of generation
+            AsyncIterator[str]: yields generated string chunks, tagged with [TOKEN], [TOOL_START], [TOOL_END], [SOURCES, [CHAIN], [DONE]
         """
-        agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name, enable_agent_tools = True)
+        agent = self._build_agent(room_id = room_id, 
+                                  file_bytes = file_bytes, 
+                                  file_name = file_name, 
+                                  enable_agent_tools = True,
+                                  llm_model = llm_model,
+                                  llm_api_key = llm_api_key,)
         messages = self._message_chain_to_messages(message_chain)
         
-        logger.debug(f"Stream started | messages: {len(messages)} | room_id: {room_id}")
+        logger.debug(f"Stream started | messages: {len(messages)} | room_id: {room_id} | custom_llm: {llm_model or 'system default'}")
         
         sources = []
         all_messages = list(messages)
@@ -273,7 +306,6 @@ class Agent:
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
-                    # print(f"DEBUG stream chunk.content type: {type(chunk.content)} | value: {chunk.content!r}")
                     yield f"[TOKEN]{self._extract_text_content(chunk.content)}"
             
             # Handle Tool starting
@@ -312,12 +344,10 @@ class Agent:
             elif event_type == "on_chat_model_end":
                 if event.get("metadata", {}).get("langgraph_node") == "model":
                     ai_message = event["data"]["output"]
-                    # print(f"DEBUG on_chat_model_end content type: {type(ai_message.content)} | value: {ai_message.content!r}")
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
             
             else: # catch any other events
-                # print(f"DEBUG: unhandled event type: {event_type} | metadata {event.get('metadata', {})}")
                 logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")
                 
         logger.info(f"Stream complete | sources: {sources}")
@@ -325,7 +355,15 @@ class Agent:
         yield f"[CHAIN]{json.dumps(self._convert_messages(all_messages))}"
         yield f"[DONE]"
                 
-    async def invoke(self, message_chain: list[HistoryMessage], room_id: Optional[str] = None, file_bytes: Optional[bytes] = None, file_name: Optional[str] = None) -> tuple[str, list[str], list[dict]]:
+    async def invoke(
+        self, 
+        message_chain: list[HistoryMessage], 
+        room_id: Optional[str] = None, 
+        file_bytes: Optional[bytes] = None, 
+        file_name: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        llm_api_key: Optional[str] = None,
+    ) -> tuple[str, list[str], list[dict]]:
         """Non-streaming invoke, returns full answer, sources, and message chain
 
         Args:
@@ -337,9 +375,14 @@ class Agent:
         Returns:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
-        agent = self._build_agent(room_id = room_id, file_bytes = file_bytes, file_name = file_name, enable_agent_tools = True)
+        agent = self._build_agent(room_id = room_id, 
+                            file_bytes = file_bytes, 
+                            file_name = file_name, 
+                            enable_agent_tools = True,
+                            llm_model = llm_model,
+                            llm_api_key = llm_api_key,)
         messages = self._message_chain_to_messages(message_chain)
-        logger.debug(f"Invoke started | messages: {len(messages)} | room_id: {room_id}")
+        logger.debug(f"Invoke started | messages: {len(messages)} | room_id: {room_id} | custom_llm: {llm_model or 'system default'}")
         
         result = await agent.ainvoke({"messages": messages})
         # answer = result["messages"][-1].content
