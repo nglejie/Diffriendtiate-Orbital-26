@@ -57,6 +57,19 @@ def parse_message_chain(message_chain: str) -> list[HistoryMessage]:
     
     return message_chain
 
+def validate_custom_llm(llm_model: Optional[str], llm_api_key: Optional[str]):
+    """Validate that custom LLM params are either both provided or both absent
+
+    Args:
+        llm_model (Optional[str]): LiteLLM model string
+        llm_api_key (Optional[str]): API key for the model
+
+    Raises:
+        HTTPException: 400 if only one of the two is provided
+    """
+    if bool(llm_model) != bool(llm_api_key):
+        raise HTTPException(status_code=400, detail="Both llm_model and llm_api_key must be provided together, or neither")
+
 # --- Routes ---
 
 @app.get("/health")
@@ -113,7 +126,13 @@ async def embed_documents(body: EmbedRequest):
         raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 @app.post("/predict", response_model=PredictResponse)
-async def predict(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
+async def predict(
+    message_chain: str, 
+    room_id: Optional[str] = None, 
+    file: Optional[UploadFile] = File(default=None), 
+    llm_model: Optional[str] = None,
+    llm_api_key: Optional[str] = None,
+):
     """ The base predict API
     Answer a question using the agent
     
@@ -123,13 +142,15 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
         message_chain (str): the json format string of full message_chain / history, where the current question to be answered is positioned as the last item
         room_id (Optional[str], optional): the room id to scope response (e.g. RAG). Defaults to None.
         file (Optional[UploadFile], optional): any user updated file, file content is always fed directly to the agent. Defaults to File(default=None).
+        llm_model (Optional[str], optional): LiteLLM model string. Defaults to None
+        llm_api_key (Optional[str], optional): LiteLLM model api key. Defaults to None
 
     Returns:
         PredictResponse: contains the answer to the question, the sources referenced, as well as the chain of messages and tool calls
     """
     try:
-        # print("---Predict API---")
-        logger.info(f"Predict request | room_id: {room_id} | file: {file.filename if file else None}")
+        validate_custom_llm(llm_model, llm_api_key)
+        logger.info(f"Predict request | room_id: {room_id} | file: {file.filename if file else None} | custom_llm: {llm_model or 'system default'}")
         message_chain = parse_message_chain(message_chain)
         
         file_bytes = None
@@ -146,6 +167,8 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
             room_id = room_id,
             file_bytes = file_bytes,
             file_name = file_name,
+            llm_model = llm_model,
+            llm_api_key = llm_api_key,
         )
         
         logger.info(f"Predict complete | soruces: {sources}")
@@ -154,12 +177,17 @@ async def predict(message_chain: str, room_id: Optional[str] = None, file: Optio
     except HTTPException:
         raise # reraise http exception
     except Exception as e:
-        # print(f"Unexpected Error {e}")
         logger.error(f"Unexpected error in embed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occured")
 
 @app.post("/predict/stream")
-async def predict_stream(message_chain: str, room_id: Optional[str] = None, file: Optional[UploadFile] = File(default=None),):
+async def predict_stream(
+    message_chain: str, 
+    room_id: Optional[str] = None, 
+    file: Optional[UploadFile] = File(default=None),
+    llm_model: Optional[str] = None,
+    llm_api_key: Optional[str] = None,
+):
     """
     Similar to predict
     But streams the response token by token using Server-Sent Events
@@ -171,13 +199,15 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
         message_chain (str): the json format string of full message_chain / history, where the current question to be answered is positioned as the last item
         room_id (Optional[str], optional): the room id to scope response (e.g. RAG). Defaults to None.
         file (Optional[UploadFile], optional): any user updated file, file content is always fed directly to the agent. Defaults to File(default=None).
+        llm_model (Optional[str], optional): LiteLLM model string, eg. "openai/gpt-4o". Defaults to None
+        llm_api_key (Optional[str], optional): API key for LiteLLM model. Defaults to None
 
     Returns:
         StreamingResponse: streamed response of the agent, including a sources event
     """
     try:
-        # print("---Predict Stream API---")
-        logger.info(f"Predict stream request | room_id {room_id} | file: {file.filename if file else None}")
+        validate_custom_llm(llm_model, llm_api_key)
+        logger.info(f"Predict stream request | room_id {room_id} | file: {file.filename if file else None} | custom_llm: {llm_model or 'system default'}")
         message_chain = parse_message_chain(message_chain)
         
         file_bytes = None
@@ -209,7 +239,7 @@ async def predict_stream(message_chain: str, room_id: Optional[str] = None, file
                                             room_id = room_id, 
                                             file_bytes = file_bytes, 
                                             file_name = file_name):
-                # print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", chunk)
+
                 for prefix, event_name in PREFIX_MAP.items():
                     if chunk.startswith(prefix):
                         data = chunk[len(prefix):]  # get data from end of prefix onwards ([TOKEN]{...}) will retrieve {...}

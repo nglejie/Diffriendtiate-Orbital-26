@@ -1,6 +1,6 @@
 # Diffriendtiate
 
-We are building Diffriendtiate as a NUS Orbital 2026 Project Gemini application for module-based study rooms.
+We are building Diffriendtiate as a NUS Orbital 2026 Project Apollo application for module-based study rooms.
 
 Our app is a collaborative study hub where students can create or join module-specific rooms, chat in real time, share resources, schedule study sessions, and keep room context persistent across visits.
 
