@@ -1,4 +1,9 @@
-:80 {
+104.208.116.72.sslip.io {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4000
+}
+
+http://104.208.116.72 {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:4000
 }
