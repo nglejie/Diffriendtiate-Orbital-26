@@ -1,0 +1,168 @@
+name: Deploy Lite Production
+
+on:
+  workflow_run:
+    workflows: ["App QA Test Suite"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy. Defaults to the workflow commit."
+        required: false
+        type: string
+
+concurrency:
+  group: lite-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy socket-stable lite app
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main'
+        )
+      }}
+    environment:
+      name: production
+    env:
+      DEPLOY_REF: ${{ github.event.workflow_run.head_sha || github.event.inputs.ref || github.sha }}
+      LITE_APP_DIR: ${{ vars.LITE_APP_DIR || '/opt/diffriendtiate' }}
+      LITE_SSH_HOST: ${{ secrets.LITE_SSH_HOST }}
+      LITE_SSH_PRIVATE_KEY: ${{ secrets.LITE_SSH_PRIVATE_KEY }}
+      LITE_SSH_PORT: ${{ secrets.LITE_SSH_PORT || '22' }}
+      LITE_SSH_USER: ${{ secrets.LITE_SSH_USER }}
+      LITE_KNOWN_HOSTS: ${{ secrets.LITE_KNOWN_HOSTS }}
+
+    steps:
+      - name: Check deployment configuration
+        id: deploy_config
+        shell: bash
+        run: |
+          missing=0
+          for name in LITE_SSH_HOST LITE_SSH_PRIVATE_KEY LITE_SSH_USER; do
+            if [ -z "${!name}" ]; then
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::error::LITE_SSH_HOST, LITE_SSH_PRIVATE_KEY, and LITE_SSH_USER are required for lite deployment."
+              exit 1
+            fi
+
+            echo "::notice::Lite deploy secrets are not configured; skipping deployment."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout deployment commit
+        if: steps.deploy_config.outputs.ready == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        if: steps.deploy_config.outputs.ready == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install build dependencies
+        if: steps.deploy_config.outputs.ready == 'true'
+        run: npm ci --include=dev
+
+      - name: Build runtime assets
+        if: steps.deploy_config.outputs.ready == 'true'
+        run: npm run build
+
+      - name: Prepare lite runtime bundle
+        if: steps.deploy_config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          resolved_sha="$(git rev-parse HEAD)"
+          archive_path="$RUNNER_TEMP/diffriendtiate-lite-${resolved_sha}.tar.gz"
+          tar -czf "$archive_path" \
+            package.json \
+            package-lock.json \
+            apps/server/package.json \
+            apps/server/dist \
+            apps/client/package.json \
+            apps/client/dist \
+            deploy/lite
+
+          echo "RESOLVED_SHA=$resolved_sha" >> "$GITHUB_ENV"
+          echo "ARCHIVE_PATH=$archive_path" >> "$GITHUB_ENV"
+
+      - name: Prepare SSH
+        if: steps.deploy_config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$LITE_SSH_PRIVATE_KEY" > "$HOME/.ssh/lite_deploy_key"
+          chmod 600 "$HOME/.ssh/lite_deploy_key"
+
+          if [ -n "$LITE_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$LITE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            echo "::warning::LITE_KNOWN_HOSTS is not set; trusting ssh-keyscan for this run."
+            ssh-keyscan -p "$LITE_SSH_PORT" "$LITE_SSH_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Upload and deploy release
+        if: steps.deploy_config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          ssh_target="${LITE_SSH_USER}@${LITE_SSH_HOST}"
+          remote_release="${LITE_APP_DIR}/releases/${RESOLVED_SHA}"
+          remote_archive="${LITE_APP_DIR}/releases/${RESOLVED_SHA}.tar.gz"
+
+          ssh_common=(
+            -i "$HOME/.ssh/lite_deploy_key"
+            -p "$LITE_SSH_PORT"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+          )
+
+          ssh "${ssh_common[@]}" "$ssh_target" \
+            "mkdir -p '${LITE_APP_DIR}/releases' '${LITE_APP_DIR}/shared' '${LITE_APP_DIR}/backups'"
+
+          scp \
+            -i "$HOME/.ssh/lite_deploy_key" \
+            -P "$LITE_SSH_PORT" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$ARCHIVE_PATH" \
+            "$ssh_target:$remote_archive"
+
+          ssh "${ssh_common[@]}" "$ssh_target" \
+            "set -euo pipefail; \
+             rm -rf '${remote_release}.tmp'; \
+             mkdir -p '${remote_release}.tmp'; \
+             tar -xzf '$remote_archive' -C '${remote_release}.tmp'; \
+             rm -rf '$remote_release'; \
+             mv '${remote_release}.tmp' '$remote_release'; \
+             rm -f '$remote_archive'; \
+             APP_DIR='$LITE_APP_DIR' bash '$remote_release/deploy/lite/deploy-release.sh' '$RESOLVED_SHA'"
