@@ -16,7 +16,7 @@ export const WORLD_ZONE_PRESETS = [
   { tabId: "focus", label: "Home", description: "Room board and overview" },
   { tabId: "chat", label: "Convolution", description: "Group discussion" },
   { tabId: "resources", label: "Infilenite", description: "Library and resources" },
-  { tabId: "buddy", label: "Intelligrate", description: "Assistant workspace" },
+  { tabId: "buddy", label: "Intelligrate", description: "Intelligrate workspace" },
   { tabId: "calendar", label: "Coordidate", description: "Schedule area" },
 ];
 

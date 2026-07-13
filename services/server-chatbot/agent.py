@@ -1,5 +1,7 @@
 import os
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Optional, AsyncIterator
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage, ToolMessage
@@ -7,6 +9,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_litellm import ChatLiteLLM
+from litellm import supports_function_calling
 
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
@@ -17,31 +20,60 @@ logger = get_logger(__name__)
 
 # Fallback Gemini Model stuff
 GPU_ENABLED = os.getenv("GPU_ENABLED") == "true"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_KEY = None if GEMINI_API_KEY == "your-key-here" else GEMINI_API_KEY # check if gemini key was changed or still default
+PLACEHOLDER_SECRETS = {"", "your-key-here", "ci-placeholder", "qa-compose-validation-placeholder"}
+
+def normalise_optional_secret(value: str | None) -> str | None:
+    """Treat local/CI placeholders as missing secrets before provider clients see them."""
+    candidate = (value or "").strip()
+    return None if candidate in PLACEHOLDER_SECRETS else candidate
+
+GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Ollama model stuff
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
+APP_TIMEZONE = os.getenv("APP_TIMEZONE") or os.getenv("TZ") or "Asia/Singapore"
+
+def app_now() -> datetime:
+    """Return the current app-local datetime used in model instructions."""
+    try:
+        timezone = ZoneInfo(APP_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        logger.warning(f"Invalid APP_TIMEZONE={APP_TIMEZONE!r}; falling back to UTC.")
+        timezone = ZoneInfo("UTC")
+    return datetime.now(timezone)
 
 # System Prompt
 SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room. 
 
 You have access to tools to help answer questions:
-- search_corpus: searches uploaded documents in the room corpus
+- search_domain_context: searches the Domain corpus across Infilenite files, Convolution messages, annotations, and Coordidate records
+- search_corpus: legacy alias that searches all available Domain corpus content
 - read_file: reads the content of a file uploded with this request
 
 Rules for answering:
 - If the user references their notes during the query, answer strictly based on what you can retrieve or have retrieved from corpus.
-- If a room_id is provided, ALWAYS call search_corpus first before answering if the question relates to the users notes
+- If a room_id is provided, call search_domain_context before answering if the question may depend on Domain files, messages, annotations, meetings, schedules, or shared context
+- If the user names a Domain area, channel, file, or meeting, pass the most specific available scope into search_domain_context
+- If the user asks about upcoming or future meetings/events/deadlines, search Coordidate with timeframe="upcoming" or a date_from filter and do not include records before the current date
+- If the user asks to search only Infilenite, Convolution, annotations, Coordidate, a channel, or a specific file, keep the search scoped to that area/source rather than searching the whole Domain
 - If a file is uploaded, use read_file when the question may relate to the file
 - Use both tools if needed, they may contain complementary information
-- You can call search_corpus multiple times with different queries if needed
+- You can call search_domain_context multiple times with different queries or scopes if needed
 - Answer primarily from tool results, only use general knowledge if tools return no useful results
 - When answering please also reply with which document the part of the response is from to help with grounding the response
 - If tool return no relevant information, tell the user when replying and answer from general knowledge if possible
 - Always be honest if you don't know something
+"""
+
+NO_TOOL_SYSTEM_PROMPT = """You are Diffriendtiate's LLM Buddy, a helpful study assistant for a shared study room.
+
+Rules for answering:
+- Answer from the conversation context and general knowledge only.
+- Do not claim to search, read, or call tools unless a tool result is present in the conversation.
+- If the user asks for information that requires uploaded documents or room resources, explain that this model is not connected to document tools for this request.
+- Always be honest if you don't know something.
 """
 
 class Agent:
@@ -81,6 +113,7 @@ class Agent:
         enable_agent_tools: Optional[bool] = True,
         llm_model: Optional[str] = None,
         llm_api_key: Optional[str] = None,
+        source_collector: Optional[list] = None,
     ):
         """Build a Langgraph agent with tools
         Global tools are always included
@@ -96,22 +129,44 @@ class Agent:
             llm_api_key (Optional[str]): API key for custom model. Defaults to None
         """
         llm = self._build_LLM(llm_model = llm_model, llm_api_key = llm_api_key)
+        effective_tools_enabled = enable_agent_tools
+        if llm_model and llm_api_key and enable_agent_tools:
+            try:
+                effective_tools_enabled = supports_function_calling(model=llm_model)
+            except Exception as error:
+                logger.warning(
+                    f"Unable to verify BYOK tool support; attempting tools anyway | model: {llm_model} | error: {error}"
+                )
+                effective_tools_enabled = True
+            if not effective_tools_enabled:
+                logger.info(f"BYOK model does not advertise tool calling support | model: {llm_model}")
         
-        tools = build_global_tools() if enable_agent_tools else []
-        if room_id and enable_agent_tools:
-            tools += build_room_tools(self.vectorstore, room_id)
-        if file_bytes and file_name and enable_agent_tools:
-            tools += build_file_tool(file_bytes, file_name, self.vectorstore)
+        tools = build_global_tools() if effective_tools_enabled else []
+        if room_id and effective_tools_enabled:
+            tools += build_room_tools(self.vectorstore, room_id, source_collector=source_collector)
+        if file_bytes and file_name and effective_tools_enabled:
+            tools += build_file_tool(file_bytes, file_name, self.vectorstore, source_collector=source_collector)
             
+        prompt_room_id = room_id if effective_tools_enabled else None
+        prompt_has_file = bool(file_bytes and file_name and effective_tools_enabled)
         logger.debug(f"Agent built | tools: {[t.name for t in tools]} | room_id: {room_id} | has_file: {file_bytes is not None}")
             
         @dynamic_prompt
         def generate_system_prompt_middleware(request) -> str:
-            return self._build_system_prompt(room_id = room_id, has_file = file_bytes != None)
+            return self._build_system_prompt(
+                room_id = prompt_room_id,
+                has_file = prompt_has_file,
+                tools_enabled = effective_tools_enabled,
+            )
         
         return create_agent(model = llm, tools = tools, middleware = [generate_system_prompt_middleware])
     
-    def _build_system_prompt(self, has_file: bool = False, room_id: Optional[str] = None) -> list:
+    def _build_system_prompt(
+        self,
+        has_file: bool = False,
+        room_id: Optional[str] = None,
+        tools_enabled: bool = True,
+    ) -> list:
         """Build system prompt, letting the model know if there is uploaded file or corpus available
 
         Args:
@@ -121,14 +176,16 @@ class Agent:
         Returns:
             list: List of messages
         """
-        system_content = SYSTEM_PROMPT
+        system_content = SYSTEM_PROMPT if tools_enabled else NO_TOOL_SYSTEM_PROMPT
         
         # Additional context
         system_content += "\n\n Additional Context for this request (if any):"
+        now = app_now()
+        system_content += f"\n- Current app date: {now.date().isoformat()} ({APP_TIMEZONE})."
         
-        if room_id:
-            system_content += f"\n- A room corpus is available (room_id: {room_id}). If you need more context to provide an answer, you should search_corpus before answering"
-        if has_file:
+        if tools_enabled and room_id:
+            system_content += f"\n- A Domain corpus is available (room_id: {room_id}). If you need more context to provide an answer, you should search_domain_context before answering"
+        if tools_enabled and has_file:
             system_content += "\n- A file has been uploaded. Use read_file to access its content when relevant."
             
         return system_content
@@ -215,13 +272,37 @@ class Agent:
             list[str]: a list of sources filenames found in the message
         """
         sources = []
-        if hasattr(message, "name") and message.name in ("search_corpus", "read_file"):
+        if hasattr(message, "name") and message.name in ("search_domain_context", "search_corpus", "read_file"):
             content = self._extract_text_content(message.content)
             if content:
                 for line in content.split("\n"):
                     if line.startswith("[Source:"):
                         source = line.replace("[Source:", "").replace("]", "").strip()
                         sources.append(source)
+        return sources
+
+    def _source_key(self, source) -> str:
+        """Build a stable key for string and structured source refs."""
+        if isinstance(source, dict):
+            return "|".join(
+                str(source.get(key) or "")
+                for key in ("type", "resourceId", "messageId", "annotationId", "sessionId", "pollId", "sourceId", "pageNumber", "slideNumber")
+            )
+        return str(source or "").strip().lower()
+
+    def _append_unique_source(self, sources: list, source):
+        """Append a source ref without duplicating the same chunk/source."""
+        key = self._source_key(source)
+        if not key:
+            return
+        if any(self._source_key(existing) == key for existing in sources):
+            return
+        sources.append(source)
+
+    def _merge_collected_sources(self, sources: list, collected_sources: list):
+        """Merge tool-side structured refs into the stream/non-stream source list."""
+        for source in collected_sources:
+            self._append_unique_source(sources, source)
         return sources
         
     def _extract_sources(self, messages: list) -> list[str]:
@@ -284,18 +365,21 @@ class Agent:
         Returns:
             AsyncIterator[str]: yields generated string chunks, tagged with [TOKEN], [TOOL_START], [TOOL_END], [SOURCES, [CHAIN], [DONE]
         """
+        source_collector = []
         agent = self._build_agent(room_id = room_id, 
                                   file_bytes = file_bytes, 
                                   file_name = file_name, 
                                   enable_agent_tools = True,
                                   llm_model = llm_model,
-                                  llm_api_key = llm_api_key,)
+                                  llm_api_key = llm_api_key,
+                                  source_collector = source_collector,)
         messages = self._message_chain_to_messages(message_chain)
         
         logger.debug(f"Stream started | messages: {len(messages)} | room_id: {room_id} | custom_llm: {llm_model or 'system default'}")
         
         sources = []
         all_messages = list(messages)
+        streamed_answer_parts = []
         
         tool_call_in_progress = {}
         
@@ -306,7 +390,9 @@ class Agent:
             if event_type == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
-                    yield f"[TOKEN]{self._extract_text_content(chunk.content)}"
+                    token_text = self._extract_text_content(chunk.content)
+                    streamed_answer_parts.append(token_text)
+                    yield f"[TOKEN]{token_text}"
             
             # Handle Tool starting
             elif event_type == "on_tool_start":
@@ -334,8 +420,8 @@ class Agent:
                 
                 # Store all sources given by tool
                 for source in self._extract_sources_from_message(tool_message):
-                    if source not in sources:
-                        sources.append(source)
+                    self._append_unique_source(sources, source)
+                self._merge_collected_sources(sources, source_collector)
                 
                 tool_call_in_progress.pop(run_id, None)
                 logger.info(f"Tool call complete | tool: {tool_name}")
@@ -346,10 +432,17 @@ class Agent:
                     ai_message = event["data"]["output"]
                     if ai_message not in all_messages:
                         all_messages.append(ai_message)
+                    final_text = self._extract_text_content(getattr(ai_message, "content", ""))
+                    if final_text and not "".join(streamed_answer_parts).strip():
+                        # Some LiteLLM providers produce a final message without token chunks.
+                        # Emit it once so the web UI never has to invent a fallback answer.
+                        logger.debug("Model produced final content without token chunks; emitting final text once.")
+                        yield f"[TOKEN]{final_text}"
             
             else: # catch any other events
                 logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")
                 
+        self._merge_collected_sources(sources, source_collector)
         logger.info(f"Stream complete | sources: {sources}")
         yield f"[SOURCES]{json.dumps(sources)}" # return sources after all tokens
         yield f"[CHAIN]{json.dumps(self._convert_messages(all_messages))}"
@@ -375,19 +468,23 @@ class Agent:
         Returns:
             tuple[str, list[str], list[dict]]: LLM response, list of sources, message chain
         """
-        agent = self._build_agent(room_id = room_id, 
-                            file_bytes = file_bytes, 
-                            file_name = file_name, 
+        # BYOK providers currently answer from chat history only. The RAG tools
+        # rely on system embeddings and should not run with a member API key.
+        source_collector = []
+        agent = self._build_agent(room_id = room_id,
+                            file_bytes = file_bytes,
+                            file_name = file_name,
                             enable_agent_tools = True,
                             llm_model = llm_model,
-                            llm_api_key = llm_api_key,)
+                            llm_api_key = llm_api_key,
+                            source_collector = source_collector,)
         messages = self._message_chain_to_messages(message_chain)
         logger.debug(f"Invoke started | messages: {len(messages)} | room_id: {room_id} | custom_llm: {llm_model or 'system default'}")
         
         result = await agent.ainvoke({"messages": messages})
         # answer = result["messages"][-1].content
         answer = self._extract_text_content(result["messages"][-1].content)
-        sources = self._extract_sources(result["messages"])
+        sources = self._merge_collected_sources(self._extract_sources(result["messages"]), source_collector)
         chain = self._convert_messages(result["messages"])
         
         logger.info(f"Invoke complete | surces: {sources}")

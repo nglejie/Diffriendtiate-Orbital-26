@@ -8,8 +8,11 @@ langchain-chroma
 langchain-google-genai
 langchain-litellm
 langgraph
+litellm
 chromadb
 pypdf
+PyMuPDF
 docx2txt
+python-pptx
 uvicorn
 httpx

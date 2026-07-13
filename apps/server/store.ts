@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
+import { normalizeStoredLlmApiKeys } from "./llmProviders.js";
 
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 const serverRootDir = path.basename(runtimeDir) === "dist" ? path.dirname(runtimeDir) : runtimeDir;
@@ -121,6 +122,7 @@ function normalizeDb(db) {
         user.authProviders && typeof user.authProviders === "object" && !Array.isArray(user.authProviders)
           ? user.authProviders
           : {},
+      llmApiKeys: normalizeStoredLlmApiKeys(user.llmApiKeys),
       emailVerified: user.emailVerified === false ? false : true,
       emailVerification:
         user.emailVerification && typeof user.emailVerification === "object" && !Array.isArray(user.emailVerification)
@@ -277,6 +279,7 @@ async function initPostgres() {
       email_verified BOOLEAN NOT NULL DEFAULT TRUE,
       email_verification JSONB,
       password_reset JSONB,
+      llm_api_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
       password_hash TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL
     );
@@ -596,6 +599,7 @@ async function initPostgres() {
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification JSONB");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset JSONB");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS llm_api_keys JSONB NOT NULL DEFAULT '[]'::jsonb");
 }
 
 /**
@@ -656,6 +660,7 @@ export async function readDb() {
         email_verified AS "emailVerified",
         email_verification AS "emailVerification",
         password_reset AS "passwordReset",
+        llm_api_keys AS "llmApiKeys",
         password_hash AS "passwordHash",
         created_at AS "createdAt"
       FROM users
@@ -907,9 +912,9 @@ async function writePostgresDb(db) {
         `
           INSERT INTO users (
             id, name, email, avatar_url, avatar_preset, auth_providers,
-            email_verified, email_verification, password_reset, password_hash, created_at
+            email_verified, email_verification, password_reset, llm_api_keys, password_hash, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `,
         [
           user.id,
@@ -921,6 +926,7 @@ async function writePostgresDb(db) {
           user.emailVerified !== false,
           JSON.stringify(user.emailVerification || null),
           JSON.stringify(user.passwordReset || null),
+          JSON.stringify(normalizeStoredLlmApiKeys(user.llmApiKeys)),
           user.passwordHash,
           user.createdAt,
         ],

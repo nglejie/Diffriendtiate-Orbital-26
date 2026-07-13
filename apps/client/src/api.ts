@@ -221,6 +221,13 @@ export const api = {
   updateProfile: (body) => request("/api/auth/me", { method: "PATCH", body }),
   updateAccount: (body) => request("/api/auth/account", { method: "PATCH", body }),
   updatePassword: (body) => request("/api/auth/password", { method: "PATCH", body }),
+  getLlmApiKeys: () => request("/api/auth/llm-api-keys"),
+  saveLlmApiKey: (body) =>
+    request("/api/auth/llm-api-keys", { method: "POST", body }),
+  deleteLlmApiKey: (keyId) =>
+    request(`/api/auth/llm-api-keys/${encodeURIComponent(keyId)}`, {
+      method: "DELETE",
+    }),
   deleteAccount: () => request("/api/auth/me", { method: "DELETE" }),
   listRooms: (search = "") =>
     request(`/api/rooms${search ? `?search=${encodeURIComponent(search)}` : ""}`),
@@ -317,6 +324,7 @@ export const api = {
   deleteResourcePermanently: (resourceId) =>
     request(`/api/resources/${resourceId}/permanent`, { method: "DELETE" }),
   getBuddyHealth: (roomId) => request(`/api/rooms/${roomId}/buddy/health`),
+  getBuddyProviders: (roomId) => request(`/api/rooms/${roomId}/buddy/providers`),
   getBuddyThreads: (roomId) => request(`/api/rooms/${roomId}/buddy/threads`),
   createBuddyThread: (roomId, body) =>
     request(`/api/rooms/${roomId}/buddy/threads`, { method: "POST", body }),

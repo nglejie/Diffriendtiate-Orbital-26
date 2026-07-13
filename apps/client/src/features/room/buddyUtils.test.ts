@@ -32,7 +32,7 @@ describe("buddyUtils", () => {
       type: "tool",
       tool: "search_corpus",
       status: "done",
-      summary: "Found 1 room source",
+      summary: "Found 1 Domain context source",
     });
     expect(event.text).toContain("Lecture 7 CPU datapath.pdf");
   });
