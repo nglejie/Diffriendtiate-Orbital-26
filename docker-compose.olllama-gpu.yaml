@@ -1,0 +1,18 @@
+services:
+  server-chatbot:
+    environment:
+      GPU_ENABLED: true
+      USE_GEMINI_EMBEDDINGS: false # use ollama embeddings locally
+      LOG_LEVEL: DEBUG
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # use gpu
+              capabilities: [gpu]

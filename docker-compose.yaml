@@ -149,9 +149,9 @@ services:
     build:
       context: ./services/ollama
       dockerfile: Dockerfile
-    profiles: ["local"] # only start when local dev / run
-    ports:
-      - "11434:11434"
+    profiles: ["ollama"] # only start when profile is enabled is this service ran
+    # ports:
+    #   - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     restart: unless-stopped

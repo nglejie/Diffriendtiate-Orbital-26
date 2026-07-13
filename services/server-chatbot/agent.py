@@ -31,7 +31,7 @@ GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Ollama model stuff
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 APP_TIMEZONE = os.getenv("APP_TIMEZONE") or os.getenv("TZ") or "Asia/Singapore"
 
