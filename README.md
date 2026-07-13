@@ -42,24 +42,25 @@ services/      Independent services, including chatbot/RAG work
 
 Create a local `.env` file from `.env.example`, then run:
 
-#### Option 1 - Gemini only, no Ollama needed (No GPU deployment (Render))
+#### Option 1 - Gemini only, no Ollama needed
 
-Requires Gemini API key in '.env'. No Ollama needed
+Requires Gemini API key in `.env`. No Ollama needed.
 
 ```cmd
 docker compose up --build
 ```
 
-#### Option 2 - Ollama Embeddings + Gemini LLM (No GPU deployment)
+#### Option 2 - Ollama Embeddings + Gemini LLM
 
-Requires Gemini API key in '.env'. Ollama handles embeddings only
+Requires Gemini API key in `.env`. Ollama handles embeddings only.
 
 ```cmd
 docker compose --profile ollama -f docker-compose.yaml -f docker-compose.ollama.yaml up --build
 ```
 
 #### Option 3 - Ollama for everything (local dev with NVIDIA GPU)
-No API key nmeeded. Fully local.
+
+No API key needed. Fully local.
 ```cmd
 docker compose --profile ollama -f docker-compose.yaml -f docker-compose.ollama-gpu.yaml up --build
 ```
