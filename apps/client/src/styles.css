@@ -10242,20 +10242,20 @@ button.world-area {
   background-size: 220% 100%;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmerText 6.2s linear infinite;
+  animation: buddyProcessingGlow 1.8s ease-in-out infinite alternate;
 }
 
 .buddy-message.processing-placeholder {
   padding-top: 22px;
 }
 
-@keyframes shimmerText {
+@keyframes buddyProcessingGlow {
   from {
-    background-position: 220% 0;
+    opacity: 0.58;
   }
 
   to {
-    background-position: -220% 0;
+    opacity: 1;
   }
 }
 
@@ -10530,6 +10530,19 @@ button.world-area {
 
 .buddy-thinking-step.done .buddy-thinking-icon {
   color: color-mix(in srgb, var(--green) 90%, transparent);
+}
+
+.buddy-thinking-step.source-resource .buddy-thinking-icon {
+  color: color-mix(in srgb, var(--rose-pine-foam) 88%, transparent);
+}
+
+.buddy-thinking-step.source-convolution_message .buddy-thinking-icon {
+  color: color-mix(in srgb, var(--rose-pine-iris) 88%, transparent);
+}
+
+.buddy-thinking-step.source-coordidate_session .buddy-thinking-icon,
+.buddy-thinking-step.source-coordidate_poll .buddy-thinking-icon {
+  color: color-mix(in srgb, var(--gold) 88%, transparent);
 }
 
 .buddy-thinking-step.thought .buddy-thinking-copy {
@@ -11260,7 +11273,8 @@ button.attachment-preview-card {
 
 .attachment-chip-row > span,
 .buddy-source-row span,
-.buddy-source-row a {
+.buddy-source-row a,
+.buddy-source-row button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -11276,19 +11290,40 @@ button.attachment-preview-card {
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .buddy-source-row span,
-.buddy-source-row a {
-  color: var(--accent-primary);
-  background: color-mix(in srgb, var(--accent-primary) 12%, var(--theme-base));
-  border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--theme-border));
+.buddy-source-row a,
+.buddy-source-row button {
+  --source-chip-accent: var(--accent-primary);
+  color: var(--source-chip-accent);
+  background: color-mix(in srgb, var(--source-chip-accent) 12%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--source-chip-accent) 28%, var(--theme-border));
 }
 
-.buddy-source-row a:hover {
+.buddy-source-row .source-resource,
+.buddy-source-row .source-uploaded-file {
+  --source-chip-accent: var(--rose-pine-foam);
+}
+
+.buddy-source-row .source-convolution {
+  --source-chip-accent: var(--rose-pine-iris);
+}
+
+.buddy-source-row .source-coordidate {
+  --source-chip-accent: var(--gold);
+}
+
+.buddy-source-row .source-annotation {
+  --source-chip-accent: var(--rose-pine-rose);
+}
+
+.buddy-source-row a:hover,
+.buddy-source-row button:hover {
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent-primary) 18%, var(--theme-base));
-  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--theme-border));
+  background: color-mix(in srgb, var(--source-chip-accent) 18%, var(--theme-base));
+  border-color: color-mix(in srgb, var(--source-chip-accent) 42%, var(--theme-border));
 
 
 }
@@ -14746,6 +14781,14 @@ img.coordinate-member-avatar {
   border-color: color-mix(in srgb, var(--event-color, var(--coordinate-heat-color)) 70%, var(--midnight-border));
 }
 
+.coordinate-event-block.source-focused,
+.coordinate-month-grid article.source-focused {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--gold) 70%, transparent),
+    0 10px 26px color-mix(in srgb, var(--gold) 20%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent);
+}
+
 .coordinate-month-grid article {
   background: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 24%, transparent);
   border-color: color-mix(in srgb, var(--event-color, var(--fantasy-rose)) 26%, transparent);
@@ -17535,6 +17578,7 @@ img.coordinate-member-avatar {
   overflow-x: hidden;
   overflow-y: auto;
   padding: 18px 8px 12px;
+  scroll-padding-block: 18px;
 }
 
 .drafts-content {
@@ -17679,6 +17723,7 @@ img.coordinate-member-avatar {
   margin-top: 14px;
   padding: 5px 56px 5px 16px;
   border-radius: 8px;
+  scroll-margin-block: 18px;
 }
 
 .discord-message.grouped {
@@ -17698,6 +17743,10 @@ img.coordinate-member-avatar {
   background: color-mix(in srgb, var(--text-primary) 5%, transparent);
 
 
+}
+
+.discord-message.source-highlight {
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
 }
 .discord-avatar {
   display: grid;
@@ -22920,6 +22969,20 @@ button.resource-path-segment:hover {
   border: 1px solid var(--midnight-border);
   border-radius: 14px;
   background: color-mix(in srgb, var(--theme-base) 58%, #000);
+}
+
+.resource-preview-body.pdf {
+  position: relative;
+}
+
+.resource-preview-body.pdf .PdfHighlighter {
+  background: color-mix(in srgb, var(--theme-base) 66%, #000);
+}
+
+.resource-preview-body.pdf .AreaHighlight__part {
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
 }
 
 .resource-preview-body iframe,

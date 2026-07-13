@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Literal
+from pydantic import BaseModel, Field
+from typing import Any, Literal
 
 class EmbedDocument(BaseModel):
     """A document URL plus its user-facing filename."""
@@ -20,11 +20,40 @@ class EmbedResponse(BaseModel):
     failed: list[dict]
     total_chunks: int
 
+class DomainCorpusFile(EmbedDocument):
+    """A room-owned file plus the app metadata needed to build source pills."""
+    id: str | None = None
+    source_type: str = "resource"
+    source_ref: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+class DomainCorpusDocument(BaseModel):
+    """A non-file Domain record that can be embedded into the room corpus."""
+    id: str
+    source_type: str
+    title: str
+    text: str
+    source_ref: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+class DomainCorpusSyncRequest(BaseModel):
+    """Full Domain corpus payload sent by the app server for one room."""
+    room_id: str
+    files: list[DomainCorpusFile] = Field(default_factory=list)
+    documents: list[DomainCorpusDocument] = Field(default_factory=list)
+
+class DomainCorpusSyncResponse(BaseModel):
+    """Result of syncing typed Domain records into the vector store."""
+    result: bool
+    success: list[str]
+    failed: list[dict]
+    total_chunks: int
+
 class PredictResponse(BaseModel):
     """The prediction response template
     """
     answer: str
-    sources: list[str] = []
+    sources: list[str | dict[str, Any]] = Field(default_factory=list)
     message_chain: list[dict] = []
 
 class LlmProviderCatalogProvider(BaseModel):

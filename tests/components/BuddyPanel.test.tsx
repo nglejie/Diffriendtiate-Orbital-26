@@ -37,6 +37,7 @@ function renderBuddyPanel(providerOptions, overrides = {}) {
           setMessages((current) => (typeof updater === "function" ? updater(current) : updater))
         }
         onNotify={onNotify}
+        onOpenSource={overrides.onOpenSource}
         onPersistMessages={async (nextMessages) => setMessages(nextMessages)}
         onSelectedProviderIdChange={overrides.onSelectedProviderIdChange}
         onSyncResources={vi.fn()}
@@ -176,6 +177,7 @@ describe("BuddyPanel provider selection", () => {
                 setMessages((current) => (typeof updater === "function" ? updater(current) : updater))
               }
               onNotify={vi.fn()}
+              onOpenSource={vi.fn()}
               onPersistMessages={async (nextMessages) => setMessages(nextMessages)}
               onSelectedProviderIdChange={setSelectedProviderId}
               onSyncResources={vi.fn()}
@@ -342,6 +344,69 @@ describe("BuddyPanel provider selection", () => {
     expect(sourceLink).toHaveAttribute("href", expect.stringContaining("/api/resources/res_static/file"));
   });
 
+  it("renders typed Domain source pills with distinct classes and opens structured refs", async () => {
+    const onOpenSource = vi.fn();
+    renderBuddyPanel(
+      [
+        {
+          id: "intelligrate",
+          providerId: "intelligrate",
+          providerName: "Intelligrate",
+          label: "Intelligrate",
+          model: "gemini-3.5-flash",
+          builtIn: true,
+          available: true,
+        },
+      ],
+      {
+        initialMessages: [
+          {
+            id: "assistant-sourced",
+            role: "assistant",
+            providerName: "Intelligrate",
+            providerLabel: "Intelligrate",
+            model: "gemini-3.5-flash",
+            body: "These facts came from several Domain surfaces.",
+            sources: [
+              { type: "resource", label: "Lecture.pdf", resourceId: "res_lecture", pageNumber: 2 },
+              { type: "convolution_message", label: "#general message", channel: "general", messageId: "msg_1" },
+              { type: "coordidate_session", label: "Architecture Review", sessionId: "sess_1", startsAt: "2026-08-14T10:00:00.000Z" },
+            ],
+            thinkingSteps: [
+              {
+                id: "calendar-search",
+                type: "tool",
+                tool: "search_corpus",
+                sourceType: "coordidate_session",
+                status: "done",
+                text: 'Found 1 relevant Coordidate source for "meetings coming up": Architecture Review',
+              },
+            ],
+            createdAt: "2026-07-12T00:00:00.000Z",
+          },
+        ],
+        onOpenSource,
+      },
+    );
+
+    const resourcePill = screen.getByRole("button", { name: /Lecture\.pdf/i });
+    const messagePill = screen.getByRole("button", { name: /#general message/i });
+    const calendarPill = screen.getByRole("button", { name: /Architecture Review/i });
+
+    expect(resourcePill.className).toContain("source-resource");
+    expect(messagePill.className).toContain("source-convolution");
+    expect(calendarPill.className).toContain("source-coordidate");
+    expect(screen.getByText('Found 1 relevant Coordidate source for "meetings coming up": Architecture Review')).toBeInTheDocument();
+
+    fireEvent.click(calendarPill);
+    expect(onOpenSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess_1",
+        type: "coordidate_session",
+      }),
+    );
+  });
+
   it("moves provider-leaked tool-call JSON into the progress timeline", async () => {
     const leakedToolAnswer = [
       "I need to inspect the Domain resources first.",
@@ -380,7 +445,7 @@ describe("BuddyPanel provider selection", () => {
     await tester.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("I need to inspect the Domain resources first.")).toBeInTheDocument();
-    expect(await screen.findByText('Searching room resources for "Orbital"')).toBeInTheDocument();
+    expect(await screen.findByText('Searching Domain context for "Orbital"')).toBeInTheDocument();
     expect(await screen.findByText("Orbital is described in the uploaded notes.")).toBeInTheDocument();
     expect(screen.queryByText(/"action":\s*"search_corpus"/)).not.toBeInTheDocument();
   });

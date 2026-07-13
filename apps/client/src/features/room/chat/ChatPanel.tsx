@@ -98,6 +98,32 @@ function getEditorHtml(editor) {
   }
 }
 
+function keepFocusedMessageFullyVisible(container, target) {
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  if (!containerRect.height || !targetRect.height) return;
+
+  // Focus should be based on the real scroll viewport. Adding bottom slack makes
+  // latest messages appear above a fake empty tail instead of solving clipping.
+  const breathingRoom = Math.min(
+    18,
+    Math.max(6, Math.min(containerRect.height, targetRect.height) * 0.12),
+  );
+  const readableTop = containerRect.top + breathingRoom;
+  const readableBottom = containerRect.bottom - breathingRoom;
+  let nextScrollTop = container.scrollTop;
+
+  if (targetRect.bottom > readableBottom) {
+    nextScrollTop += targetRect.bottom - readableBottom;
+  } else if (targetRect.top < readableTop) {
+    nextScrollTop -= readableTop - targetRect.top;
+  } else {
+    return;
+  }
+
+  container.scrollTo({ top: nextScrollTop, behavior: "smooth" });
+}
+
 function messagePreviewText(value = "") {
   if (!isHtmlMessage(value)) return value;
   const container = document.createElement("div");
@@ -523,6 +549,7 @@ export function ChatPanel({
   draft,
   drafts,
   channelLayout,
+  highlightedMessageId = "",
   members = EMPTY_ARRAY,
   messages,
   onDraftChange,
@@ -671,6 +698,25 @@ export function ChatPanel({
     if (typeof messageListRef.current?.scrollTo !== "function") return;
     messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight });
   }, [channelMessages.length, activeChannel, visibleDrafts.length]);
+
+  useEffect(() => {
+    if (!highlightedMessageId || !messageListRef.current) return;
+    const list = messageListRef.current;
+    const target = Array.from(messageListRef.current.querySelectorAll("[data-message-id]")).find(
+      (element) => element.getAttribute("data-message-id") === highlightedMessageId,
+    );
+    if (!target) return;
+
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => keepFocusedMessageFullyVisible(list, target));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [activeChannel, channelMessages, highlightedMessageId]);
 
   function addAttachments(fileList) {
     const files = Array.from(fileList || []);
@@ -891,9 +937,11 @@ export function ChatPanel({
                   "discord-message",
                   grouped ? "grouped" : "",
                   firstGroupedMessage ? "first-grouped" : "",
+                  highlightedMessageId === message.id ? "source-highlight" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                data-message-id={message.id}
               >
                 {grouped ? (
                   <ChatTimestamp compact value={message.createdAt} />

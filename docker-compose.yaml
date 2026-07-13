@@ -37,6 +37,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Singapore}
       JWT_SECRET: ${JWT_SECRET:-change-this-before-deploying}
       LLM_API_KEY_ENCRYPTION_KEY: ${LLM_API_KEY_ENCRYPTION_KEY:-diffriendtiate-local-byok-key-change-before-production-2026}
       DATABASE_URL: postgres://${POSTGRES_USER:-diffriendtiate}:${POSTGRES_PASSWORD:-diffriendtiate_password}@db:5432/${POSTGRES_DB:-diffriendtiate}
@@ -127,6 +128,7 @@ services:
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Singapore}
       SEARCH_MIN_RELEVANCE: ${SEARCH_MIN_RELEVANCE:-0.35}
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}

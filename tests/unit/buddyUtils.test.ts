@@ -6,6 +6,7 @@ import {
   extractBuddyToolCallsFromText,
   formatBuddyToolEvent,
   getBuddyChainFinalVisibleResponse,
+  getBuddySourceLabel,
   inferMentionedBuddySources,
   mergeBuddySources,
   mergeBuddyThoughtSteps,
@@ -51,7 +52,7 @@ describe("Intelligrate presentation utilities", () => {
       }),
     ).toMatchObject({
       status: "running",
-      text: "Searching room resources for \"minimum spanning tree\"",
+      text: "Searching Domain context for \"minimum spanning tree\"",
       type: "tool",
     });
 
@@ -66,7 +67,59 @@ describe("Intelligrate presentation utilities", () => {
       status: "done",
       text: "Finished reading the uploaded document: Lecture 1.pdf",
       type: "tool",
-      });
+    });
+
+    expect(
+      formatBuddyToolEvent({
+        event: "tool_start",
+        tool: "search_domain_context",
+        input: { query: "meetings", source_type: "coordidate", timeframe: "upcoming" },
+      }),
+    ).toMatchObject({
+      sourceType: "coordidate_session",
+      status: "running",
+      text: 'Searching upcoming Coordidate for "meetings"',
+      type: "tool",
+    });
+
+    expect(
+      formatBuddyToolEvent({
+        event: "tool_start",
+        tool: "search_corpus",
+        input: { query: "meetings coming up" },
+      }),
+    ).toMatchObject({
+      sourceType: "coordidate_session",
+      status: "running",
+      text: 'Searching upcoming Coordidate for "meetings coming up"',
+      type: "tool",
+    });
+
+    expect(
+      formatBuddyToolEvent({
+        event: "tool_start",
+        tool: "search_corpus",
+        input: { query: "files and messages about Orbital" },
+      }),
+    ).toMatchObject({
+      sourceType: "",
+      status: "running",
+      text: 'Searching Domain context for "files and messages about Orbital"',
+      type: "tool",
+    });
+
+    expect(
+      formatBuddyToolEvent({
+        event: "tool_end",
+        tool: "search_corpus",
+        input: { query: "unknown term" },
+        result: "No relevant domain context was found.",
+      }),
+    ).toMatchObject({
+      status: "done",
+      text: 'No relevant Domain context was found for "unknown term"',
+      type: "tool",
+    });
   });
 
   // Simulates streaming updates where the service may resend the same thought.
@@ -110,6 +163,10 @@ describe("Intelligrate presentation utilities", () => {
     expect(normalizeBuddyMarkdown("First paragraph.\n\n.\n\nSecond paragraph.")).toBe(
       "First paragraph.\n\nSecond paragraph.",
     );
+    expect(normalizeBuddyMarkdown("Meeting details.\n\n(Source: Coordidate)")).toBe("Meeting details.");
+    expect(normalizeBuddyMarkdown("- Group availability at 10 AM. (Source: Coordidate)")).toBe(
+      "- Group availability at 10 AM.",
+    );
     expect(normalizeBuddyMarkdown("```txt\n.\n```\n\nDone.")).toBe("```txt\n.\n```\n\nDone.");
   });
 
@@ -135,6 +192,138 @@ describe("Intelligrate presentation utilities", () => {
     expect(mergeBuddySources(["ManualSource.pdf"], "From Static1Hazard.pdf", resources)).toEqual([
       "ManualSource.pdf",
       "Static1Hazard.pdf",
+    ]);
+  });
+
+  it("adds page focus to source pills when a known resource citation names a page", () => {
+    const resources = [
+      {
+        id: "res_session",
+        originalName: "Session 7_8.pdf",
+        title: "Session 7_8.pdf",
+        url: "/api/resources/res_session/file",
+      },
+      {
+        id: "res_random",
+        originalName: "Random Notes.pdf",
+        title: "Random Notes.pdf",
+        url: "/api/resources/res_random/file",
+      },
+    ];
+    const answer =
+      "I checked Session 7_8.pdf and Random Notes.pdf, and the topic appears on page 49 of those documents.";
+
+    expect(mergeBuddySources(["Session 7_8.pdf", "Random Notes.pdf"], answer, resources)).toEqual([
+      {
+        type: "resource",
+        label: "Session 7_8.pdf",
+        resourceId: "res_session",
+        pageNumber: 49,
+      },
+      {
+        type: "resource",
+        label: "Random Notes.pdf",
+        resourceId: "res_random",
+        pageNumber: 49,
+      },
+    ]);
+  });
+
+  it("keeps structured Domain source refs while deduplicating fallback text sources", () => {
+    const sourceRef = {
+      type: "resource",
+      label: "Static1Hazard.pdf",
+      resourceId: "res_static",
+      pageNumber: 2,
+      highlightPosition: {
+        boundingRect: { x1: 12, y1: 20, x2: 160, y2: 42, width: 600, height: 800, pageNumber: 2 },
+        rects: [{ x1: 12, y1: 20, x2: 160, y2: 42, width: 600, height: 800, pageNumber: 2 }],
+      },
+      textQuote: "Hazards can be eliminated with redundant terms.",
+    };
+    const merged = mergeBuddySources([sourceRef, "Static1Hazard.pdf"], "From Static1Hazard.pdf", [
+      {
+        id: "res_static",
+        originalName: "Static1Hazard.pdf",
+        title: "Static Hazard Notes",
+      },
+    ]);
+
+    expect(merged).toEqual([sourceRef]);
+    expect(getBuddySourceLabel(merged[0])).toBe("Static1Hazard.pdf");
+  });
+
+  it("prefers exact PDF highlight geometry over a generic inferred page pill", () => {
+    const resources = [
+      {
+        id: "res_session",
+        originalName: "Session 7_8.pdf",
+        title: "Session 7_8.pdf",
+        url: "/api/resources/res_session/file",
+      },
+    ];
+    const page51Highlight = {
+      boundingRect: { x1: 31, y1: 46, x2: 704, y2: 388, width: 720, height: 405, pageNumber: 51 },
+      rects: [{ x1: 67, y1: 101, x2: 299, y2: 119, width: 720, height: 405, pageNumber: 51 }],
+    };
+    const merged = mergeBuddySources(
+      [
+        "Session 7_8.pdf",
+        {
+          type: "resource",
+          label: "Session 7_8.pdf",
+          resourceId: "res_session",
+        },
+        {
+          type: "resource",
+          label: "Session 7_8.pdf",
+          resourceId: "res_session",
+          pageNumber: 52,
+          highlightPosition: {
+            boundingRect: { x1: 31, y1: 46, x2: 704, y2: 388, width: 720, height: 405, pageNumber: 52 },
+            rects: [{ x1: 31, y1: 101, x2: 647, y2: 119, width: 720, height: 405, pageNumber: 52 }],
+          },
+          score: 0.67,
+        },
+        {
+          type: "resource",
+          label: "Session 7_8.pdf",
+          resourceId: "res_session",
+          pageNumber: 51,
+          highlightPosition: page51Highlight,
+          textQuote: "Effective Annual Interest Rate uses compound interest.",
+          score: 0.61,
+        },
+      ],
+      "Based on Session 7_8.pdf (page 51), the Effective Annual Interest Rate is annualized using compound interest.",
+      resources,
+    );
+
+    expect(merged).toEqual([
+      expect.objectContaining({
+        label: "Session 7_8.pdf",
+        pageNumber: 51,
+        highlightPosition: page51Highlight,
+      }),
+    ]);
+  });
+
+  it("keeps distinct channel-style source labels instead of treating them as URL fragments", () => {
+    const messageSource = {
+      type: "convolution_message",
+      label: "#general source note",
+      messageId: "msg_1",
+    };
+    const annotationSource = {
+      type: "annotation",
+      label: "#general annotation",
+      annotationId: "ann_1",
+    };
+
+    expect(normalizeSourceKey("#general source note")).toBe("#general source note");
+    expect(mergeBuddySources([messageSource, annotationSource], "", [])).toEqual([
+      messageSource,
+      annotationSource,
     ]);
   });
 

@@ -93,12 +93,10 @@ function readPositiveNumber(value, fallback) {
 }
 
 const chatbotBaseUrl = resolveChatbotBaseUrl();
-const renderChatbotPublicUrl =
-  "https://diffriendtiate-orbital-26-ms2-chatbot.onrender.com";
 const chatbotWarmupBaseUrl = String(
   process.env.CHATBOT_WARMUP_BASE_URL ||
     process.env.CHATBOT_PUBLIC_URL ||
-    (process.env.NODE_ENV === "production" ? renderChatbotPublicUrl : chatbotBaseUrl),
+    chatbotBaseUrl,
 )
   .trim()
   .replace(/\/+$/, "");
@@ -1307,20 +1305,121 @@ function normalizeBuddyThinkingStep(step: any) {
 
     if (!text) return null;
 
-    return {
-      id: String(step.id || `${step.type || "thought"}:${text}`).slice(0, 260),
-      type: ["tool", "done", "thought"].includes(step.type) ? step.type : "thought",
-      text,
-      summary: getBuddyThinkingText(step.summary).slice(0, 260),
-      tool: String(step.tool || "").slice(0, 80),
-      status: String(step.status || "").slice(0, 40),
-    };
+      return {
+        id: String(step.id || `${step.type || "thought"}:${text}`).slice(0, 260),
+        type: ["tool", "done", "thought"].includes(step.type) ? step.type : "thought",
+        text,
+        summary: getBuddyThinkingText(step.summary).slice(0, 260),
+        tool: String(step.tool || "").slice(0, 80),
+        status: String(step.status || "").slice(0, 40),
+        sourceType: String(step.sourceType || step.source_type || "").slice(0, 80),
+      };
   }
 
   const text = String(step || "").trim().slice(0, 1500);
   if (!text) return null;
 
   return text;
+}
+
+function normalizeBuddyPdfRect(rect: any) {
+  if (!rect || typeof rect !== "object" || Array.isArray(rect)) return null;
+  const x1 = Number(rect.x1);
+  const y1 = Number(rect.y1);
+  const x2 = Number(rect.x2);
+  const y2 = Number(rect.y2);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  const pageNumber = Number(rect.pageNumber);
+
+  if (![x1, y1, x2, y2, width, height, pageNumber].every(Number.isFinite)) return null;
+  if (x2 <= x1 || y2 <= y1 || width <= 0 || height <= 0 || pageNumber < 1) return null;
+
+  return {
+    x1,
+    y1,
+    x2,
+    y2,
+    width,
+    height,
+    pageNumber: Math.floor(pageNumber),
+  };
+}
+
+function normalizeBuddyPdfHighlightPosition(position: any) {
+  if (!position || typeof position !== "object" || Array.isArray(position)) return undefined;
+
+  const boundingRect = normalizeBuddyPdfRect(position.boundingRect || position.bounding_rect);
+  const rects = (Array.isArray(position.rects) ? position.rects : [])
+    .map(normalizeBuddyPdfRect)
+    .filter(Boolean)
+    .slice(0, 24);
+
+  if (!boundingRect || !rects.length) return undefined;
+  return { boundingRect, rects };
+}
+
+function normalizeBuddySourceRef(source: any) {
+  if (typeof source === "string") {
+    return source.trim().slice(0, 240);
+  }
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+
+  const type = String(source.type || source.sourceType || "").trim().slice(0, 80);
+  const label = String(source.label || source.title || source.name || "").trim().slice(0, 180);
+  if (!type || !label) return null;
+
+  return {
+    type,
+    label,
+    roomId: String(source.roomId || source.room_id || "").slice(0, 80),
+    sourceId: String(source.sourceId || source.source_id || "").slice(0, 120),
+    resourceId: String(source.resourceId || source.resource_id || "").slice(0, 120),
+    messageId: String(source.messageId || source.message_id || "").slice(0, 120),
+    annotationId: String(source.annotationId || source.annotation_id || "").slice(0, 120),
+    sessionId: String(source.sessionId || source.session_id || "").slice(0, 120),
+    pollId: String(source.pollId || source.poll_id || "").slice(0, 120),
+    channel: String(source.channel || "").slice(0, 80),
+    folder: String(source.folder || "").slice(0, 180),
+    pageNumber: Number.isFinite(Number(source.pageNumber)) ? Number(source.pageNumber) : undefined,
+    slideNumber: Number.isFinite(Number(source.slideNumber)) ? Number(source.slideNumber) : undefined,
+    date: String(source.date || "").slice(0, 40),
+    startsAt: String(source.startsAt || source.starts_at || "").slice(0, 80),
+    textQuote: String(source.textQuote || source.text_quote || "").trim().slice(0, 600),
+    highlightPosition: normalizeBuddyPdfHighlightPosition(source.highlightPosition || source.highlight_position),
+    snippet: String(source.snippet || "").trim().slice(0, 600),
+    score: Number.isFinite(Number(source.score)) ? Number(source.score) : undefined,
+  };
+}
+
+function buddySourceIdentity(source: any) {
+  if (typeof source === "string") return source.trim().toLowerCase();
+  if (!source || typeof source !== "object") return "";
+  return [
+    source.type,
+    source.resourceId,
+    source.messageId,
+    source.annotationId,
+    source.sessionId,
+    source.pollId,
+    source.sourceId,
+    source.pageNumber,
+    source.slideNumber,
+  ].map((part) => String(part || "")).join("|");
+}
+
+function normalizeBuddySources(value: any) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map(normalizeBuddySourceRef)
+    .filter(Boolean)
+    .filter((source) => {
+      const key = buddySourceIdentity(source);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 12);
 }
 
 function normalizeBuddyThreadMessages(value: any, actor: any = null) {
@@ -1335,9 +1434,7 @@ function normalizeBuddyThreadMessages(value: any, actor: any = null) {
           ? String(message?.preface || "").trim().slice(0, 3000)
           : "";
       const attachments = normalizeMessageAttachments(message?.attachments);
-      const sources = Array.isArray(message?.sources)
-        ? message.sources.map(String).map((source) => source.trim()).filter(Boolean).slice(0, 8)
-        : [];
+      const sources = normalizeBuddySources(message?.sources);
       const thinkingSteps =
         role === "assistant" && Array.isArray(message?.thinkingSteps)
           ? message.thinkingSteps
@@ -2498,6 +2595,466 @@ function chatbotDocumentPayload(resource) {
   };
 }
 
+const DOMAIN_CORPUS_TEXT_LIMIT = 6000;
+const DOMAIN_CORPUS_MAX_MESSAGES = 1000;
+const DOMAIN_CORPUS_SCHEMA_VERSION = "2026-07-13-domain-source-temporal-v3";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || process.env.TZ || "Asia/Singapore";
+
+function compactDomainCorpusText(value, limit = DOMAIN_CORPUS_TEXT_LIMIT) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function sourceDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      timeZone: APP_TIMEZONE,
+      year: "numeric",
+    }).formatToParts(date);
+    const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return byType.year && byType.month && byType.day ? `${byType.year}-${byType.month}-${byType.day}` : "";
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function sourceTimestamp(value) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function domainResourceSourceRef(resource) {
+  const label = resource.originalName || resource.title || resource.storageName || resource.url || "Resource";
+  return {
+    type: "resource",
+    roomId: resource.roomId,
+    label,
+    resourceId: resource.id,
+    sourceId: resource.id,
+    folder: resource.folder || "General",
+  };
+}
+
+function domainCorpusFilePayload(resource) {
+  const payload = chatbotDocumentPayload(resource);
+  if (!payload) return null;
+
+  return {
+    ...payload,
+    id: resource.id,
+    source_type: "resource",
+    source_ref: domainResourceSourceRef(resource),
+    metadata: {
+      resource_id: resource.id,
+      folder: resource.folder || "General",
+      title: resource.title || "",
+      original_name: resource.originalName || "",
+      storage_name: resource.storageName || "",
+      mime_type: resource.mimeType || "",
+      content_hash: resource.contentHash || "",
+      updated_at: resource.updatedAt || resource.createdAt || "",
+    },
+  };
+}
+
+function domainCorpusDocument(id, sourceType, title, text, sourceRef, metadata: any = {}) {
+  const cleanedText = compactDomainCorpusText(text);
+  if (!id || !sourceType || !cleanedText) return null;
+
+  return {
+    id,
+    source_type: sourceType,
+    title: String(title || sourceRef?.label || id).slice(0, 180),
+    text: cleanedText,
+    source_ref: sourceRef,
+    metadata,
+  };
+}
+
+function buildConvolutionCorpusDocuments(db, room) {
+  return db.messages
+    .filter((message) => message.roomId === room.id && String(message.body || "").trim())
+    .slice(-DOMAIN_CORPUS_MAX_MESSAGES)
+    .map((message) => {
+      const channel = normalizeChannel(message.channel || "general");
+      const sender = publicUser(db.users.find((user) => user.id === message.senderId));
+      const attachmentNames = normalizeMessageAttachments(message.attachments)
+        .map((attachment) => attachment.title)
+        .filter(Boolean);
+      const label = `#${channel} message`;
+      const text = [
+        `Convolution channel: #${channel}`,
+        sender?.name ? `Author: ${sender.name}` : "",
+        message.createdAt ? `Sent at: ${message.createdAt}` : "",
+        `Message: ${message.body}`,
+        attachmentNames.length ? `Attachments: ${attachmentNames.join(", ")}` : "",
+      ].filter(Boolean).join("\n");
+
+      return domainCorpusDocument(
+        `message:${message.id}`,
+        "convolution_message",
+        label,
+        text,
+        {
+          type: "convolution_message",
+          roomId: room.id,
+          label,
+          channel,
+          messageId: message.id,
+          sourceId: message.id,
+          createdAt: message.createdAt || "",
+        },
+        {
+          source_id: message.id,
+          message_id: message.id,
+          channel,
+          created_at: message.createdAt || "",
+          updated_at: message.updatedAt || message.createdAt || "",
+        },
+      );
+    })
+    .filter(Boolean);
+}
+
+function buildAnnotationCorpusDocuments(db, room) {
+  return db.annotations
+    .filter((annotation) => annotation.roomId === room.id)
+    .map((annotation) => {
+      const channel = normalizeChannel(annotation.channel || "general");
+      const quotedText = String(annotation.content?.text || "").trim();
+      const replies = Array.isArray(annotation.replies)
+        ? annotation.replies.map((reply) => reply.comment).filter(Boolean)
+        : [];
+      const label = quotedText
+        ? `Annotation on "${compactDomainCorpusText(quotedText, 48)}"`
+        : `Annotation in #${channel}`;
+      const text = [
+        `Annotation channel: #${channel}`,
+        annotation.resourceId ? `Resource id: ${annotation.resourceId}` : "",
+        quotedText ? `Highlighted text: ${quotedText}` : "",
+        annotation.comment ? `Comment: ${annotation.comment}` : "",
+        replies.length ? `Replies: ${replies.join(" | ")}` : "",
+      ].filter(Boolean).join("\n");
+
+      return domainCorpusDocument(
+        `annotation:${annotation.id}`,
+        "annotation",
+        label,
+        text,
+        {
+          type: "annotation",
+          roomId: room.id,
+          label,
+          channel,
+          annotationId: annotation.id,
+          resourceId: annotation.resourceId || "",
+          sourceId: annotation.id,
+          textQuote: quotedText,
+        },
+        {
+          source_id: annotation.id,
+          annotation_id: annotation.id,
+          resource_id: annotation.resourceId || "",
+          channel,
+          updated_at: annotation.updatedAt || annotation.createdAt || "",
+        },
+      );
+    })
+    .filter(Boolean);
+}
+
+function buildCoordidateCorpusDocuments(db, room) {
+  const sessionDocuments = db.sessions
+    .filter((session) => session.roomId === room.id && session.visibility !== "private")
+    .map((session) => {
+      const label = session.title || "Coordidate session";
+      const date = sourceDate(session.startsAt);
+      const startTs = sourceTimestamp(session.startsAt);
+      const endTs = sourceTimestamp(session.endsAt) || startTs;
+      const text = [
+        `Coordidate ${session.kind || "session"}: ${label}`,
+        session.agenda ? `Agenda: ${session.agenda}` : "",
+        session.startsAt ? `Starts at: ${session.startsAt}` : "",
+        session.endsAt ? `Ends at: ${session.endsAt}` : "",
+        session.location ? `Location: ${session.location}` : "",
+      ].filter(Boolean).join("\n");
+
+      return domainCorpusDocument(
+        `session:${session.id}`,
+        "coordidate_session",
+        label,
+        text,
+        {
+          type: "coordidate_session",
+          roomId: room.id,
+          label,
+          sessionId: session.id,
+          sourceId: session.id,
+          startsAt: session.startsAt || "",
+          endsAt: session.endsAt || "",
+          date,
+        },
+        {
+          source_id: session.id,
+          session_id: session.id,
+          date,
+          start_ts: startTs,
+          end_ts: endTs,
+          starts_at: session.startsAt || "",
+          ends_at: session.endsAt || "",
+          kind: session.kind || "meeting",
+          updated_at: session.updatedAt || session.createdAt || "",
+        },
+      );
+    });
+
+  const pollDocuments = (db.coordinatePolls || [])
+    .filter((poll) => poll.roomId === room.id)
+    .map((poll) => {
+      const responses = (db.coordinateResponses || []).filter((response) => response.pollId === poll.id);
+      const label = poll.title || "Coordidate poll";
+      const date = sourceDate(poll.rangeStart || poll.createdAt);
+      const rangeStartTs = sourceTimestamp(poll.rangeStart);
+      const rangeEndTs = sourceTimestamp(poll.rangeEnd) || rangeStartTs;
+      const selectedDates = Array.isArray(poll.selectedDates) ? poll.selectedDates.join(", ") : "";
+      const text = [
+        `Coordidate poll: ${label}`,
+        poll.rangeStart ? `Range starts: ${poll.rangeStart}` : "",
+        poll.rangeEnd ? `Range ends: ${poll.rangeEnd}` : "",
+        selectedDates ? `Selected dates: ${selectedDates}` : "",
+        `Responses: ${responses.length}`,
+      ].filter(Boolean).join("\n");
+
+      return domainCorpusDocument(
+        `poll:${poll.id}`,
+        "coordidate_poll",
+        label,
+        text,
+        {
+          type: "coordidate_poll",
+          roomId: room.id,
+          label,
+          pollId: poll.id,
+          sourceId: poll.id,
+          date,
+          startsAt: poll.rangeStart || "",
+        },
+        {
+          source_id: poll.id,
+          poll_id: poll.id,
+          date,
+          range_start_ts: rangeStartTs,
+          range_end_ts: rangeEndTs,
+          starts_at: poll.rangeStart || "",
+          ends_at: poll.rangeEnd || "",
+          updated_at: poll.updatedAt || poll.createdAt || "",
+        },
+      );
+    });
+
+  return [...sessionDocuments, ...pollDocuments].filter(Boolean);
+}
+
+function buildDomainCorpusPayload(db, room) {
+  const supportedResources = db.resources.filter(
+    (resource) => resource.roomId === room.id && !resource.deletedAt && isChatbotDocument(resource),
+  );
+
+  return {
+    room_id: room.id,
+    files: supportedResources.map(domainCorpusFilePayload).filter(Boolean),
+    documents: [
+      ...buildConvolutionCorpusDocuments(db, room),
+      ...buildAnnotationCorpusDocuments(db, room),
+      ...buildCoordidateCorpusDocuments(db, room),
+    ],
+  };
+}
+
+function domainCorpusFingerprint(corpus) {
+  return JSON.stringify({
+    schema: DOMAIN_CORPUS_SCHEMA_VERSION,
+    timezone: APP_TIMEZONE,
+    files: corpus.files
+      .map((file) => ({
+        id: file.id || "",
+        url: file.url || "",
+        name: file.file_name || "",
+        hash: file.metadata?.content_hash || "",
+        updatedAt: file.metadata?.updated_at || "",
+      }))
+      .sort((a, b) => `${a.id}:${a.hash}:${a.updatedAt}`.localeCompare(`${b.id}:${b.hash}:${b.updatedAt}`)),
+    documents: corpus.documents
+      .map((document) => ({
+        id: document.id,
+        metadata: document.metadata || {},
+        sourceRef: document.source_ref || {},
+        type: document.source_type,
+        text: document.text,
+        updatedAt: document.metadata?.updated_at || "",
+      }))
+      .sort((a, b) => `${a.type}:${a.id}`.localeCompare(`${b.type}:${b.id}`)),
+  });
+}
+
+function sourceNameKey(value) {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return "";
+  const withoutQuery = cleaned.split(/[?#]/)[0];
+  const fileName = withoutQuery.split(/[\\/]/).pop() || withoutQuery;
+  try {
+    return decodeURIComponent(fileName).toLowerCase();
+  } catch {
+    return fileName.toLowerCase();
+  }
+}
+
+function findRoomResourceForSource(db, room, source) {
+  const resourceId = String(source?.resourceId || source?.sourceId || "").trim();
+  if (resourceId) {
+    const resource = db.resources.find(
+      (candidate) => candidate.id === resourceId && candidate.roomId === room.id && !candidate.deletedAt,
+    );
+    if (resource) return resource;
+  }
+
+  const labelKey = sourceNameKey(source?.label || source);
+  if (!labelKey) return null;
+  return db.resources.find((resource) => {
+    if (resource.roomId !== room.id || resource.deletedAt) return false;
+    return [resource.title, resource.originalName, resource.storageName, resource.url]
+      .map(sourceNameKey)
+      .some((key) => key && key === labelKey);
+  }) || null;
+}
+
+function enrichBuddySourceForRoom(db, room, source, userId) {
+  const normalized = normalizeBuddySourceRef(source);
+  if (!normalized) return null;
+
+  if (typeof normalized === "string") {
+    const resource = findRoomResourceForSource(db, room, normalized);
+    return resource
+      ? {
+          type: "resource",
+          roomId: room.id,
+          label: resource.originalName || resource.title || resource.storageName || normalized,
+          resourceId: resource.id,
+          sourceId: resource.id,
+          folder: resource.folder || "General",
+        }
+      : normalized;
+  }
+
+  if (normalized.roomId && normalized.roomId !== room.id) return null;
+
+  if (normalized.type === "resource") {
+    const resource = findRoomResourceForSource(db, room, normalized);
+    if (!resource) return null;
+    return {
+      ...normalized,
+      roomId: room.id,
+      label: resource.originalName || resource.title || resource.storageName || normalized.label,
+      resourceId: resource.id,
+      sourceId: resource.id,
+      folder: resource.folder || "General",
+    };
+  }
+
+  if (normalized.type === "convolution_message") {
+    const message = db.messages.find(
+      (candidate) => candidate.id === normalized.messageId && candidate.roomId === room.id,
+    );
+    if (!message) return null;
+    const channel = normalizeChannel(message.channel || normalized.channel || "general");
+    return {
+      ...normalized,
+      roomId: room.id,
+      label: normalized.label || `#${channel} message`,
+      channel,
+      messageId: message.id,
+      sourceId: message.id,
+    };
+  }
+
+  if (normalized.type === "annotation") {
+    const annotation = db.annotations.find(
+      (candidate) => candidate.id === normalized.annotationId && candidate.roomId === room.id,
+    );
+    if (!annotation) return null;
+    return {
+      ...normalized,
+      roomId: room.id,
+      channel: normalizeChannel(annotation.channel || normalized.channel || "general"),
+      annotationId: annotation.id,
+      resourceId: annotation.resourceId || normalized.resourceId,
+      sourceId: annotation.id,
+      textQuote: normalized.textQuote || annotation.content?.text || "",
+    };
+  }
+
+  if (normalized.type === "coordidate_session") {
+    const session = db.sessions.find(
+      (candidate) =>
+        candidate.id === normalized.sessionId &&
+        candidate.roomId === room.id &&
+        candidate.visibility !== "private" &&
+        isSessionVisibleToUser(candidate, userId),
+    );
+    if (!session) return null;
+    return {
+      ...normalized,
+      roomId: room.id,
+      label: session.title || normalized.label,
+      sessionId: session.id,
+      sourceId: session.id,
+      date: sourceDate(session.startsAt),
+      startsAt: session.startsAt || "",
+    };
+  }
+
+  if (normalized.type === "coordidate_poll") {
+    const poll = (db.coordinatePolls || []).find(
+      (candidate) => candidate.id === normalized.pollId && candidate.roomId === room.id,
+    );
+    if (!poll) return null;
+    return {
+      ...normalized,
+      roomId: room.id,
+      label: poll.title || normalized.label,
+      pollId: poll.id,
+      sourceId: poll.id,
+      date: sourceDate(poll.rangeStart || poll.createdAt),
+    };
+  }
+
+  if (normalized.type === "uploaded_file") {
+    return normalized;
+  }
+
+  return null;
+}
+
+function enrichBuddySourcesForRoom(db, room, sources, userId) {
+  const seen = new Set();
+  return (Array.isArray(sources) ? sources : [])
+    .map((source) => enrichBuddySourceForRoom(db, room, source, userId))
+    .filter(Boolean)
+    .filter((source) => {
+      const key = buddySourceIdentity(source);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 12);
+}
+
 function resourceDisplayName(resource) {
   return resource?.originalName || resource?.title || resource?.storageName || resource?.url || "";
 }
@@ -2555,50 +3112,32 @@ function withBuddyResourceContext(messageChain, { attachedResources = [], roomRe
   return nextChain;
 }
 
-function roomCorpusFingerprint(resources) {
-  return JSON.stringify(
-    resources
-      .map((resource) => ({
-        // File content hashes keep Intelligrate embedding tied to actual corpus changes.
-        // Renaming or reordering a resource should not force an expensive re-embed.
-        contentHash: resource.contentHash || "",
-        url: resourceUrlForChatbot(resource),
-        name: resource.originalName || resource.title || resource.storageName || "",
-        size: resource.size || 0,
-      }))
-      .sort((a, b) => `${a.contentHash}:${a.url}`.localeCompare(`${b.contentHash}:${b.url}`)),
-  );
-}
-
 /**
- * Embeds supported room resources in Intelligrate's corpus.
- * A fingerprint cache avoids repeated embedding when room documents are unchanged.
+ * Embeds supported Domain context in Intelligrate's corpus.
+ * A fingerprint cache avoids repeated embedding when room context is unchanged.
  */
 async function syncRoomResourcesWithChatbot(db, room, options: any = {}) {
   const force = Boolean(options.force);
-  const supportedResources = db.resources.filter(
-    (resource) => resource.roomId === room.id && !resource.deletedAt && isChatbotDocument(resource),
-  );
-  const fingerprint = roomCorpusFingerprint(supportedResources);
+  const corpus = buildDomainCorpusPayload(db, room);
+  const fingerprint = domainCorpusFingerprint(corpus);
   const cachedFingerprint = room.resourceSyncFingerprint || roomCorpusSyncCache.get(room.id);
 
   if (!force && cachedFingerprint === fingerprint) {
     roomCorpusSyncCache.set(room.id, fingerprint);
     return {
       result: true,
-      success: supportedResources.map(
-        (resource) => resource.originalName || resource.title || resource.storageName,
-      ),
+      success: [
+        ...corpus.files.map((file) => file.file_name || file.url),
+        ...corpus.documents.map((document) => document.title),
+      ],
       failed: [],
       totalChunks: 0,
       cached: true,
-      message: "Room corpus is already synced.",
+      message: "Domain corpus is already synced.",
     };
   }
 
-  const urls = supportedResources.map(chatbotDocumentPayload).filter(Boolean);
-
-  if (!urls.length) {
+  if (!corpus.files.length && !corpus.documents.length) {
     await clearChatbotCorpus(room.id);
     roomCorpusSyncCache.set(room.id, fingerprint);
     room.resourceSyncFingerprint = fingerprint;
@@ -2609,15 +3148,14 @@ async function syncRoomResourcesWithChatbot(db, room, options: any = {}) {
       success: [],
       failed: [],
       totalChunks: 0,
-      message: "No supported PDF, TXT, or DOCX resources are available to sync.",
+      message: "No supported Domain context is available to sync.",
     };
   }
 
-  console.info(`[buddy] Syncing ${urls.length} resource(s) for room ${room.id}`);
-  const payload = await callChatbotJson("/embed", {
-    room_id: room.id,
-    urls,
-  });
+  console.info(
+    `[buddy] Syncing Domain corpus for room ${room.id}: ${corpus.files.length} file(s), ${corpus.documents.length} record(s)`,
+  );
+  const payload = await callChatbotJson("/corpus/sync", corpus);
 
   if (payload.result) {
     roomCorpusSyncCache.set(room.id, fingerprint);
@@ -5398,7 +5936,7 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
 
     res.json({
       answer: payload.answer || "",
-      sources: payload.sources || [],
+      sources: enrichBuddySourcesForRoom(db, room, payload.sources || [], req.user.id),
       messageChain: payload.message_chain || [],
       directAttachment: directResource ? resourceDto(db, directResource) : null,
       provider,
@@ -5464,6 +6002,35 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
       res.flush?.();
     };
 
+    const forwardChatbotSseBlock = (block) => {
+      const trimmed = String(block || "").trim();
+      if (!trimmed || trimmed.startsWith(":")) return;
+
+      let eventName = "message";
+      const dataLines = [];
+      for (const line of String(block).split("\n")) {
+        if (line.startsWith("event:")) {
+          eventName = line.slice("event:".length).trim() || "message";
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).replace(/^ /, ""));
+        }
+      }
+
+      const data = dataLines.join("\n");
+      if (eventName === "sources") {
+        let parsedSources = [];
+        try {
+          parsedSources = JSON.parse(data || "[]");
+        } catch {
+          parsedSources = [];
+        }
+        writeSse("sources", enrichBuddySourcesForRoom(db, room, parsedSources, req.user.id));
+        return;
+      }
+
+      writeSse(eventName, data);
+    };
+
     await syncRoomResourcesWithChatbot(db, room);
 
     console.info(
@@ -5485,11 +6052,24 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
     });
 
     const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = "";
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      res.write(Buffer.from(value));
-      res.flush?.();
+      sseBuffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+      let boundaryIndex = sseBuffer.indexOf("\n\n");
+      while (boundaryIndex >= 0) {
+        const block = sseBuffer.slice(0, boundaryIndex);
+        sseBuffer = sseBuffer.slice(boundaryIndex + 2);
+        forwardChatbotSseBlock(block);
+        boundaryIndex = sseBuffer.indexOf("\n\n");
+      }
+    }
+    sseBuffer += decoder.decode().replace(/\r\n/g, "\n");
+    if (sseBuffer.trim()) {
+      forwardChatbotSseBlock(sseBuffer);
     }
 
     res.end();

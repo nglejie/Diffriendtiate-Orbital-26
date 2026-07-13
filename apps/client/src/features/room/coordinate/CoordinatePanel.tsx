@@ -675,6 +675,7 @@ function getPollResponseCount(poll, responses) {
 
 export function CoordinatePanel({
   coordinate,
+  focusedSource = null,
   onChanged,
   onCoordinateChanged,
   onError,
@@ -715,6 +716,7 @@ export function CoordinatePanel({
   const [eventSaving, setEventSaving] = useState(false);
   const [deletingEventId, setDeletingEventId] = useState("");
   const [selectedSession, setSelectedSession] = useState(null);
+  const [focusedSessionId, setFocusedSessionId] = useState("");
   const draggingRef = useRef(false);
   const dragStartSlotRef = useRef(null);
   const dragPaintStatusRef = useRef("");
@@ -810,6 +812,40 @@ export function CoordinatePanel({
     setSlotStatusDraft(buildSlotStatusMap(currentUserResponse));
     setAvailabilityDirty(false);
   }, [currentUserResponse?.id, currentUserResponse?.updatedAt, poll?.id]);
+
+  useEffect(() => {
+    if (!focusedSource) return undefined;
+
+    const targetSession = asArray(sessions).find((session) => session.id === focusedSource.sessionId);
+    const targetPoll = asArray(activePolls).find((candidate) => candidate.id === focusedSource.pollId);
+    const targetDate = new Date(
+      targetSession?.startsAt ||
+        targetPoll?.rangeStart ||
+        focusedSource.startsAt ||
+        focusedSource.date ||
+        "",
+    );
+
+    if (!Number.isNaN(targetDate.getTime())) {
+      setCursorDate(startOfDay(targetDate));
+    }
+
+    if (targetSession?.id) {
+      setView("week");
+      setFocusedSessionId(targetSession.id);
+      const timeoutId = window.setTimeout(() => {
+        setFocusedSessionId((current) => (current === targetSession.id ? "" : current));
+      }, 7000);
+      return () => window.clearTimeout(timeoutId);
+    }
+
+    if (targetPoll?.id) {
+      setSelectedPollId(targetPoll.id);
+      setView("availability");
+    }
+
+    return undefined;
+  }, [activePolls, focusedSource?.nonce, focusedSource?.pollId, focusedSource?.sessionId, sessions]);
 
   useEffect(() => {
     function stopDrag() {
@@ -1533,6 +1569,7 @@ export function CoordinatePanel({
       ) : view === "month" ? (
         <MonthCalendar
           cursorDate={cursorDate}
+          focusedSessionId={focusedSessionId}
           monthDays={monthDays}
           onDateSelect={setCursorDate}
           onOpenEvent={setSelectedSession}
@@ -1542,6 +1579,7 @@ export function CoordinatePanel({
       ) : (
         <TimeGridCalendar
           days={calendarDays}
+          focusedSessionId={focusedSessionId}
           onOpenEvent={setSelectedSession}
           onNewEvent={openEventDialog}
           rows={calendarRows}
@@ -1939,7 +1977,7 @@ function AvailabilityHoverTooltip({ availability, point, slot }) {
   );
 }
 
-function TimeGridCalendar({ days, onOpenEvent, onNewEvent, rows, sessions, view }) {
+function TimeGridCalendar({ days, focusedSessionId = "", onOpenEvent, onNewEvent, rows, sessions, view }) {
   const scrollRef = useRef(null);
   const dayKey = days.map((day) => localDateKey(day)).join("|");
   const gridHeight = (CALENDAR_DAY_END_HOUR - CALENDAR_DAY_START_HOUR) * CALENDAR_HOUR_ROW_HEIGHT;
@@ -1949,13 +1987,18 @@ function TimeGridCalendar({ days, onOpenEvent, onNewEvent, rows, sessions, view 
     const surface = scrollRef.current;
     if (!surface) return undefined;
 
+    const focusedSession = asArray(sessions).find((session) => session.id === focusedSessionId);
     const hasToday = days.some((day) => isSameDate(day, now));
-    const targetMinutes = hasToday ? Math.max(0, minutesOfDay(now) - 120) : 7 * 60;
+    const targetMinutes = focusedSession
+      ? Math.max(0, minutesOfDay(focusedSession.startsAt) - 60)
+      : hasToday
+        ? Math.max(0, minutesOfDay(now) - 120)
+        : 7 * 60;
     const frame = window.requestAnimationFrame(() => {
       surface.scrollTop = Math.max(0, (targetMinutes / 60) * CALENDAR_HOUR_ROW_HEIGHT);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [dayKey, view]);
+  }, [dayKey, focusedSessionId, sessions, view]);
 
   return (
     <main
@@ -1994,6 +2037,7 @@ function TimeGridCalendar({ days, onOpenEvent, onNewEvent, rows, sessions, view 
               >
                 {shelfSessions.map((session) => (
                   <CalendarEventBlock
+                    focused={focusedSessionId === session.id}
                     key={session.id}
                     onOpen={() => onOpenEvent(session)}
                     session={session}
@@ -2055,6 +2099,7 @@ function TimeGridCalendar({ days, onOpenEvent, onNewEvent, rows, sessions, view 
               return (
                 <CalendarEventBlock
                   compact={compact}
+                  focused={focusedSessionId === item.session.id}
                   key={item.session.id}
                   onOpen={() => onOpenEvent(item.session)}
                   session={item.session}
@@ -2077,6 +2122,7 @@ function TimeGridCalendar({ days, onOpenEvent, onNewEvent, rows, sessions, view 
 
 function MonthCalendar({
   cursorDate,
+  focusedSessionId = "",
   monthDays,
   onDateSelect,
   onOpenEvent,
@@ -2165,9 +2211,10 @@ function MonthCalendar({
               <span>{day.date.getDate()}</span>
               <div>
                 {daySessions.slice(0, MONTH_VISIBLE_EVENT_LIMIT).map((session) => (
-                  <MonthEventChip
-                    key={session.id}
-                    onClick={(event) => {
+                    <MonthEventChip
+                      focused={focusedSessionId === session.id}
+                      key={session.id}
+                      onClick={(event) => {
                       event.stopPropagation();
                       onOpenEvent(session);
                     }}
@@ -2207,9 +2254,10 @@ function MonthCalendar({
           </header>
           <div className="coordinate-month-more-list">
             {overflowDay.sessions.map((session) => (
-              <MonthEventChip
-                key={session.id}
-                onClick={(event) => {
+                <MonthEventChip
+                  focused={focusedSessionId === session.id}
+                  key={session.id}
+                  onClick={(event) => {
                   event.stopPropagation();
                   setOverflowDay(null);
                   onOpenEvent(session);
@@ -2224,11 +2272,11 @@ function MonthCalendar({
   );
 }
 
-function MonthEventChip({ onClick, session }) {
+function MonthEventChip({ focused = false, onClick, session }) {
   const allDay = sessionIsAllDay(session);
   return (
     <article
-      className={`${session.kind || "meeting"} ${allDay ? "all-day" : "timed"}`}
+      className={`${session.kind || "meeting"} ${allDay ? "all-day" : "timed"} ${focused ? "source-focused" : ""}`.trim()}
       onClick={onClick}
       role="button"
       style={{ "--event-color": sessionColorValue(session) }}
@@ -2250,6 +2298,7 @@ function CalendarEventBlock({
   canDelete = false,
   compact = false,
   deleting = false,
+  focused = false,
   onDelete = null,
   onOpen,
   session,
@@ -2269,7 +2318,7 @@ function CalendarEventBlock({
 
   return (
     <article
-      className={`coordinate-event-block ${session.kind || "meeting"} ${allDay ? "all-day" : ""} ${timed ? "timed" : ""} ${compact ? "compact" : ""}`.trim()}
+      className={`coordinate-event-block ${session.kind || "meeting"} ${allDay ? "all-day" : ""} ${timed ? "timed" : ""} ${compact ? "compact" : ""} ${focused ? "source-focused" : ""}`.trim()}
       onClick={(event) => {
         event.stopPropagation();
         onOpen?.();

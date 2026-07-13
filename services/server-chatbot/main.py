@@ -9,6 +9,8 @@ from vectorstore import VectorStore
 from agent import Agent
 from models import (
     HistoryMessage,
+    DomainCorpusSyncRequest,
+    DomainCorpusSyncResponse,
     EmbedRequest,
     EmbedResponse,
     PredictResponse,
@@ -273,6 +275,40 @@ async def embed_documents(body: EmbedRequest):
     except Exception as e:
         # print(f"Unexpected Error {e}")
         logger.error(f"Unexpected error in embed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occured")
+
+@app.post("/corpus/sync", response_model=DomainCorpusSyncResponse)
+async def sync_domain_corpus(body: DomainCorpusSyncRequest):
+    """
+    Replace one room's searchable Domain corpus with typed app-owned records.
+
+    The Node app remains the source of truth for permissions and canonical IDs.
+    This service only stores retrievable chunks plus flat metadata that can be
+    returned as structured source refs after a tool search.
+    """
+    try:
+        logger.info(
+            f"Domain corpus sync request | room: {body.room_id} | files: {len(body.files)} | records: {len(body.documents)}"
+        )
+        if not body.room_id:
+            raise HTTPException(status_code=400, detail="room_id is required")
+
+        results = await store.sync_domain_corpus(
+            room_id=body.room_id,
+            files=body.files,
+            documents=body.documents,
+        )
+
+        return DomainCorpusSyncResponse(
+            result=len(results["failed"]) == 0,
+            success=results["success"],
+            failed=results["failed"],
+            total_chunks=results["total_chunks"],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in domain corpus sync: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 @app.post("/predict", response_model=PredictResponse)

@@ -72,6 +72,7 @@ export async function startMockChatbot(options: any = {}) {
   const port = await getFreePort();
   const calls = {
     corpusDeletes: [],
+    corpusSyncs: [],
     embeds: [],
     providerCatalogs: 0,
     predictions: [],
@@ -129,6 +130,23 @@ export async function startMockChatbot(options: any = {}) {
           : [],
         failed: [],
         total_chunks: Array.isArray((body as any)?.urls) ? (body as any).urls.length : 0,
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/corpus/sync") {
+      const body = await readRequestBody(request);
+      calls.corpusSyncs.push(body);
+      const fileCount = Array.isArray((body as any)?.files) ? (body as any).files.length : 0;
+      const documentCount = Array.isArray((body as any)?.documents) ? (body as any).documents.length : 0;
+      sendJson(response, 200, {
+        result: true,
+        success: [
+          ...((body as any)?.files || []).map((item) => item.file_name || item.url || "file"),
+          ...((body as any)?.documents || []).map((item) => item.title || item.id || "record"),
+        ],
+        failed: [],
+        total_chunks: fileCount + documentCount,
       });
       return;
     }

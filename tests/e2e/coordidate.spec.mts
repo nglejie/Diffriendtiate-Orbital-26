@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import {
   apiRequest,
   createRoom,
@@ -15,6 +15,40 @@ function sgIso(date, time) {
 
 function relativeIso(offsetMinutes) {
   return new Date(Date.now() + offsetMinutes * 60 * 1000).toISOString();
+}
+
+function monthIndex(value: Date) {
+  return value.getFullYear() * 12 + value.getMonth();
+}
+
+function parseMonthTitle(value: string) {
+  const parsed = new Date(`${value} 1`);
+  return Number.isNaN(parsed.getTime()) ? null : monthIndex(parsed);
+}
+
+async function chooseDateFromOpenPicker(datePopover: Locator, dateKey: string) {
+  const target = new Date(`${dateKey}T00:00:00+08:00`);
+  const targetMonthIndex = monthIndex(target);
+  const targetMonthTitle = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(target);
+
+  for (let attempts = 0; attempts < 36; attempts += 1) {
+    const currentTitle = (await datePopover.locator("header strong").innerText()).trim();
+    if (currentTitle === targetMonthTitle) break;
+
+    const currentMonthIndex = parseMonthTitle(currentTitle);
+    if (currentMonthIndex == null) {
+      throw new Error(`Unable to parse Coordidate date picker month: ${currentTitle}`);
+    }
+
+    await datePopover
+      .getByRole("button", { name: currentMonthIndex > targetMonthIndex ? /^previous month$/i : /^next month$/i })
+      .click();
+  }
+
+  await expect(datePopover.locator("header strong")).toHaveText(targetMonthTitle);
+  await datePopover
+    .locator(".coordinate-date-grid button:not(.muted)", { hasText: new RegExp(`^${target.getDate()}$`) })
+    .click();
 }
 
 async function seedSession(roomId, token, body) {
@@ -249,8 +283,7 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   await expect
     .poll(() => datePopover.evaluate((element) => getComputedStyle(element).backdropFilter))
     .toBe("none");
-  await datePopover.getByRole("button", { name: /^today$/i }).click();
-  await page.getByRole("button", { name: /^previous$/i }).click();
+  await chooseDateFromOpenPicker(datePopover, "2026-07-04");
 
   const timeLabels = await page
     .locator(".coordinate-heatmap-grid.calendar-mode .coordinate-grid-time")
@@ -391,9 +424,8 @@ test("Coordidate keeps calendar and availability interactions polished", async (
   expect(manualSessionBody.endsAt).toBe(expectedManualEnd);
   expect(manualSessionBody.startsAt).toMatch(/Z$/);
   await expect(manualDialog).toBeHidden();
-  if ((await page.locator(".coordinate-toolbar-title").innerText()).includes("6 Jul")) {
-    await page.getByRole("button", { name: /^previous$/i }).click();
-  }
+  await page.locator(".coordinate-date-button").click();
+  await chooseDateFromOpenPicker(page.locator(".coordinate-date-popover"), "2026-07-04");
   await expect(page.locator(".coordinate-event-block:has-text('Manual Button Item')")).toBeVisible();
 
   await page.getByRole("button", { name: /^availability$/i }).click();

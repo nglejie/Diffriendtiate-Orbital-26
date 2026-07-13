@@ -22,9 +22,18 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import {
+  AreaHighlight,
+  PdfHighlighter,
+  PdfLoader,
+  TextHighlight,
+  useHighlightContainerContext,
+} from "react-pdf-highlighter-extended";
+import type { Highlight, PdfHighlighterUtils } from "react-pdf-highlighter-extended";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api } from "../../../api.ts";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { api, getAuthToken } from "../../../api.ts";
 import { AppSelectMenu } from "../../../shared/ui/AppSelectMenu.tsx";
 import SmallSettingsDialog from "../../../shared/ui/SmallSettingsDialog.tsx";
 import { UPLOADS_FOLDER } from "../roomConstants.ts";
@@ -330,10 +339,151 @@ function resourcePreviewKind(resource) {
   return "none";
 }
 
-function resourcePreviewUrl(resource) {
+export function resourcePreviewUrl(resource, focus = {}) {
   if (!resource) return "";
-  if (resource.pdfUrl) return resource.pdfUrl;
-  return resource.fileUrl || resource.url || "";
+  const url = resource.pdfUrl || resource.fileUrl || resource.url || "";
+  const pageNumber = getPreviewPageNumber(focus);
+  if (url && pageNumber > 0 && resourcePreviewKind(resource) === "pdf") {
+    return `${url.split("#")[0]}#page=${pageNumber}`;
+  }
+  return url;
+}
+
+function isApiDocumentUrl(resourceUrl = "") {
+  try {
+    return new URL(resourceUrl, window.location.origin).pathname.startsWith("/api/");
+  } catch {
+    return String(resourceUrl || "").startsWith("/api/");
+  }
+}
+
+export function getPreviewPageNumber(focus = {}) {
+  const highlightPage = Number(
+    focus?.highlightPosition?.boundingRect?.pageNumber ||
+    focus?.highlight_position?.boundingRect?.pageNumber ||
+    0,
+  );
+  const pageNumber = Number(focus?.pageNumber || focus?.page || focus?.slideNumber || focus?.slide || highlightPage);
+  return Number.isFinite(pageNumber) && pageNumber > 0 ? Math.floor(pageNumber) : 0;
+}
+
+export function getPreviewFocusLabel(focus = {}) {
+  const pageNumber = getPreviewPageNumber(focus);
+  if (!pageNumber) return "";
+  return focus?.slideNumber || focus?.slide ? `slide ${pageNumber}` : `page ${pageNumber}`;
+}
+
+function buildPdfDocumentSource(pdfUrl = "") {
+  const token = getAuthToken();
+  if (!token || !isApiDocumentUrl(pdfUrl)) return pdfUrl;
+  return {
+    url: pdfUrl,
+    httpHeaders: { Authorization: `Bearer ${token}` },
+  };
+}
+
+function normalizePreviewPdfRect(rect) {
+  if (!rect || typeof rect !== "object" || Array.isArray(rect)) return null;
+  const x1 = Number(rect.x1);
+  const y1 = Number(rect.y1);
+  const x2 = Number(rect.x2);
+  const y2 = Number(rect.y2);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  const pageNumber = Number(rect.pageNumber);
+
+  if (![x1, y1, x2, y2, width, height, pageNumber].every(Number.isFinite)) return null;
+  if (x2 <= x1 || y2 <= y1 || width <= 0 || height <= 0 || pageNumber < 1) return null;
+
+  return {
+    x1,
+    y1,
+    x2,
+    y2,
+    width,
+    height,
+    pageNumber: Math.floor(pageNumber),
+  };
+}
+
+export function getPreviewHighlightPosition(focus = {}) {
+  const position = focus?.highlightPosition || focus?.highlight_position;
+  if (!position || typeof position !== "object" || Array.isArray(position)) return null;
+
+  const boundingRect = normalizePreviewPdfRect(position.boundingRect || position.bounding_rect);
+  const rects = (Array.isArray(position.rects) ? position.rects : [])
+    .map(normalizePreviewPdfRect)
+    .filter(Boolean)
+    .slice(0, 24);
+
+  if (!boundingRect || !rects.length) return null;
+  return { boundingRect, rects };
+}
+
+export function getPreviewCitationHighlight(focus = {}) {
+  const position = getPreviewHighlightPosition(focus);
+  if (!position) return null;
+
+  const text = String(focus?.textQuote || focus?.text_quote || focus?.snippet || "").trim();
+  return {
+    id: `source-${position.boundingRect.pageNumber}-${Math.round(position.boundingRect.y1)}-${Math.round(position.boundingRect.x1)}`,
+    type: "text",
+    content: text ? { text } : {},
+    position,
+  } as Highlight;
+}
+
+export function getPreviewCitationHighlights(focus = {}) {
+  const position = getPreviewHighlightPosition(focus);
+  if (!position) return [];
+
+  return position.rects.map((rect, index) => ({
+    id: `source-${rect.pageNumber}-${Math.round(rect.y1)}-${Math.round(rect.x1)}-${index}`,
+    type: "area",
+    content: {},
+    position: {
+      boundingRect: rect,
+      rects: [],
+    },
+  })) as Highlight[];
+}
+
+function scrollPdfPreviewToPage(utils: PdfHighlighterUtils | null, pageNumber: number) {
+  const viewer = utils?.getViewer?.();
+  if (!viewer || !Number.isFinite(pageNumber) || pageNumber < 1) return false;
+
+  const maxPage = Number((viewer as any).pagesCount || 0);
+  const targetPage = Math.max(1, maxPage ? Math.min(pageNumber, maxPage) : Math.floor(pageNumber));
+
+  try {
+    // Use PDF.js' viewer API instead of an iframe hash; embedded browser PDF
+    // plugins do not reliably honor #page when the preview is mounted in-app.
+    if (typeof (viewer as any).scrollPageIntoView === "function") {
+      (viewer as any).scrollPageIntoView({ pageNumber: targetPage });
+    } else {
+      (viewer as any).currentPageNumber = targetPage;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scrollPdfPreviewToFocus(
+  utils: PdfHighlighterUtils | null,
+  highlight: Highlight | null,
+  pageNumber: number,
+) {
+  if (highlight && typeof utils?.scrollToHighlight === "function") {
+    try {
+      utils.scrollToHighlight(highlight);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return scrollPdfPreviewToPage(utils, pageNumber);
 }
 
 function formatResourceDate(value) {
@@ -678,7 +828,7 @@ function ResourcePreviewDialog({ onClose, resource }) {
             <img alt={title} src={previewUrl} />
           ) : kind === "pdf" || kind === "text" || kind === "web" ? (
             previewUrl ? (
-              <iframe title={`Preview ${title}`} src={previewUrl} />
+              <iframe key={previewUrl} title={`Preview ${title}`} src={previewUrl} />
             ) : null
           ) : (
             <div className="resource-preview-empty">
@@ -699,10 +849,109 @@ function ResourcePreviewDialog({ onClose, resource }) {
   );
 }
 
-function ResourcePreviewPanel({ onClose, resource }) {
+function ResourceCitationHighlight() {
+  const { highlight, isScrolledTo } = useHighlightContainerContext<Highlight>();
+  // Source citations are read-only anchors from Intelligrate, not editable PDF annotations.
+  // Disable pointer events so the library's react-rnd area wrapper cannot drag or show edit affordances.
+  return (
+    highlight.type === "area" ? (
+      <AreaHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        style={{
+          background: "rgba(245, 158, 11, 0.28)",
+          borderBottom: "2px solid rgba(245, 158, 11, 0.85)",
+          cursor: "default",
+          pointerEvents: "none",
+          userSelect: "none",
+        }}
+      />
+    ) : (
+      <TextHighlight
+        highlight={highlight}
+        isScrolledTo={isScrolledTo}
+        style={{
+          background: "rgba(245, 158, 11, 0.3)",
+          borderBottom: "2px solid rgba(245, 158, 11, 0.85)",
+          cursor: "default",
+          pointerEvents: "none",
+          userSelect: "none",
+        }}
+      />
+    )
+  );
+}
+
+function ResourcePdfPreview({ focus = {}, title, url }) {
+  const highlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
+  const citationHighlight = useMemo(() => getPreviewCitationHighlight(focus), [focus]);
+  const citationHighlights = useMemo(() => getPreviewCitationHighlights(focus), [focus]);
+  const pageNumber = getPreviewPageNumber(focus);
+  const documentSource = useMemo(() => buildPdfDocumentSource(url), [url]);
+  const highlighterKey = `${url || "pdf"}:${citationHighlight?.id || "page"}:${pageNumber || ""}`;
+
+  useEffect(() => {
+    if (!pageNumber) return undefined;
+
+    let timeoutId = 0;
+    let attempts = 0;
+
+    function tryScrollToPage() {
+      attempts += 1;
+      if (scrollPdfPreviewToFocus(highlighterUtilsRef.current, citationHighlight, pageNumber)) return;
+      if (attempts < 80) {
+        timeoutId = window.setTimeout(tryScrollToPage, 150);
+      }
+    }
+
+    tryScrollToPage();
+    return () => {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, [citationHighlight, pageNumber, url]);
+
+  if (!url) return null;
+
+  return (
+    <PdfLoader
+      beforeLoad={() => <div className="resource-preview-empty">Loading PDF...</div>}
+      document={documentSource}
+      errorMessage={() => <div className="resource-preview-empty">Unable to load this PDF.</div>}
+      onError={(error) => {
+        console.warn("[resources] Unable to load PDF preview", error);
+      }}
+      workerSrc={pdfWorkerUrl}
+    >
+      {(pdfDocument) => (
+        <PdfHighlighter
+          highlights={citationHighlights}
+          key={highlighterKey}
+          pdfDocument={pdfDocument}
+          pdfScaleValue="page-width"
+          textSelectionColor="rgba(245, 158, 11, 0.18)"
+          utilsRef={(utils) => {
+            highlighterUtilsRef.current = utils;
+            if (pageNumber) {
+              window.setTimeout(() => scrollPdfPreviewToFocus(utils, citationHighlight, pageNumber), 0);
+            }
+          }}
+        >
+          {citationHighlights.length ? (
+            <ResourceCitationHighlight />
+          ) : (
+            <span aria-hidden="true" data-resource-preview-pdf={title || "PDF"} />
+          )}
+        </PdfHighlighter>
+      )}
+    </PdfLoader>
+  );
+}
+
+function ResourcePreviewPanel({ focus = {}, onClose, resource }) {
   const kind = resourcePreviewKind(resource);
-  const previewUrl = resourcePreviewUrl(resource);
+  const previewUrl = resourcePreviewUrl(resource, focus);
   const title = resource?.displayName || getResourceDisplayName(resource);
+  const focusLabel = getPreviewFocusLabel(focus);
 
   return (
     <aside className="resource-preview-panel" aria-label={`Preview ${title}`}>
@@ -718,9 +967,15 @@ function ResourcePreviewPanel({ onClose, resource }) {
       <div className={`resource-preview-body ${kind}`}>
         {kind === "image" && previewUrl ? (
           <img alt={title} src={previewUrl} />
+        ) : kind === "pdf" && previewUrl ? (
+          <ResourcePdfPreview
+            focus={focus}
+            title={title}
+            url={(resource.pdfUrl || resource.fileUrl || resource.url || "").split("#")[0]}
+          />
         ) : kind === "pdf" || kind === "text" || kind === "web" ? (
           previewUrl ? (
-            <iframe title={`Preview ${title}`} src={previewUrl} />
+            <iframe key={previewUrl} title={`Preview ${title}`} src={previewUrl} />
           ) : null
         ) : (
           <div className="resource-preview-empty">
@@ -730,6 +985,9 @@ function ResourcePreviewPanel({ onClose, resource }) {
           </div>
         )}
       </div>
+      {kind === "pdf" && focusLabel ? (
+        <p className="resource-preview-note">Opened near {focusLabel} from the cited source.</p>
+      ) : null}
       {kind === "web" ? (
         <p className="resource-preview-note">
           Some sites block embedded previews. Use Open if the preview stays blank.
@@ -1238,6 +1496,7 @@ export function useResourceDriveController({
   const [moveResource, setMoveResource] = useState(null);
   const [moveFolderPath, setMoveFolderPath] = useState("");
   const [previewResource, setPreviewResource] = useState(null);
+  const [previewResourceFocus, setPreviewResourceFocus] = useState(null);
   const [renameFolderPath, setRenameFolderPath] = useState("");
   const [rowMenu, setRowMenu] = useState(null);
   const [selectedItemIds, setSelectedItemIds] = useState([]);
@@ -1277,6 +1536,7 @@ export function useResourceDriveController({
     setMoveResource(null);
     setMoveFolderPath("");
     setPreviewResource(null);
+    setPreviewResourceFocus(null);
     setRenameFolderPath("");
     setRowMenu(null);
     setSelectedItemIds([]);
@@ -1470,10 +1730,11 @@ export function useResourceDriveController({
     }
   }
 
-  function previewResourceInPanel(resource) {
+  function previewResourceInPanel(resource, focus = {}) {
     if (!resource) return;
     setRecentIds((current) => [resource.id, ...current.filter((id) => id !== resource.id)].slice(0, 24));
     setPreviewResource(resource);
+    setPreviewResourceFocus(focus || null);
     setRowMenu(null);
   }
 
@@ -1954,6 +2215,7 @@ export function useResourceDriveController({
     openResource,
     openRowMenu,
     previewResource,
+    previewResourceFocus,
     previewResourceInPanel,
     openQuickItemMenu,
     openQuickSectionMenu,
@@ -1988,6 +2250,7 @@ export function useResourceDriveController({
     setOpenSectionItemMenu,
     setOpenSectionMenuId,
     setPreviewResource,
+    setPreviewResourceFocus,
     setQuery,
     setRenameFolderPath,
     setRowMenu,
@@ -2608,7 +2871,11 @@ export function ResourceFileManager({ drive }) {
 
       {drive.previewResource ? (
         <ResourcePreviewPanel
-          onClose={() => drive.setPreviewResource(null)}
+          focus={drive.previewResourceFocus}
+          onClose={() => {
+            drive.setPreviewResource(null);
+            drive.setPreviewResourceFocus(null);
+          }}
           resource={drive.previewResource}
         />
       ) : null}

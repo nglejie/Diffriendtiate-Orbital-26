@@ -58,7 +58,7 @@ import AppLoadingScreen from "../../shared/ui/AppLoadingScreen.tsx";
 import { BuddyPanel } from "./BuddyPanel.tsx";
 import IntelligrateIcon from "./IntelligrateIcon.tsx";
 import { UPLOADS_FOLDER } from "./roomConstants.ts";
-import { createBuddyThread, normalizeBuddyThread } from "./buddyUtils.ts";
+import { createBuddyThread, normalizeBuddyThread, normalizeSourceKey } from "./buddyUtils.ts";
 import { ChannelDialog as ChatChannelDialog } from "./chat/ChannelDialog.tsx";
 import { ChatPanel as DiscordChatPanel } from "./chat/ChatPanel.tsx";
 import { ChatSidebar } from "./chat/ChatSidebar.tsx";
@@ -427,6 +427,8 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   const [inviteCopied, setInviteCopied] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
   const [activeChatChannel, setActiveChatChannel] = useState("general");
+  const [highlightedChatMessageId, setHighlightedChatMessageId] = useState("");
+  const [focusedCoordidateSource, setFocusedCoordidateSource] = useState(null);
   const [chatDialog, setChatDialog] = useState(null);
   const [latestDocumentChannelUploadId, setLatestDocumentChannelUploadId] = useState("");
   const [channelLayout, setChannelLayout] = useState([]);
@@ -1773,6 +1775,74 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
     setContextOpen(true);
   }
 
+  function findResourceForBuddySource(source) {
+    const sourceResourceId = String(source?.resourceId || source?.sourceId || "").trim();
+    const sourceLabelKey = normalizeSourceKey(source?.label || source);
+    const candidates = [...(resourceDrive.activeResources || []), ...asArray(resources)];
+
+    return candidates.find((resource) => {
+      if (sourceResourceId && resource.id === sourceResourceId) return true;
+      return [resource.id, resource.title, resource.originalName, resource.storageName, resource.url]
+        .map(normalizeSourceKey)
+        .some((key) => key && key === sourceLabelKey);
+    });
+  }
+
+  function handleOpenBuddySource(source) {
+    const type = String(source?.type || "").trim();
+
+    if (!type || type === "resource" || typeof source === "string") {
+      const resource = findResourceForBuddySource(source);
+      if (!resource) {
+        setNotice("That source is no longer available in Infilenite.");
+        return;
+      }
+      selectRoomTab("resources");
+      resourceDrive.setActiveView?.("all");
+      resourceDrive.setCurrentPath?.(resource.folder || UPLOADS_FOLDER);
+      resourceDrive.previewResourceInPanel?.(resource, {
+        pageNumber: source?.pageNumber || source?.page || "",
+        slideNumber: source?.slideNumber || source?.slide || "",
+        highlightPosition: source?.highlightPosition,
+        textQuote: source?.textQuote || "",
+        snippet: source?.snippet || "",
+      });
+      return;
+    }
+
+    if (type === "convolution_message") {
+      const channel = source.channel || "general";
+      selectRoomTab("chat");
+      setActiveChatChannel(channel);
+      setHighlightedChatMessageId(source.messageId || "");
+      window.setTimeout(() => {
+        setHighlightedChatMessageId((current) => (current === source.messageId ? "" : current));
+      }, 7000);
+      return;
+    }
+
+    if (type === "annotation") {
+      selectRoomTab("chat");
+      setActiveChatChannel(source.channel || "general");
+      return;
+    }
+
+    if (type === "coordidate_session" || type === "coordidate_poll") {
+      selectRoomTab("calendar");
+      setFocusedCoordidateSource({
+        date: source.date || source.startsAt || "",
+        endsAt: source.endsAt || "",
+        pollId: source.pollId || "",
+        sessionId: source.sessionId || "",
+        startsAt: source.startsAt || "",
+        nonce: Date.now(),
+      });
+      return;
+    }
+
+    setNotice("That source type cannot be opened yet.");
+  }
+
   /** Persists the member's Intelligrate model choice outside the unmounted chat panel. */
   function handleBuddySelectedProviderChange(providerId) {
     const nextProviderId = normalizeBuddySelectedProviderId(providerId);
@@ -2474,6 +2544,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
                 channelLayout={safeChannelLayout}
                 draft={safeChatDrafts[activeChatChannel] || ""}
                 drafts={safeChatDrafts}
+                highlightedMessageId={highlightedChatMessageId}
                 members={buildVisibleMembers(room, user)}
                 messages={safeMessages}
                 onDeleteMessage={deleteViaSocket}
@@ -2493,8 +2564,11 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           </section>
         ) : null}
 
-        {room.isMember && activeTab === "buddy" ? (
-          <section className="room-content-panel buddy-content-panel">
+        {room.isMember ? (
+          <section
+            aria-hidden={activeTab !== "buddy"}
+            className={`room-content-panel buddy-content-panel ${activeTab === "buddy" ? "" : "is-hidden"}`.trim()}
+          >
             {activeBuddyThread ? (
               <BuddyPanel
                 isDraftThread={Boolean(activeBuddyThread.isDraft)}
@@ -2511,6 +2585,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
                 onSyncResources={syncBuddyResources}
                 onUploadFiles={uploadSharedFiles}
                 onNotify={showRoomToast}
+                onOpenSource={handleOpenBuddySource}
                 onSelectedProviderIdChange={handleBuddySelectedProviderChange}
                 providerOptions={buddyProviderOptions}
                 resources={resources}
@@ -2572,6 +2647,7 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
           <section className="room-content-panel coordinate-content-panel">
             <CoordinatePanel
               coordinate={coordinate}
+              focusedSource={focusedCoordidateSource}
               onChanged={() => loadRoomBundle(room.id)}
               onCoordinateChanged={setCoordinate}
               onError={showError}

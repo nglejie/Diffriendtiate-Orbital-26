@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -12,6 +13,7 @@ import {
   FileText,
   Image as ImageIcon,
   Info,
+  MessageCircle,
   Plus,
   RefreshCw,
   Search,
@@ -36,6 +38,7 @@ import {
   formatBuddyToolEvent,
   getBuddyChainFinalAnswer,
   getBuddyChainFinalVisibleResponse,
+  getBuddySourceLabel,
   getBuddyThoughtSummary,
   mergeBuddyThoughtSteps,
   mergeBuddySources,
@@ -72,7 +75,10 @@ const BUILT_IN_PROVIDER_OPTION = {
 function getBuddyThoughtIcon(step) {
   if (step.type === "done") return CheckCircle2;
   if (step.type === "tool") {
-    if (step.tool === "search_corpus") {
+    if (["search_domain_context", "search_corpus"].includes(step.tool)) {
+      if (step.sourceType === "resource") return FileText;
+      if (step.sourceType === "convolution_message") return MessageCircle;
+      if (step.sourceType === "coordidate_session" || step.sourceType === "coordidate_poll") return CalendarDays;
       return step.status === "done" ? SearchCheck : Search;
     }
     if (step.tool === "read_file") {
@@ -84,6 +90,23 @@ function getBuddyThoughtIcon(step) {
     return Terminal;
   }
   return Clock;
+}
+
+function getBuddySourceType(source) {
+  const type = String(source?.type || "").trim();
+  if (type === "uploaded_file") return "uploaded-file";
+  if (type === "resource" || !type || typeof source === "string") return "resource";
+  if (type === "convolution_message") return "convolution";
+  if (type === "coordidate_session" || type === "coordidate_poll") return "coordidate";
+  if (type === "annotation") return "annotation";
+  return "domain";
+}
+
+function BuddySourceIcon({ source }) {
+  const type = getBuddySourceType(source);
+  if (type === "convolution") return <MessageCircle size={13} />;
+  if (type === "coordidate") return <CalendarDays size={13} />;
+  return <FileText size={13} />;
 }
 
 /** Renders Intelligrate answers through a streaming-aware markdown renderer. */
@@ -428,6 +451,7 @@ function BuddyPanel({
   onSyncResources,
   onUploadFiles,
   onNotify,
+  onOpenSource,
   providerOptions = [],
   resources = [],
   selectedProviderId: selectedProviderIdProp = "",
@@ -1313,7 +1337,7 @@ function BuddyPanel({
 
                           return (
                             <div
-                              className={`buddy-thinking-step ${step.type} ${step.status ? `status-${step.status}` : ""
+                              className={`buddy-thinking-step ${step.type} ${step.status ? `status-${step.status}` : ""} ${step.sourceType ? `source-${step.sourceType}` : ""
                                 }`}
                               key={`${step.id}-${index}`}
                             >
@@ -1341,17 +1365,39 @@ function BuddyPanel({
                     <div className="buddy-source-row">
                       {messageSources.map((source) => {
                         const resource = sourceResourceMap.get(normalizeSourceKey(source));
+                        const label = getBuddySourceLabel(source);
+                        const sourceKey = `${normalizeSourceKey(source)}:${label}`;
+                        const sourceClassName = `source-${getBuddySourceType(source)}`;
                         const chipContent = (
                           <>
-                            <FileText size={13} />
-                            {source}
+                            <BuddySourceIcon source={source} />
+                            {label}
                           </>
                         );
 
+                        if (onOpenSource) {
+                          return (
+                            <button
+                              className={sourceClassName}
+                              data-source-has-highlight={source?.highlightPosition ? "true" : "false"}
+                              data-source-page={source?.pageNumber || source?.slideNumber || ""}
+                              key={sourceKey}
+                              onClick={() => onOpenSource(source)}
+                              title="Open source in Diffriendtiate"
+                              type="button"
+                            >
+                              {chipContent}
+                            </button>
+                          );
+                        }
+
                         return resource?.url ? (
                           <a
+                            className={sourceClassName}
+                            data-source-has-highlight={source?.highlightPosition ? "true" : "false"}
+                            data-source-page={source?.pageNumber || source?.slideNumber || ""}
                             href={resource.url}
-                            key={source}
+                            key={sourceKey}
                             rel="noreferrer"
                             target="_blank"
                             title="Open source in a new tab"
@@ -1359,7 +1405,7 @@ function BuddyPanel({
                             {chipContent}
                           </a>
                         ) : (
-                          <span key={source}>{chipContent}</span>
+                          <span className={sourceClassName} key={sourceKey}>{chipContent}</span>
                         );
                       })}
                     </div>
