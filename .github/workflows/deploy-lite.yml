@@ -43,6 +43,8 @@ jobs:
       LITE_SSH_PORT: ${{ secrets.LITE_SSH_PORT || '22' }}
       LITE_SSH_USER: ${{ secrets.LITE_SSH_USER }}
       LITE_KNOWN_HOSTS: ${{ secrets.LITE_KNOWN_HOSTS }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
     steps:
       - name: Check deployment configuration
