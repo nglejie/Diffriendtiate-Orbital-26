@@ -42,26 +42,26 @@ services/      Independent services, including chatbot/RAG work
 
 Create a local `.env` file from `.env.example`, then run:
 
-For Deployment / Using Gemini API models (no ollama)
+#### Option 1 - Gemini only, no Ollama needed (No GPU deployment (Render))
 
-- Requires Gemini API Key
+Requires Gemini API key in '.env'. No Ollama needed
 
 ```cmd
 docker compose up --build
 ```
 
-Local dev without GPU (Ollama for embeddings, Gemini for generation LLM)
+#### Option 2 - Ollama Embeddings + Gemini LLM (No GPU deployment)
 
-- Requires Gemini API Key
+Requires Gemini API key in '.env'. Ollama handles embeddings only
 
 ```cmd
-docker compose --profile local -f docker-compose.yaml -f docker-compose.local.yaml up --build
+docker compose --profile ollama -f docker-compose.yaml -f docker-compose.ollama.yaml up --build
 ```
 
-With NVIDIA GPU (Ollama for all models)
-
+#### Option 3 - Ollama for everything (local dev with NVIDIA GPU)
+No API key nmeeded. Fully local.
 ```cmd
-docker compose --profile local -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
+docker compose --profile ollama -f docker-compose.yaml -f docker-compose.ollama-gpu.yaml up --build
 ```
 
 The containerized app runs at `http://127.0.0.1:4000`. Docker Compose starts separate client, server, and PostgreSQL, as well as LLM chatbot and Ollama services. Uploaded files, database data, vector database data, and pulled LLM models are stored in Docker volumes.

@@ -1,7 +1,4 @@
 services:
-  ollama:
-    profiles: []    # override — remove profile so ollama starts locally
-
   server-chatbot:
     environment:
       GPU_ENABLED: false
