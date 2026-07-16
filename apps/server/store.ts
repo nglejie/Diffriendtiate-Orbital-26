@@ -105,6 +105,60 @@ export function storageMode() {
   return pool ? "postgres" : "json";
 }
 
+export function hasDatabaseUploadBlobStore() {
+  return Boolean(pool);
+}
+
+export async function saveUploadBlob({
+  storageName,
+  body,
+  mimeType = "",
+  originalName = "",
+}) {
+  if (!pool || !storageName || !body) return;
+
+  await pool.query(
+    `
+      INSERT INTO resource_file_blobs (
+        storage_name, body, mime_type, original_name, size, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (storage_name) DO UPDATE SET
+        body = EXCLUDED.body,
+        mime_type = EXCLUDED.mime_type,
+        original_name = EXCLUDED.original_name,
+        size = EXCLUDED.size,
+        updated_at = NOW()
+    `,
+    [storageName, body, mimeType || null, originalName || null, body.length || 0],
+  );
+}
+
+export async function readUploadBlob(storageName) {
+  if (!pool || !storageName) return null;
+
+  const { rows } = await pool.query(
+    `
+      SELECT
+        storage_name AS "storageName",
+        body,
+        mime_type AS "mimeType",
+        original_name AS "originalName",
+        size
+      FROM resource_file_blobs
+      WHERE storage_name = $1
+    `,
+    [storageName],
+  );
+
+  return rows[0] || null;
+}
+
+export async function deleteUploadBlob(storageName) {
+  if (!pool || !storageName) return;
+  await pool.query("DELETE FROM resource_file_blobs WHERE storage_name = $1", [storageName]);
+}
+
 /**
  * Normalizes persisted records into the shape expected by the rest of the server.
  * This lets older JSON files continue working after new fields are introduced.
@@ -123,6 +177,10 @@ function normalizeDb(db) {
           ? user.authProviders
           : {},
       llmApiKeys: normalizeStoredLlmApiKeys(user.llmApiKeys),
+      builtInLlmUsage:
+        user.builtInLlmUsage && typeof user.builtInLlmUsage === "object" && !Array.isArray(user.builtInLlmUsage)
+          ? user.builtInLlmUsage
+          : {},
       emailVerified: user.emailVerified === false ? false : true,
       emailVerification:
         user.emailVerification && typeof user.emailVerification === "object" && !Array.isArray(user.emailVerification)
@@ -280,6 +338,7 @@ async function initPostgres() {
       email_verification JSONB,
       password_reset JSONB,
       llm_api_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+      built_in_llm_usage JSONB NOT NULL DEFAULT '{}'::jsonb,
       password_hash TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL
     );
@@ -348,6 +407,16 @@ async function initPostgres() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       original_folder TEXT NOT NULL DEFAULT '',
       deleted_by_id TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_file_blobs (
+      storage_name TEXT PRIMARY KEY,
+      body BYTEA NOT NULL,
+      mime_type TEXT,
+      original_name TEXT,
+      size INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS annotations (
@@ -600,6 +669,7 @@ async function initPostgres() {
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification JSONB");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset JSONB");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS llm_api_keys JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS built_in_llm_usage JSONB NOT NULL DEFAULT '{}'::jsonb");
 }
 
 /**
@@ -661,6 +731,7 @@ export async function readDb() {
         email_verification AS "emailVerification",
         password_reset AS "passwordReset",
         llm_api_keys AS "llmApiKeys",
+        built_in_llm_usage AS "builtInLlmUsage",
         password_hash AS "passwordHash",
         created_at AS "createdAt"
       FROM users
@@ -912,9 +983,9 @@ async function writePostgresDb(db) {
         `
           INSERT INTO users (
             id, name, email, avatar_url, avatar_preset, auth_providers,
-            email_verified, email_verification, password_reset, llm_api_keys, password_hash, created_at
+            email_verified, email_verification, password_reset, llm_api_keys, built_in_llm_usage, password_hash, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         `,
         [
           user.id,
@@ -927,6 +998,7 @@ async function writePostgresDb(db) {
           JSON.stringify(user.emailVerification || null),
           JSON.stringify(user.passwordReset || null),
           JSON.stringify(normalizeStoredLlmApiKeys(user.llmApiKeys)),
+          JSON.stringify(user.builtInLlmUsage || {}),
           user.passwordHash,
           user.createdAt,
         ],

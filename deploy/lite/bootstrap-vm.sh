@@ -19,7 +19,7 @@ if [[ -f /etc/apt/sources.list.d/caddy-stable.list && ! -f /usr/share/keyrings/c
 fi
 
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg ufw
+sudo apt-get install -y ca-certificates curl gnupg python3 python3-pip python3-venv ufw
 
 if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v22\.'; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -40,7 +40,7 @@ fi
 
 sudo install -d -m 0755 -o "$USER" -g "$USER" "$APP_DIR"
 install -d -m 0755 "$APP_DIR/releases" "$APP_DIR/shared" "$APP_DIR/backups"
-install -d -m 0755 "$APP_DIR/shared/data" "$APP_DIR/shared/uploads"
+install -d -m 0755 "$APP_DIR/shared/data" "$APP_DIR/shared/uploads" "$APP_DIR/shared/chroma" "$APP_DIR/shared/logs"
 
 if [[ "$SWAP_SIZE_GB" =~ ^[0-9]+$ && "$SWAP_SIZE_GB" -gt 0 && ! -f /swapfile ]]; then
   sudo fallocate -l "${SWAP_SIZE_GB}G" /swapfile

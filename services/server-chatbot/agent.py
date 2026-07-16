@@ -14,6 +14,7 @@ from litellm import supports_function_calling
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
 from models import HistoryMessage
+from stream_events import extract_messages_from_event_value
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,7 +29,7 @@ def normalise_optional_secret(value: str | None) -> str | None:
     return None if candidate in PLACEHOLDER_SECRETS else candidate
 
 GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 
 # Ollama model stuff
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -342,6 +343,10 @@ class Agent:
                 # print(f'DEBUG: Not handled message in message chain (message omitted). role: {item.role} | content: {item.content}')
         
         return messages
+
+    def _extract_ai_messages_from_event_value(self, value) -> list[AIMessage]:
+        """Collect AI messages from LangGraph event payloads across provider event shapes."""
+        return extract_messages_from_event_value(value, lambda candidate: isinstance(candidate, AIMessage))
         
     async def stream(
         self, 
@@ -402,7 +407,7 @@ class Agent:
                 
                 tool_call_in_progress[run_id] = {"name": tool_name, "args": args}
                 logger.info(f"Tool call started | tool: {tool_name} | args: {args})")
-                yield f"[TOOL_START]{json.dumps({'name': tool_name, "args": args})}"
+                yield f"[TOOL_START]{json.dumps({'name': tool_name, 'args': args})}"
                     
             # Handle tool ending
             elif event_type == "on_tool_end":
@@ -425,19 +430,31 @@ class Agent:
                 
                 tool_call_in_progress.pop(run_id, None)
                 logger.info(f"Tool call complete | tool: {tool_name}")
-                yield f"[TOOL_END]{json.dumps({"name": tool_name, 'result': tool_output})}"
+                yield f"[TOOL_END]{json.dumps({'name': tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
                 if event.get("metadata", {}).get("langgraph_node") == "model":
-                    ai_message = event["data"]["output"]
-                    if ai_message not in all_messages:
-                        all_messages.append(ai_message)
-                    final_text = self._extract_text_content(getattr(ai_message, "content", ""))
-                    if final_text and not "".join(streamed_answer_parts).strip():
-                        # Some LiteLLM providers produce a final message without token chunks.
-                        # Emit it once so the web UI never has to invent a fallback answer.
-                        logger.debug("Model produced final content without token chunks; emitting final text once.")
-                        yield f"[TOKEN]{final_text}"
+                    for ai_message in self._extract_ai_messages_from_event_value(event["data"].get("output")):
+                        if ai_message not in all_messages:
+                            all_messages.append(ai_message)
+                        final_text = self._extract_text_content(getattr(ai_message, "content", ""))
+                        if final_text and not "".join(streamed_answer_parts).strip():
+                            # Some providers produce a final message without token chunks.
+                            # Emit it once so the web UI never has to invent a fallback answer.
+                            logger.debug("Model produced final content without token chunks; emitting final text once.")
+                            streamed_answer_parts.append(final_text)
+                            yield f"[TOKEN]{final_text}"
+
+            elif event_type in {"on_chain_stream", "on_chain_end"}:
+                if event.get("metadata", {}).get("langgraph_node") in {"model", None}:
+                    for ai_message in self._extract_ai_messages_from_event_value(event.get("data", {})):
+                        if ai_message not in all_messages:
+                            all_messages.append(ai_message)
+                        final_text = self._extract_text_content(getattr(ai_message, "content", ""))
+                        if final_text and not "".join(streamed_answer_parts).strip():
+                            logger.debug("Chain event produced final model content without token chunks; emitting final text once.")
+                            streamed_answer_parts.append(final_text)
+                            yield f"[TOKEN]{final_text}"
             
             else: # catch any other events
                 logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")

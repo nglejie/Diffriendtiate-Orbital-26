@@ -357,7 +357,7 @@ export function builtInBuddyProviderOption(providerStatus) {
     available: Boolean(providerStatus?.available),
     unavailableReason: providerStatus?.available
       ? ""
-      : "The built-in Intelligrate provider is not configured yet.",
+      : providerStatus?.message || "The built-in Intelligrate provider is not configured yet.",
   };
 }
 

@@ -20,7 +20,6 @@ import {
   resendSupabaseVerificationEmail,
   signInWithSupabasePassword,
   signUpWithSupabase,
-  startSupabaseOAuth,
   updateSupabasePassword,
 } from "../../supabaseAuth.ts";
 
@@ -30,8 +29,32 @@ const SOCIAL_PROVIDERS = [
   { id: "microsoft", label: "Microsoft", logo: "/brand/auth-logo-microsoft.png" },
 ];
 
+const VERIFICATION_RESEND_COOLDOWN_MS = 60_000;
+const VERIFICATION_EMAIL_SENT_MESSAGE =
+  "If this email address can receive mail, check your email for a verification link.";
+
 function appendMailboxHint(message, payload) {
   return payload?.mailboxUrl ? `${message} Local inbox: ${payload.mailboxUrl}` : message;
+}
+
+function formatCooldown(seconds) {
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+function readRateLimitWaitSeconds(error) {
+  const retryAfterSeconds = Number(error?.retryAfterSeconds);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.ceil(retryAfterSeconds);
+  }
+
+  const message = String(error?.message || "");
+  const match = message.match(/(?:after|in|wait)\s+(\d+)\s+seconds?/i);
+  return match ? Number(match[1]) : 60;
+}
+
+function isRateLimitError(error) {
+  const message = String(error?.message || "");
+  return error?.status === 429 || /rate limit|too many|security purposes|after \d+ seconds?/i.test(message);
 }
 
 /** Login/register screen that owns form state and delegates saved auth to App. */
@@ -49,6 +72,8 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
   const [submitting, setSubmitting] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [remember, setRemember] = useState(true);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const [verificationResendAvailableAt, setVerificationResendAvailableAt] = useState(0);
   const completingSupabaseSession = useRef(false);
 
   const usesSupabaseAuth = isSupabaseAuthConfigured();
@@ -58,10 +83,36 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
   const isVerifyingEmail = mode === "verify";
   const showPasswordFields = !isForgotPassword && !isVerifyingEmail;
   const showSocialAuth = !isForgotPassword && !isResetPassword && !isVerifyingEmail;
+  const verificationResendRemainingSeconds = Math.max(
+    0,
+    Math.ceil((verificationResendAvailableAt - currentTime) / 1000),
+  );
+  const verificationResendCoolingDown = isVerifyingEmail && verificationResendRemainingSeconds > 0;
+
+  function startVerificationResendCooldown(waitMs = VERIFICATION_RESEND_COOLDOWN_MS) {
+    const now = Date.now();
+    setCurrentTime(now);
+    setVerificationResendAvailableAt(now + waitMs);
+  }
 
   useEffect(() => {
     setError(initialError || "");
   }, [initialError]);
+
+  useEffect(() => {
+    if (!verificationResendAvailableAt) return undefined;
+
+    const tick = () => {
+      const now = Date.now();
+      setCurrentTime(now);
+      if (now >= verificationResendAvailableAt) {
+        setVerificationResendAvailableAt(0);
+      }
+    };
+    tick();
+    const intervalId = window.setInterval(tick, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [verificationResendAvailableAt]);
 
   useEffect(() => {
     if (!resetToken) return;
@@ -139,6 +190,7 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
     }
     if (nextMode !== "verify") {
       setActiveVerificationToken("");
+      setVerificationResendAvailableAt(0);
     }
   }
 
@@ -249,11 +301,17 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
     setNotice(
       appendMailboxHint(
         payload.verificationEmailSent
-          ? "Check your email for a verification link."
+          ? VERIFICATION_EMAIL_SENT_MESSAGE
           : payload.message || "Email verification is ready.",
         payload,
       ),
     );
+    const retryAfterSeconds = Number(payload.retryAfterSeconds);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      startVerificationResendCooldown(retryAfterSeconds * 1000);
+    } else if (payload.verificationEmailSent) {
+      startVerificationResendCooldown();
+    }
   }
 
   async function handleResendEmailVerification() {
@@ -263,15 +321,41 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
       return;
     }
 
+    if (verificationResendRemainingSeconds > 0) {
+      setNotice(
+        `Please wait ${formatCooldown(verificationResendRemainingSeconds)} before requesting another verification email.`,
+      );
+      return;
+    }
+
     if (usesSupabaseAuth) {
       const { error: resendError } = await resendSupabaseVerificationEmail(email);
-      if (resendError) throw resendError;
-      setNotice("Check your email for a verification link.");
+      if (resendError) {
+        if (isRateLimitError(resendError)) {
+          const waitSeconds = readRateLimitWaitSeconds(resendError);
+          startVerificationResendCooldown(waitSeconds * 1000);
+          throw new Error(`Please wait ${formatCooldown(waitSeconds)} before requesting another verification email.`);
+        }
+        throw resendError;
+      }
+      startVerificationResendCooldown();
+      setNotice(VERIFICATION_EMAIL_SENT_MESSAGE);
       setMode("verify");
       return;
     }
 
-    const payload = await api.resendEmailVerification({ email });
+    let payload;
+    try {
+      payload = await api.resendEmailVerification({ email });
+    } catch (resendError) {
+      if (isRateLimitError(resendError)) {
+        const waitSeconds = readRateLimitWaitSeconds(resendError);
+        startVerificationResendCooldown(waitSeconds * 1000);
+        throw new Error(`Please wait ${formatCooldown(waitSeconds)} before requesting another verification email.`);
+      }
+      throw resendError;
+    }
+
     if (payload.emailVerificationRequired === false) {
       setMode("login");
       setNotice(payload.message || "Email address is already verified. You can log in.");
@@ -338,7 +422,8 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
         password: "",
       }));
       setMode("verify");
-      setNotice("Check your email for a verification link.");
+      startVerificationResendCooldown();
+      setNotice(VERIFICATION_EMAIL_SENT_MESSAGE);
       return;
     }
 
@@ -570,6 +655,7 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
             <div className="auth-options-row auth-verification-actions">
               <button
                 className="auth-forgot-link"
+                disabled={verificationResendCoolingDown}
                 onClick={async () => {
                   setError("");
                   setNotice("");
@@ -584,12 +670,18 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
                 }}
                 type="button"
               >
-                Resend Verification Email
+                {verificationResendCoolingDown
+                  ? `Resend in ${formatCooldown(verificationResendRemainingSeconds)}`
+                  : "Resend Verification Email"}
               </button>
             </div>
           ) : null}
 
-          <button className="primary-button auth-submit" disabled={submitting} type="submit">
+          <button
+            className="primary-button auth-submit"
+            disabled={submitting || (isVerifyingEmail && !activeVerificationToken && verificationResendCoolingDown)}
+            type="submit"
+          >
             {submitting
               ? "Please Wait"
               : isRegistering
@@ -597,10 +689,12 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
                 : isForgotPassword
                   ? "Send Reset Link"
                   : isResetPassword
-                    ? "Update Password"
-                    : isVerifyingEmail
-                      ? activeVerificationToken
-                        ? "Verify Email"
+                  ? "Update Password"
+                  : isVerifyingEmail
+                    ? activeVerificationToken
+                      ? "Verify Email"
+                      : verificationResendCoolingDown
+                        ? `Resend in ${formatCooldown(verificationResendRemainingSeconds)}`
                         : "Resend Verification Email"
                     : "Enter"}
           </button>
@@ -615,38 +709,12 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
 
               <div className="auth-social-grid" aria-label="Social Sign-In Options">
                 {SOCIAL_PROVIDERS.map((provider) => (
-                  usesSupabaseAuth ? (
-                    <button
-                      className="auth-social-button"
-                      data-provider={provider.id}
-                      key={provider.id}
-                      onClick={async () => {
-                        setError("");
-                        setSubmitting(true);
-                        try {
-                          await startSupabaseOAuth(provider.id);
-                        } catch (err) {
-                          setError(err.message || `${provider.label} sign-in could not be started.`);
-                          setSubmitting(false);
-                        }
-                      }}
-                      type="button"
-                    >
-                      <img
-                        alt=""
-                        aria-hidden="true"
-                        className="auth-social-logo"
-                        src={provider.logo}
-                      />
-                      <span>{provider.label}</span>
-                    </button>
-                  ) : (
-                    <a
-                      className="auth-social-button"
-                      data-provider={provider.id}
-                      href={getOAuthUrl(provider.id)}
-                      key={provider.id}
-                    >
+                  <a
+                    className="auth-social-button"
+                    data-provider={provider.id}
+                    href={getOAuthUrl(provider.id)}
+                    key={provider.id}
+                  >
                     <img
                       alt=""
                       aria-hidden="true"
@@ -654,8 +722,7 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
                       src={provider.logo}
                     />
                     <span>{provider.label}</span>
-                    </a>
-                  )
+                  </a>
                 ))}
               </div>
             </>

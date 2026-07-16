@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for name in LITE_SSH_HOST LITE_SSH_PRIVATE_KEY LITE_SSH_USER; do
+          for name in LITE_SSH_HOST LITE_SSH_PRIVATE_KEY LITE_SSH_USER VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY; do
             if [ -z "${!name}" ]; then
               missing=1
             fi
@@ -60,7 +60,7 @@ jobs:
 
           if [ "$missing" -ne 0 ]; then
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "::error::LITE_SSH_HOST, LITE_SSH_PRIVATE_KEY, and LITE_SSH_USER are required for lite deployment."
+              echo "::error::LITE_SSH_HOST, LITE_SSH_PRIVATE_KEY, LITE_SSH_USER, VITE_SUPABASE_URL, and VITE_SUPABASE_ANON_KEY are required for lite deployment."
               exit 1
             fi
 
@@ -93,6 +93,22 @@ jobs:
         if: steps.deploy_config.outputs.ready == 'true'
         run: npm run build
 
+      - name: Verify client auth build
+        if: steps.deploy_config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ -z "$VITE_SUPABASE_URL" ]; then
+            echo "::notice::VITE_SUPABASE_URL is not set; production deploy must rely on server-side SMTP validation."
+            exit 0
+          fi
+
+          if ! grep -R --fixed-strings "$VITE_SUPABASE_URL" apps/client/dist/assets >/dev/null; then
+            echo "::error::Client bundle was built without the configured Supabase URL."
+            exit 1
+          fi
+
       - name: Prepare lite runtime bundle
         if: steps.deploy_config.outputs.ready == 'true'
         shell: bash
@@ -108,6 +124,7 @@ jobs:
             apps/server/dist \
             apps/client/package.json \
             apps/client/dist \
+            services/server-chatbot \
             deploy/lite
 
           echo "RESOLVED_SHA=$resolved_sha" >> "$GITHUB_ENV"

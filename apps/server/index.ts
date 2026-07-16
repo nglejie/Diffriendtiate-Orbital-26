@@ -44,7 +44,16 @@ import {
   signOAuthState,
   verifyOAuthState,
 } from "./oauth.js";
-import { initDb, readDb, storageMode, writeDb } from "./store.js";
+import {
+  deleteUploadBlob,
+  hasDatabaseUploadBlobStore,
+  initDb,
+  readDb,
+  readUploadBlob,
+  saveUploadBlob,
+  storageMode,
+  writeDb,
+} from "./store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -92,6 +101,11 @@ function readPositiveNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function readNonNegativeInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
 const chatbotBaseUrl = resolveChatbotBaseUrl();
 const chatbotWarmupBaseUrl = String(
   process.env.CHATBOT_WARMUP_BASE_URL ||
@@ -123,12 +137,20 @@ const intelligrateGpuEnabled =
     .trim()
     .toLowerCase() === "true";
 const builtInOllamaModel = String(process.env.LLM_MODEL || "qwen2.5:7b").trim() || "qwen2.5:7b";
-const builtInGeminiModel = String(process.env.GEMINI_MODEL || "gemini-3.5-flash").trim() || "gemini-3.5-flash";
+const builtInGeminiModel = String(process.env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim() || "gemini-3.1-flash-lite";
 const geminiApiKey = String(process.env.GEMINI_API_KEY || "").trim();
 const geminiApiKeyConfigured = Boolean(
   geminiApiKey &&
-    !["your-key-here", "qa-compose-validation-placeholder"].includes(geminiApiKey),
+    !["your-key-here", "ci-placeholder", "qa-compose-validation-placeholder"].includes(geminiApiKey),
 );
+const builtInLlmDailyRequestLimit = readNonNegativeInteger(
+  process.env.BUILT_IN_LLM_DAILY_REQUEST_LIMIT,
+  0,
+);
+const builtInLlmQuotaCooldownMs =
+  readPositiveNumber(process.env.BUILT_IN_LLM_QUOTA_COOLDOWN_MINUTES, 60) * 60 * 1000;
+let builtInLlmQuotaCooldownUntilMs = 0;
+let builtInLlmQuotaCooldownReason = "";
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -254,7 +276,64 @@ function normalizeAvatarPreset(value) {
   return { id, label, category, layers, selections, version: 1 };
 }
 
-function getBuddyProviderStatus() {
+function currentAppDateKey() {
+  return localDateKey(new Date(), APP_TIMEZONE) || new Date().toISOString().slice(0, 10);
+}
+
+function builtInLlmUsageSnapshot(user) {
+  const day = currentAppDateKey();
+  const usage = user?.builtInLlmUsage && typeof user.builtInLlmUsage === "object"
+    ? user.builtInLlmUsage
+    : {};
+  const count =
+    usage.day === day && Number.isFinite(Number(usage.count))
+      ? Math.max(0, Math.floor(Number(usage.count)))
+      : 0;
+  const remaining =
+    builtInLlmDailyRequestLimit > 0
+      ? Math.max(0, builtInLlmDailyRequestLimit - count)
+      : null;
+
+  return {
+    day,
+    count,
+    limit: builtInLlmDailyRequestLimit,
+    remaining,
+  };
+}
+
+function builtInLlmQuotaMessage() {
+  return "The shared built-in Intelligrate quota is temporarily exhausted. Use a saved BYOK model or try again later.";
+}
+
+function getBuiltInLlmRestriction(user) {
+  const now = Date.now();
+  const usage = builtInLlmUsageSnapshot(user);
+
+  if (builtInLlmQuotaCooldownUntilMs > now) {
+    return {
+      code: "quota_cooldown",
+      message: builtInLlmQuotaMessage(),
+      cooldownUntil: new Date(builtInLlmQuotaCooldownUntilMs).toISOString(),
+      reason: builtInLlmQuotaCooldownReason,
+      usage,
+    };
+  }
+
+  if (builtInLlmDailyRequestLimit > 0 && usage.count >= builtInLlmDailyRequestLimit) {
+    return {
+      code: "daily_limit_reached",
+      message: `You've reached today's built-in Intelligrate limit (${builtInLlmDailyRequestLimit} requests). Use a saved BYOK model or try again tomorrow.`,
+      cooldownUntil: "",
+      reason: "",
+      usage,
+    };
+  }
+
+  return null;
+}
+
+function getBuddyProviderStatus(user = null) {
   if (intelligrateGpuEnabled) {
     return {
       available: true,
@@ -267,13 +346,17 @@ function getBuddyProviderStatus() {
   }
 
   if (geminiApiKeyConfigured) {
+    const restriction = getBuiltInLlmRestriction(user);
+    const usage = builtInLlmUsageSnapshot(user);
     return {
-      available: true,
-      code: "gemini_configured",
+      available: !restriction,
+      code: restriction?.code || "gemini_configured",
       provider: "gemini",
       providerLabel: "Gemini",
       model: builtInGeminiModel,
-      message: "Intelligrate is using the configured Gemini API key.",
+      message: restriction?.message || "Intelligrate is using the configured Gemini API key.",
+      cooldownUntil: restriction?.cooldownUntil || "",
+      usage,
     };
   }
 
@@ -288,15 +371,58 @@ function getBuddyProviderStatus() {
   };
 }
 
-function assertBuddyProviderAvailable(res) {
-  const status = getBuddyProviderStatus();
+function buddyProviderHttpStatus(status) {
+  return ["daily_limit_reached", "quota_cooldown"].includes(status?.code) ? 429 : 503;
+}
+
+function assertBuddyProviderAvailable(res, user = null) {
+  const status = getBuddyProviderStatus(user);
   if (status.available) return status;
 
-  res.status(503).json({
+  res.status(buddyProviderHttpStatus(status)).json({
     ...status,
     setupRequired: true,
   });
   return null;
+}
+
+function isBuiltInLlmQuotaSignal(error) {
+  if (error?.code === "daily_limit_reached") return false;
+  const text = `${error?.status || ""} ${error?.message || error || ""}`.toLowerCase();
+  return (
+    error?.status === 429 ||
+    /resource[\s_-]*exhausted|quota|rate[\s_-]*limit|too many requests/.test(text)
+  );
+}
+
+function startBuiltInLlmQuotaCooldown(reason = "") {
+  builtInLlmQuotaCooldownUntilMs = Date.now() + builtInLlmQuotaCooldownMs;
+  builtInLlmQuotaCooldownReason = String(reason || "").slice(0, 300);
+  return getBuddyProviderStatus();
+}
+
+async function reserveBuiltInLlmRequest(db, user) {
+  const providerStatus = getBuddyProviderStatus(user);
+  if (!providerStatus.available) {
+    const error = createHttpError(buddyProviderHttpStatus(providerStatus), providerStatus.message) as Error & {
+      code?: string;
+    };
+    error.code = providerStatus.code;
+    throw error;
+  }
+
+  if (providerStatus.provider !== "gemini" || builtInLlmDailyRequestLimit <= 0 || !user) {
+    return providerStatus;
+  }
+
+  const usage = builtInLlmUsageSnapshot(user);
+  user.builtInLlmUsage = {
+    ...user.builtInLlmUsage,
+    day: usage.day,
+    count: usage.count + 1,
+  };
+  await writeDb(db);
+  return getBuddyProviderStatus(user);
 }
 
 function signToken(user) {
@@ -305,6 +431,7 @@ function signToken(user) {
 
 const passwordResetTokenTtlMs = 30 * 60 * 1000;
 const emailVerificationTokenTtlMs = 24 * 60 * 60 * 1000;
+const emailVerificationResendCooldownMs = 60 * 1000;
 function readBooleanEnv(name) {
   return ["1", "true", "yes", "on"].includes(String(process.env[name] || "").trim().toLowerCase());
 }
@@ -443,6 +570,18 @@ function createEmailVerification(user) {
   };
   user.emailVerified = false;
   return token;
+}
+
+function emailVerificationRetryAfterSeconds(user) {
+  const createdAt = Date.parse(String(user?.emailVerification?.createdAt || ""));
+  if (!Number.isFinite(createdAt)) return 0;
+
+  const remainingMs = emailVerificationResendCooldownMs - (Date.now() - createdAt);
+  return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+}
+
+function applyEmailVerificationRetryAfter(res, retryAfterSeconds) {
+  res.set("Retry-After", String(retryAfterSeconds));
 }
 
 async function sendPasswordResetEmail(req, user, token) {
@@ -2034,6 +2173,10 @@ async function hashUploadedFile(filePath) {
   return hash.digest("hex");
 }
 
+function hashBuffer(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
 function compactResourceName(value = "") {
   return String(value)
     .replace(/\.[a-z0-9]+$/i, "")
@@ -2442,15 +2585,22 @@ const OFFICE_PDF_CONVERSION_VERSION = "office-fonts-v2";
 function startResourcePdfConversion({ resourceId, roomId, storageName }) {
   if (activeResourceConversions.has(resourceId)) return;
   activeResourceConversions.add(resourceId);
-  const inputPath = safeUploadPath(storageName);
 
-  convertToPdf(inputPath)
+  materializeUploadFile(storageName)
+    .then((inputPath) => {
+      if (!inputPath) throw new Error("Resource file not found for conversion.");
+      return convertToPdf(inputPath);
+    })
     .then(async (pdfPath) => {
       const db = await readDb();
       const resource = db.resources.find((candidate) => candidate.id === resourceId);
       if (!resource) return;
 
       resource.pdfPath = relativeUploadPath(pdfPath);
+      await persistUploadBlobFromPath(resource.pdfPath, pdfPath, {
+        mimeType: "application/pdf",
+        originalName: `${path.basename(resource.originalName || resource.title || resource.storageName || "document", path.extname(resource.originalName || resource.title || resource.storageName || ""))}.pdf`,
+      });
       resource.pdfConversionVersion = OFFICE_PDF_CONVERSION_VERSION;
       resource.conversionStatus = "done";
       await writeDb(db);
@@ -3236,6 +3386,96 @@ function safeUploadPath(storageName) {
   return targetPath;
 }
 
+function normalizeUploadStorageName(storageName = "") {
+  return String(storageName || "").replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+async function persistUploadBlobFromPath(storageName, filePath, metadata = {}) {
+  if (!hasDatabaseUploadBlobStore()) return;
+
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) return;
+
+  const body = await fs.promises.readFile(filePath);
+  await saveUploadBlob({
+    storageName: normalizedStorageName,
+    body,
+    mimeType: metadata.mimeType || metadata.mimetype || "application/octet-stream",
+    originalName: metadata.originalName || metadata.originalname || normalizedStorageName,
+  });
+}
+
+async function readStoredUploadBlob(storageName) {
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) return null;
+  return readUploadBlob(normalizedStorageName);
+}
+
+async function readUploadFileBuffer(storageName) {
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) return null;
+
+  const filePath = safeUploadPath(normalizedStorageName);
+  if (fs.existsSync(filePath)) {
+    return fs.promises.readFile(filePath);
+  }
+
+  const blob = await readStoredUploadBlob(normalizedStorageName);
+  return blob?.body || null;
+}
+
+async function uploadFileExists(storageName) {
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) return false;
+  if (fs.existsSync(safeUploadPath(normalizedStorageName))) return true;
+  return Boolean(await readStoredUploadBlob(normalizedStorageName));
+}
+
+async function materializeUploadFile(storageName, metadata = {}) {
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) return null;
+
+  const filePath = safeUploadPath(normalizedStorageName);
+  if (fs.existsSync(filePath)) return filePath;
+
+  const blob = await readStoredUploadBlob(normalizedStorageName);
+  if (!blob?.body) return null;
+
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.promises.writeFile(filePath, blob.body);
+  if (metadata.mimeType || metadata.originalName) {
+    await saveUploadBlob({
+      storageName: normalizedStorageName,
+      body: blob.body,
+      mimeType: metadata.mimeType || blob.mimeType || "application/octet-stream",
+      originalName: metadata.originalName || blob.originalName || normalizedStorageName,
+    });
+  }
+  return filePath;
+}
+
+async function hashStoredUpload(storageName) {
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) throw new Error("Invalid upload path.");
+
+  const filePath = safeUploadPath(normalizedStorageName);
+  if (fs.existsSync(filePath)) {
+    return hashUploadedFile(filePath);
+  }
+
+  const blob = await readStoredUploadBlob(normalizedStorageName);
+  if (!blob?.body) throw new Error("Resource file not found.");
+  return hashBuffer(blob.body);
+}
+
+async function deleteStoredUploadFile(storageName) {
+  const normalizedStorageName = normalizeUploadStorageName(storageName);
+  if (!normalizedStorageName) return;
+
+  fs.rmSync(safeUploadPath(normalizedStorageName), { force: true });
+  await deleteUploadBlob(normalizedStorageName);
+}
+
 function canManageResource(room, resource, userId) {
   return Boolean(room && resource && (room.ownerId === userId || resource.uploaderId === userId));
 }
@@ -3250,6 +3490,7 @@ function emitResourceEvent(db, roomId, event, resource) {
 async function purgeExpiredDeletedResources(db) {
   const now = Date.now();
   const beforeCount = db.resources.length;
+  const storageNamesToDelete = [];
 
   db.resources = db.resources.filter((resource) => {
     if (!resource.deletedAt) return true;
@@ -3264,11 +3505,13 @@ async function purgeExpiredDeletedResources(db) {
     if (now - deletedAtMs < retentionDays * 24 * 60 * 60 * 1000) return true;
 
     if (resource.type === "file") {
-      if (resource.storageName) fs.rmSync(safeUploadPath(resource.storageName), { force: true });
-      if (resource.pdfPath) fs.rmSync(safeUploadPath(resource.pdfPath), { force: true });
+      if (resource.storageName) storageNamesToDelete.push(resource.storageName);
+      if (resource.pdfPath) storageNamesToDelete.push(resource.pdfPath);
     }
     return false;
   });
+
+  await Promise.all(storageNamesToDelete.map((storageName) => deleteStoredUploadFile(storageName)));
 
   return db.resources.length !== beforeCount;
 }
@@ -3305,7 +3548,7 @@ async function ensureRoomResourceFileMetadata(db, room) {
 
     if (!resource.contentHash) {
       try {
-        resource.contentHash = await hashUploadedFile(safeUploadPath(resource.storageName));
+        resource.contentHash = await hashStoredUpload(resource.storageName);
         changed = true;
       } catch (error) {
         console.warn(`[resources] Could not hash ${resource.storageName}: ${error.message}`);
@@ -3345,7 +3588,10 @@ async function readChatbotPayload(response) {
     const detail = Array.isArray(payload.detail)
       ? payload.detail.map((item) => item.msg || item.message || String(item)).join(" ")
       : payload.detail;
-    throw new Error(detail || payload.message || "Intelligrate is not available right now.");
+    throw createHttpError(
+      response.status,
+      detail || payload.message || "Intelligrate is not available right now.",
+    );
   }
 
   return payload;
@@ -3571,8 +3817,10 @@ async function createChatbotPredictRequest(pathname, { messageChain, roomId, res
   }
 
   if (resource) {
-    const filePath = safeUploadPath(resource.storageName);
-    const fileBytes = await fs.promises.readFile(filePath);
+    const fileBytes = await readUploadFileBuffer(resource.storageName);
+    if (!fileBytes) {
+      throw createHttpError(404, "Resource file not found.");
+    }
     const formData = new FormData();
 
     formData.append(
@@ -4047,6 +4295,25 @@ function emitSessionsUpdated(db, room) {
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "5mb" }));
 app.use("/uploads", express.static(uploadDir));
+app.get(/^\/uploads\/(.+)$/, async (req, res, next) => {
+  let storageName = req.path.replace(/^\/uploads\//, "");
+  try {
+    storageName = decodeURIComponent(storageName);
+  } catch {
+    // Keep the raw path; the blob lookup will miss safely if it is invalid.
+  }
+
+  const blob = await readStoredUploadBlob(storageName);
+  if (!blob?.body) return next();
+
+  const filename =
+    String(blob.originalName || path.basename(storageName))
+      .replace(/[\r\n"]/g, "")
+      .trim() || "document";
+  res.type(blob.mimeType || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  return res.send(blob.body);
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "Diffriendtiate API", storage: storageMode() });
@@ -4211,6 +4478,17 @@ app.post("/api/auth/login", async (req, res) => {
 
   if (user.emailVerified === false) {
     if (!assertAuthActionDeliveryConfigured(res)) return;
+    const retryAfterSeconds = emailVerificationRetryAfterSeconds(user);
+    if (retryAfterSeconds > 0) {
+      applyEmailVerificationRetryAfter(res, retryAfterSeconds);
+      return res.status(403).json({
+        ...emailVerificationInstructionsPayload(req),
+        email: user.email,
+        message: `Check your email for a verification link before logging in. You can request another one in ${retryAfterSeconds} seconds.`,
+        retryAfterSeconds,
+      });
+    }
+
     const verificationToken = createEmailVerification(user);
     const emailResult = await sendEmailVerificationEmail(req, user, verificationToken);
     await writeDb(db);
@@ -4245,6 +4523,17 @@ app.post("/api/auth/email-verification/resend", async (req, res) => {
     return res.json({
       emailVerificationRequired: false,
       message: "Email address is already verified. You can log in.",
+    });
+  }
+
+  const retryAfterSeconds = emailVerificationRetryAfterSeconds(user);
+  if (retryAfterSeconds > 0) {
+    applyEmailVerificationRetryAfter(res, retryAfterSeconds);
+    return res.status(429).json({
+      ...emailVerificationInstructionsPayload(req),
+      email: user.email,
+      message: `Please wait ${retryAfterSeconds} seconds before requesting another verification email.`,
+      retryAfterSeconds,
     });
   }
 
@@ -5133,7 +5422,10 @@ app.delete("/api/rooms/:roomId", requireAuth, async (req, res) => {
   const roomResources = db.resources.filter((resource) => resource.roomId === room.id);
   for (const resource of roomResources) {
     if (resource.type === "file" && resource.storageName) {
-      fs.rmSync(path.join(uploadDir, resource.storageName), { force: true });
+      await deleteStoredUploadFile(resource.storageName);
+    }
+    if (resource.type === "file" && resource.pdfPath) {
+      await deleteStoredUploadFile(resource.pdfPath);
     }
   }
 
@@ -5368,7 +5660,7 @@ app.post(
     }
 
     if (isCanvasFolderPath(req.body.folder)) {
-      fs.rmSync(safeUploadPath(req.file.filename), { force: true });
+      await deleteStoredUploadFile(req.file.filename);
       return res.status(403).json({ message: "Canvas folders are managed by sync and cannot be changed here." });
     }
 
@@ -5376,11 +5668,11 @@ app.post(
 
     const uploadedPath = safeUploadPath(req.file.filename);
     if (req.body.purpose === "document-channel" && !isDocumentChannelUploadFile(req.file)) {
-      fs.rmSync(uploadedPath, { force: true });
+      await deleteStoredUploadFile(req.file.filename);
       return res.status(400).json({ message: documentChannelFileTypeMessage });
     }
     if (isBlockedResourceUpload(req.file)) {
-      fs.rmSync(uploadedPath, { force: true });
+      await deleteStoredUploadFile(req.file.filename);
       const extension = path.extname(req.file.originalname || "").toLowerCase() || "that file type";
       return res.status(400).json({
         message: `Executable or script files (${extension}) cannot be uploaded. Upload documents, images, archives, or other study materials instead.`,
@@ -5399,8 +5691,14 @@ app.post(
     );
 
     if (existingResource) {
+      if (existingResource.storageName) {
+        await persistUploadBlobFromPath(existingResource.storageName, uploadedPath, {
+          mimeType: existingResource.mimeType || req.file.mimetype,
+          originalName: existingResource.originalName || req.file.originalname,
+        });
+      }
       // The new bytes are redundant, so remove only the temporary duplicate upload.
-      fs.rmSync(uploadedPath, { force: true });
+      await deleteStoredUploadFile(req.file.filename);
       const wasDeleted = Boolean(existingResource.deletedAt);
       let existingChanged = false;
       if (wasDeleted) {
@@ -5460,6 +5758,11 @@ app.post(
       deletedById: "",
     };
 
+    await persistUploadBlobFromPath(resource.storageName, uploadedPath, {
+      mimeType: resource.mimeType,
+      originalName: resource.originalName,
+    });
+
     db.resources.push(resource);
     await writeDb(db);
     emitResourceEvent(db, room.id, "resource:new", resource);
@@ -5495,8 +5798,8 @@ app.get("/api/resources/:resourceId/file", requireAuth, async (req, res) => {
     return res.status(403).json({ message: "Join the room to access this area." });
   }
 
-  const filePath = safeUploadPath(resource.storageName);
-  if (!fs.existsSync(filePath)) {
+  const fileBytes = await readUploadFileBuffer(resource.storageName);
+  if (!fileBytes) {
     return res.status(404).json({ message: "Resource file not found." });
   }
 
@@ -5506,7 +5809,7 @@ app.get("/api/resources/:resourceId/file", requireAuth, async (req, res) => {
       .trim() || "document";
   res.type(resource.mimeType || "application/octet-stream");
   res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-  return res.sendFile(filePath);
+  return res.send(fileBytes);
 });
 
 app.patch("/api/resources/:resourceId", requireAuth, async (req, res) => {
@@ -5654,10 +5957,10 @@ app.delete("/api/resources/:resourceId/permanent", requireAuth, async (req, res)
   }
 
   if (resource.type === "file" && resource.storageName) {
-    fs.rmSync(safeUploadPath(resource.storageName), { force: true });
+    await deleteStoredUploadFile(resource.storageName);
   }
   if (resource.type === "file" && resource.pdfPath) {
-    fs.rmSync(safeUploadPath(resource.pdfPath), { force: true });
+    await deleteStoredUploadFile(resource.pdfPath);
   }
 
   db.resources = db.resources.filter((candidate) => candidate.id !== resource.id);
@@ -5697,7 +6000,7 @@ app.get("/api/rooms/:roomId/buddy/providers", requireAuth, async (req, res) => {
     return res.status(404).json({ message: "Account not found." });
   }
 
-  const providerStatus = getBuddyProviderStatus();
+  const providerStatus = getBuddyProviderStatus(user);
   const catalog = await fetchLlmProviderCatalog({ allowStale: true });
 
   res.json({
@@ -5801,7 +6104,8 @@ app.get("/api/rooms/:roomId/buddy/health", requireAuth, async (req, res) => {
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
-  const providerStatus = getBuddyProviderStatus();
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  const providerStatus = getBuddyProviderStatus(user);
   if (!providerStatus.available) {
     return res.json({
       ok: false,
@@ -5839,7 +6143,10 @@ app.post("/api/rooms/:roomId/buddy/title", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
-  if (!assertBuddyProviderAvailable(res)) return;
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: "Account not found." });
+  }
 
   const message = String(req.body.message || "").trim();
   if (!message) {
@@ -5847,9 +6154,23 @@ app.post("/api/rooms/:roomId/buddy/title", requireAuth, async (req, res) => {
   }
 
   try {
+    await reserveBuiltInLlmRequest(db, user);
     const title = await generateBuddyTitle(message);
     res.json({ title });
   } catch (error) {
+    if (isBuiltInLlmQuotaSignal(error)) {
+      const providerStatus = startBuiltInLlmQuotaCooldown(error.message);
+      return res.status(429).json({
+        ...providerStatus,
+        message: providerStatus.message,
+      });
+    }
+    if (error.status) {
+      return res.status(error.status).json({
+        code: error.code || undefined,
+        message: error.message,
+      });
+    }
     console.warn(`[buddy] Title generation failed for ${room.id}: ${error.message}`);
     res.status(502).json({
       message: error.message || "Unable to generate an Intelligrate chat title.",
@@ -5861,13 +6182,21 @@ app.post("/api/rooms/:roomId/buddy/embed", requireAuth, async (req, res) => {
   const db = await readDb();
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
-  if (!assertBuddyProviderAvailable(res)) return;
+  const user = db.users.find((candidate) => candidate.id === req.user.id);
+  if (!assertBuddyProviderAvailable(res, user)) return;
 
   try {
     // Manual sync should still respect the corpus fingerprint so Intelligrate
     // is embedded only when the room's supported files actually changed.
     res.json(await syncRoomResourcesWithChatbot(db, room));
   } catch (error) {
+    if (isBuiltInLlmQuotaSignal(error)) {
+      const providerStatus = startBuiltInLlmQuotaCooldown(error.message);
+      return res.status(429).json({
+        ...providerStatus,
+        message: providerStatus.message,
+      });
+    }
     console.warn(`[buddy] Resource sync failed for ${room.id}: ${error.message}`);
     res.status(502).json({
       message: error.message || "Unable to sync room resources with Intelligrate.",
@@ -5880,18 +6209,19 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
+  let providerSelection = null;
   try {
     const user = db.users.find((candidate) => candidate.id === req.user.id);
     if (!user) {
       return res.status(404).json({ message: "Account not found." });
     }
     const requestedProviderKeyId = String(req.body.providerKeyId || BUILT_IN_LLM_PROVIDER_ID).trim();
-    const providerStatus = getBuddyProviderStatus();
+    const providerStatus = getBuddyProviderStatus(user);
     const catalog =
       requestedProviderKeyId && requestedProviderKeyId !== BUILT_IN_LLM_PROVIDER_ID
         ? await requireLlmProviderCatalog()
         : { providers: [] };
-    const providerSelection = resolveBuddyProviderSelection(
+    providerSelection = resolveBuddyProviderSelection(
       user,
       requestedProviderKeyId,
       catalog.providers,
@@ -5905,7 +6235,7 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
     );
 
     if (providerSelection.kind === "built-in") {
-      if (!assertBuddyProviderAvailable(res)) return;
+      await reserveBuiltInLlmRequest(db, user);
     }
     await syncRoomResourcesWithChatbot(db, room);
 
@@ -5942,8 +6272,18 @@ app.post("/api/rooms/:roomId/buddy/message", requireAuth, async (req, res) => {
       provider,
     });
   } catch (error) {
+    if (providerSelection?.kind === "built-in" && isBuiltInLlmQuotaSignal(error)) {
+      const providerStatus = startBuiltInLlmQuotaCooldown(error.message);
+      return res.status(429).json({
+        ...providerStatus,
+        message: providerStatus.message,
+      });
+    }
     if (error.status) {
-      return res.status(error.status).json({ message: error.message });
+      return res.status(error.status).json({
+        code: error.code || undefined,
+        message: error.message,
+      });
     }
 
     console.warn(`[buddy] Message failed for ${room.id}: ${error.message}`);
@@ -5958,18 +6298,19 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
   const room = assertRoomMember(db, req.params.roomId, req.user.id, res);
   if (!room) return;
 
+  let providerSelection = null;
   try {
     const user = db.users.find((candidate) => candidate.id === req.user.id);
     if (!user) {
       return res.status(404).json({ message: "Account not found." });
     }
     const requestedProviderKeyId = String(req.body.providerKeyId || BUILT_IN_LLM_PROVIDER_ID).trim();
-    const providerStatus = getBuddyProviderStatus();
+    const providerStatus = getBuddyProviderStatus(user);
     const catalog =
       requestedProviderKeyId && requestedProviderKeyId !== BUILT_IN_LLM_PROVIDER_ID
         ? await requireLlmProviderCatalog()
         : { providers: [] };
-    const providerSelection = resolveBuddyProviderSelection(
+    providerSelection = resolveBuddyProviderSelection(
       user,
       requestedProviderKeyId,
       catalog.providers,
@@ -5983,7 +6324,7 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
     );
 
     if (providerSelection.kind === "built-in") {
-      if (!assertBuddyProviderAvailable(res)) return;
+      await reserveBuiltInLlmRequest(db, user);
     }
 
     res.status(200);
@@ -6017,6 +6358,24 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
       }
 
       const data = dataLines.join("\n");
+      if (eventName === "error" && providerSelection.kind === "built-in") {
+        let payload = {};
+        try {
+          payload = JSON.parse(data || "{}");
+        } catch {
+          payload = {};
+        }
+        const message = payload?.message || data;
+        if (isBuiltInLlmQuotaSignal(message)) {
+          const providerStatus = startBuiltInLlmQuotaCooldown(message);
+          writeSse("error", {
+            code: providerStatus.code,
+            message: providerStatus.message,
+          });
+          return;
+        }
+      }
+
       if (eventName === "sources") {
         let parsedSources = [];
         try {
@@ -6074,8 +6433,30 @@ app.post("/api/rooms/:roomId/buddy/message/stream", requireAuth, async (req, res
 
     res.end();
   } catch (error) {
+    if (providerSelection?.kind === "built-in" && isBuiltInLlmQuotaSignal(error)) {
+      const providerStatus = startBuiltInLlmQuotaCooldown(error.message);
+      if (res.headersSent) {
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ code: providerStatus.code, message: providerStatus.message })}\n\n`,
+        );
+        return res.end();
+      }
+      return res.status(429).json({
+        ...providerStatus,
+        message: providerStatus.message,
+      });
+    }
     if (error.status) {
-      return res.status(error.status).json({ message: error.message });
+      if (res.headersSent) {
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ code: error.code || undefined, message: error.message })}\n\n`,
+        );
+        return res.end();
+      }
+      return res.status(error.status).json({
+        code: error.code || undefined,
+        message: error.message,
+      });
     }
 
     console.warn(`[buddy] Stream failed for ${room.id}: ${error.message}`);
