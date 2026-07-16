@@ -18,6 +18,65 @@ if [[ "$APP_DIR" != /* ]]; then
   exit 1
 fi
 
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Missing production env file: $ENV_FILE" >&2
+  echo "Create it from deploy/lite/env.production.example and fill real values before deploying." >&2
+  exit 1
+fi
+
+read_env_file_value() {
+  local key="$1"
+  awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[[:space:]]*[^=]+=[[:space:]]*/, "", $0)
+      sub(/\r$/, "", $0)
+      if (($0 ~ /^".*"$/) || ($0 ~ /^\047.*\047$/)) {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      value = $0
+    }
+    END {
+      if (value != "") {
+        print value
+      }
+    }
+  ' "$ENV_FILE"
+}
+
+export VITE_SUPABASE_URL
+export SUPABASE_URL
+export VITE_SUPABASE_ANON_KEY
+export SUPABASE_ANON_KEY
+export SMTP_URL
+export SMTP_HOST
+export AUTH_EMAIL_FROM
+export SMTP_FROM
+
+VITE_SUPABASE_URL="$(read_env_file_value VITE_SUPABASE_URL)"
+SUPABASE_URL="$(read_env_file_value SUPABASE_URL)"
+VITE_SUPABASE_ANON_KEY="$(read_env_file_value VITE_SUPABASE_ANON_KEY)"
+SUPABASE_ANON_KEY="$(read_env_file_value SUPABASE_ANON_KEY)"
+SMTP_URL="$(read_env_file_value SMTP_URL)"
+SMTP_HOST="$(read_env_file_value SMTP_HOST)"
+AUTH_EMAIL_FROM="$(read_env_file_value AUTH_EMAIL_FROM)"
+SMTP_FROM="$(read_env_file_value SMTP_FROM)"
+
+bash "$SCRIPT_DIR/validate-production-env.sh"
+
+client_supabase_url="$VITE_SUPABASE_URL"
+if [[ -n "$client_supabase_url" ]]; then
+  if ! grep -R --fixed-strings "$client_supabase_url" "$RELEASE_DIR/apps/client/dist/assets" >/dev/null; then
+    echo "Client bundle was built without the configured VITE_SUPABASE_URL." >&2
+    echo "Rebuild the client with the production VITE_SUPABASE_* environment." >&2
+    exit 1
+  fi
+fi
+
+if [[ "${DEPLOY_VALIDATE_ONLY:-}" == "1" ]]; then
+  echo "Deployment env validation completed."
+  exit 0
+fi
+
 if ! command -v node >/dev/null 2>&1; then
   echo "Node.js is required. Run deploy/lite/bootstrap-vm.sh first." >&2
   exit 1
@@ -26,27 +85,6 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
   echo "Python 3 is required. Run deploy/lite/bootstrap-vm.sh first." >&2
   exit 1
-fi
-
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Missing production env file: $ENV_FILE" >&2
-  echo "Create it from deploy/lite/env.production.example and fill real values before deploying." >&2
-  exit 1
-fi
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-
-bash "$SCRIPT_DIR/validate-production-env.sh"
-
-if [[ -n "${VITE_SUPABASE_URL:-}" ]]; then
-  if ! grep -R --fixed-strings "$VITE_SUPABASE_URL" "$RELEASE_DIR/apps/client/dist/assets" >/dev/null; then
-    echo "Client bundle was built without the configured VITE_SUPABASE_URL." >&2
-    echo "Rebuild the client with the production VITE_SUPABASE_* environment." >&2
-    exit 1
-  fi
 fi
 
 mkdir -p "$APP_DIR"/{backups,releases,shared}
