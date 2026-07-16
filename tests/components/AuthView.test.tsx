@@ -150,6 +150,38 @@ describe("AuthView", () => {
     });
   });
 
+  it("disables verification resend while the cooldown is active", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        emailVerificationRequired: true,
+        message: "Check your email to verify your account.",
+        verificationEmailSent: true,
+        user: { id: "usr_2", email: "new@example.com", name: "New User" },
+      }, 201),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthView onAuthenticated={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /register/i }));
+    await user.type(screen.getByPlaceholderText(/username/i), "New User");
+    await user.type(screen.getByPlaceholderText(/email address/i), "new@example.com");
+    await user.type(screen.getByPlaceholderText(/^password$/i), "quality-pass-123");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /verify email/i })).toBeInTheDocument();
+    });
+
+    const resendButton = screen.getByRole("button", { name: /resend in/i });
+    expect(resendButton).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /if this email address can receive mail, check your email/i,
+    );
+  });
+
   it("places registration errors above the username field", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockResolvedValue(

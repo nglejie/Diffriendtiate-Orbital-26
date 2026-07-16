@@ -6,6 +6,7 @@ ENV_FILE="${ENV_FILE:-$APP_DIR/shared/.env}"
 RELEASE_SHA="${1:-unknown}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 SERVICE_NAME="${SERVICE_NAME:-diffriendtiate-lite}"
+CHATBOT_SERVICE_NAME="${CHATBOT_SERVICE_NAME:-diffriendtiate-chatbot}"
 SERVICE_USER="${SERVICE_USER:-$(id -un)}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,14 +23,34 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Python 3 is required. Run deploy/lite/bootstrap-vm.sh first." >&2
+  exit 1
+fi
+
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing production env file: $ENV_FILE" >&2
   echo "Create it from deploy/lite/env.production.example and fill real values before deploying." >&2
   exit 1
 fi
 
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+bash "$SCRIPT_DIR/validate-production-env.sh"
+
+if [[ -n "${VITE_SUPABASE_URL:-}" ]]; then
+  if ! grep -R --fixed-strings "$VITE_SUPABASE_URL" "$RELEASE_DIR/apps/client/dist/assets" >/dev/null; then
+    echo "Client bundle was built without the configured VITE_SUPABASE_URL." >&2
+    echo "Rebuild the client with the production VITE_SUPABASE_* environment." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$APP_DIR"/{backups,releases,shared}
-mkdir -p "$APP_DIR/shared/data" "$APP_DIR/shared/uploads"
+mkdir -p "$APP_DIR/shared/data" "$APP_DIR/shared/uploads" "$APP_DIR/shared/chroma" "$APP_DIR/shared/logs"
 
 rm -rf "$RELEASE_DIR/apps/server/uploads"
 ln -s "$APP_DIR/shared/uploads" "$RELEASE_DIR/apps/server/uploads"
@@ -43,8 +64,8 @@ write_service() {
   sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
 [Unit]
 Description=Diffriendtiate Lite Production
-After=network-online.target
-Wants=network-online.target
+After=network-online.target ${CHATBOT_SERVICE_NAME}.service
+Wants=network-online.target ${CHATBOT_SERVICE_NAME}.service
 
 [Service]
 Type=simple
@@ -54,6 +75,32 @@ EnvironmentFile=${ENV_FILE}
 Environment=NODE_ENV=production
 Environment=PORT=4000
 ExecStart=/usr/bin/node apps/server/dist/index.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+write_chatbot_service() {
+  sudo tee "/etc/systemd/system/${CHATBOT_SERVICE_NAME}.service" >/dev/null <<EOF
+[Unit]
+Description=Diffriendtiate Intelligrate Chatbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${CURRENT_LINK}/services/server-chatbot
+EnvironmentFile=${ENV_FILE}
+Environment=GPU_ENABLED=false
+Environment=INTELLIGRATE_GPU_ENABLED=false
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${APP_DIR}/shared/chatbot-venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 5000
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -95,6 +142,7 @@ rollback() {
   if [[ -n "$previous_release" && -d "$previous_release" ]]; then
     echo "Rolling back to $previous_release"
     ln -sfn "$previous_release" "$CURRENT_LINK"
+    sudo systemctl restart "$CHATBOT_SERVICE_NAME" || true
     sudo systemctl restart "$SERVICE_NAME" || true
   else
     echo "No previous release is available for rollback." >&2
@@ -104,7 +152,9 @@ rollback() {
 fail_deploy() {
   local message="$1"
   echo "$message" >&2
+  sudo systemctl status "$CHATBOT_SERVICE_NAME" --no-pager || true
   sudo systemctl status "$SERVICE_NAME" --no-pager || true
+  sudo journalctl -u "$CHATBOT_SERVICE_NAME" --no-pager -n 200 || true
   sudo journalctl -u "$SERVICE_NAME" --no-pager -n 200 || true
   rollback
   exit 1
@@ -119,12 +169,21 @@ echo "Installing production server dependencies..."
   --include-workspace-root=false \
   --ignore-scripts) || fail_deploy "Production dependency install failed."
 
+echo "Installing chatbot dependencies..."
+python3 -m venv "$APP_DIR/shared/chatbot-venv" || fail_deploy "Chatbot virtualenv setup failed."
+"$APP_DIR/shared/chatbot-venv/bin/python" -m pip install --upgrade pip >/dev/null || fail_deploy "Chatbot pip upgrade failed."
+"$APP_DIR/shared/chatbot-venv/bin/python" -m pip install --no-cache-dir -r "$RELEASE_DIR/services/server-chatbot/requirements.txt" || fail_deploy "Chatbot dependency install failed."
+
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
 
+write_chatbot_service
 write_service
 write_caddyfile
 sudo systemctl daemon-reload
+sudo systemctl enable "$CHATBOT_SERVICE_NAME" >/dev/null
 sudo systemctl enable "$SERVICE_NAME" >/dev/null
+sudo systemctl restart "$CHATBOT_SERVICE_NAME" || fail_deploy "Chatbot service failed to start."
+wait_for_url "http://127.0.0.1:5000/health" "Chatbot" 90 || fail_deploy "Chatbot health check failed."
 sudo systemctl restart "$SERVICE_NAME" || fail_deploy "Service failed to start."
 
 wait_for_url "http://127.0.0.1:4000/api/health" "API" 60 || fail_deploy "API health check failed."

@@ -161,12 +161,30 @@ def iter_exception_messages(error: BaseException) -> list[str]:
         current = current.__cause__ or current.__context__
     return messages
 
+def is_quota_error(error: BaseException) -> bool:
+    combined = "\n".join(iter_exception_messages(error)).lower()
+    return any(
+        marker in combined
+        for marker in (
+            "resource_exhausted",
+            "quota",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "429",
+        )
+    )
+
 def classify_stream_error(error: BaseException, llm_model: Optional[str]) -> str:
     """Return a user-facing stream failure without confusing BYOK auth with corpus auth."""
     combined = "\n".join(iter_exception_messages(error)).lower()
     has_api_key_failure = "api key" in combined or "invalid_api_key" in combined or "api_key_invalid" in combined
     has_embedding_failure = "embedding" in combined or "embed_query" in combined or "embed content" in combined
 
+    if is_quota_error(error) and llm_model:
+        return "The selected provider hit a quota or rate limit. Try again later or choose another saved model."
+    if is_quota_error(error):
+        return "The built-in Intelligrate Gemini quota is temporarily exhausted. Try a saved BYOK model or wait for quota to reset."
     if has_api_key_failure and has_embedding_failure:
         return "Intelligrate could not search room resources because the corpus embedding key is invalid. Check the chatbot embedding provider configuration and try again."
     if has_api_key_failure and llm_model:
@@ -275,6 +293,8 @@ async def embed_documents(body: EmbedRequest):
     except Exception as e:
         # print(f"Unexpected Error {e}")
         logger.error(f"Unexpected error in embed: {e}", exc_info=True)
+        if is_quota_error(e):
+            raise HTTPException(status_code=429, detail=classify_stream_error(e, None))
         raise HTTPException(status_code=500, detail="An unexpected error occured")
 
 @app.post("/corpus/sync", response_model=DomainCorpusSyncResponse)
@@ -309,6 +329,8 @@ async def sync_domain_corpus(body: DomainCorpusSyncRequest):
         raise
     except Exception as e:
         logger.error(f"Unexpected error in domain corpus sync: {e}", exc_info=True)
+        if is_quota_error(e):
+            raise HTTPException(status_code=429, detail=classify_stream_error(e, None))
         raise HTTPException(status_code=500, detail="An unexpected error occured")
     
 @app.post("/predict", response_model=PredictResponse)
@@ -366,6 +388,8 @@ async def predict(
         raise # reraise http exception
     except Exception as e:
         logger.error(f"Unexpected error in embed: {e}", exc_info=True)
+        if is_quota_error(e):
+            raise HTTPException(status_code=429, detail=classify_stream_error(e, llm_model))
         raise HTTPException(status_code=500, detail="An unexpected error occured")
 
 @app.post("/predict/stream")

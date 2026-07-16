@@ -1310,80 +1310,86 @@ function RoomView({ inviteCode, onBack, onOpenRoom, onUserUpdated, roomId, token
   async function askBuddy(messagesForThread, attachmentResources = [], handlers: any = {}) {
     if (!room?.id) throw new Error("Open a room before asking Intelligrate.");
 
-    return api.streamBuddy(
-      room.id,
-      {
-        messages: messagesForThread,
-        attachmentResourceIds: attachmentResources.map((resource) => resource.id),
-        providerKeyId:
-          handlers.provider?.providerKeyId &&
-          handlers.provider.providerKeyId !== "intelligrate"
-            ? handlers.provider.providerKeyId
-            : undefined,
-      },
-      (event, data) => {
-        if (event === "error") {
-          try {
-            const payload = JSON.parse(data || "{}");
-            throw new Error(payload.message || "Unable to stream a response from Intelligrate.");
-          } catch (error) {
-            if (error instanceof SyntaxError) {
-              throw new Error(data || "Unable to stream a response from Intelligrate.");
+    try {
+      return await api.streamBuddy(
+        room.id,
+        {
+          messages: messagesForThread,
+          attachmentResourceIds: attachmentResources.map((resource) => resource.id),
+          providerKeyId:
+            handlers.provider?.providerKeyId &&
+            handlers.provider.providerKeyId !== "intelligrate"
+              ? handlers.provider.providerKeyId
+              : undefined,
+        },
+        (event, data) => {
+          if (event === "error") {
+            try {
+              const payload = JSON.parse(data || "{}");
+              const error = new Error(payload.message || "Unable to stream a response from Intelligrate.") as Error & {
+                [key: string]: any;
+              };
+              Object.assign(error, payload);
+              throw error;
+            } catch (error) {
+              if (error instanceof SyntaxError) {
+                throw new Error(data || "Unable to stream a response from Intelligrate.");
+              }
+              throw error;
             }
-            throw error;
           }
-        }
 
-        if (event === "token") {
-          handlers.onToken?.(data);
-          return;
-        }
-
-        if (event === "thinking") {
-          handlers.onThinking?.(data);
-          return;
-        }
-
-        if (event === "tool_start" || event === "tool_end") {
-          handlers.onThinking?.({ event, payload: data });
-          return;
-        }
-
-        if (event === "answer") {
-          handlers.onAnswer?.(data);
-          return;
-        }
-
-        if (event === "sources") {
-          try {
-            handlers.onSources?.(JSON.parse(data || "[]"));
-          } catch {
-            handlers.onSources?.([]);
+          if (event === "token") {
+            handlers.onToken?.(data);
+            return;
           }
-          return;
-        }
 
-        if (event === "chain") {
-          try {
-            handlers.onChain?.(JSON.parse(data || "[]"));
-          } catch {
-            handlers.onChain?.([]);
+          if (event === "thinking") {
+            handlers.onThinking?.(data);
+            return;
           }
-          return;
-        }
 
-        if (event === "error") {
-          let payload: any = {};
-          try {
-            payload = JSON.parse(data || "{}");
-          } catch {
-            payload = {};
+          if (event === "tool_start" || event === "tool_end") {
+            handlers.onThinking?.({ event, payload: data });
+            return;
           }
-          throw new Error(payload.message || "Unable to stream Intelligrate's response.");
-        }
-      },
-      { signal: handlers.signal },
-    );
+
+          if (event === "answer") {
+            handlers.onAnswer?.(data);
+            return;
+          }
+
+          if (event === "sources") {
+            try {
+              handlers.onSources?.(JSON.parse(data || "[]"));
+            } catch {
+              handlers.onSources?.([]);
+            }
+            return;
+          }
+
+          if (event === "chain") {
+            try {
+              handlers.onChain?.(JSON.parse(data || "[]"));
+            } catch {
+              handlers.onChain?.([]);
+            }
+          }
+        },
+        { signal: handlers.signal },
+      );
+    } catch (err) {
+      const code = String(err?.code || "");
+      const message = String(err?.message || "");
+      if (
+        err?.status === 429 ||
+        ["daily_limit_reached", "quota_cooldown"].includes(code) ||
+        /quota|rate limit|built-in Intelligrate limit/i.test(message)
+      ) {
+        await refreshBuddyAvailability(room.id);
+      }
+      throw err;
+    }
   }
 
   /**

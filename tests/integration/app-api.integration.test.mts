@@ -165,17 +165,25 @@ describe("app API integration", () => {
     expect(registration.payload.emailVerificationRequired).toBe(true);
     expect(registration.payload.verificationToken).toBeTruthy();
 
+    const immediateResend = await apiRequest(app.baseUrl, "/api/auth/email-verification/resend", {
+      method: "POST",
+      body: { email: verificationUser.email },
+    });
+    expect(immediateResend.status).toBe(429);
+    expect(immediateResend.payload.retryAfterSeconds).toBeGreaterThan(0);
+
     const blockedLogin = await apiRequest(app.baseUrl, "/api/auth/login", {
       method: "POST",
       body: { email: verificationUser.email, password: verificationUser.password },
     });
     expect(blockedLogin.status).toBe(403);
     expect(blockedLogin.payload.emailVerificationRequired).toBe(true);
-    expect(blockedLogin.payload.verificationToken).toBeTruthy();
+    expect(blockedLogin.payload.retryAfterSeconds).toBeGreaterThan(0);
+    expect(blockedLogin.payload.verificationToken).toBeUndefined();
 
     const verification = await apiRequest(app.baseUrl, "/api/auth/email-verification/confirm", {
       method: "POST",
-      body: { token: blockedLogin.payload.verificationToken },
+      body: { token: registration.payload.verificationToken },
     });
     expect(verification.status).toBe(200);
     expect(verification.payload.token).toBeTruthy();

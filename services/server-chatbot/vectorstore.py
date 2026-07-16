@@ -35,7 +35,7 @@ def normalise_optional_secret(value: str | None) -> str | None:
 
 USE_GEMINI_EMBEDDINGS = os.getenv("USE_GEMINI_EMBEDDINGS", "false").lower() == "true"
 GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
-GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-2")
+GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-001")
 
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
 SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))

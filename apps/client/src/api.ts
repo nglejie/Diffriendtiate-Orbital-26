@@ -173,7 +173,15 @@ async function streamRequest(path: string, body: any, onEvent: any, options: Str
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.message || "Something went wrong.");
+    const error = new Error(payload.message || "Something went wrong.") as Error & {
+      payload?: any;
+      status?: number;
+      [key: string]: any;
+    };
+    Object.assign(error, payload);
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
   }
 
   const reader = response.body?.getReader();
