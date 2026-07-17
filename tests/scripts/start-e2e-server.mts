@@ -20,6 +20,7 @@ process.env.CHATBOT_BASE_URL =
 process.env.AUTH_TEST_ACTION_LINKS = "true";
 process.env.DATABASE_URL = "";
 process.env.DIFFRIENDTIATE_DATA_DIR = dataDir;
+process.env.GEMINI_API_KEY = "diffriendtiate-e2e-built-in-gemini-key";
 process.env.JWT_SECRET = "diffriendtiate-e2e-secret";
 process.env.NODE_ENV = "test";
 process.env.PORT = process.env.E2E_API_PORT || "4011";
