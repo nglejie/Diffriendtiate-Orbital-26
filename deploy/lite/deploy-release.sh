@@ -47,6 +47,7 @@ export VITE_SUPABASE_URL
 export SUPABASE_URL
 export VITE_SUPABASE_ANON_KEY
 export SUPABASE_ANON_KEY
+export SUPABASE_SERVICE_ROLE_KEY
 export SMTP_URL
 export SMTP_HOST
 export AUTH_EMAIL_FROM
@@ -56,12 +57,18 @@ VITE_SUPABASE_URL="$(read_env_file_value VITE_SUPABASE_URL)"
 SUPABASE_URL="$(read_env_file_value SUPABASE_URL)"
 VITE_SUPABASE_ANON_KEY="$(read_env_file_value VITE_SUPABASE_ANON_KEY)"
 SUPABASE_ANON_KEY="$(read_env_file_value SUPABASE_ANON_KEY)"
+SUPABASE_SERVICE_ROLE_KEY="$(read_env_file_value SUPABASE_SERVICE_ROLE_KEY)"
 SMTP_URL="$(read_env_file_value SMTP_URL)"
 SMTP_HOST="$(read_env_file_value SMTP_HOST)"
 AUTH_EMAIL_FROM="$(read_env_file_value AUTH_EMAIL_FROM)"
 SMTP_FROM="$(read_env_file_value SMTP_FROM)"
 
 bash "$SCRIPT_DIR/validate-production-env.sh"
+
+if [[ "${DEPLOY_VALIDATE_ONLY:-}" == "1" ]]; then
+  echo "Deployment env validation completed."
+  exit 0
+fi
 
 client_supabase_url="$VITE_SUPABASE_URL"
 if [[ -n "$client_supabase_url" ]]; then
@@ -70,11 +77,6 @@ if [[ -n "$client_supabase_url" ]]; then
     echo "Rebuild the client with the production VITE_SUPABASE_* environment." >&2
     exit 1
   fi
-fi
-
-if [[ "${DEPLOY_VALIDATE_ONLY:-}" == "1" ]]; then
-  echo "Deployment env validation completed."
-  exit 0
 fi
 
 if ! command -v node >/dev/null 2>&1; then

@@ -41,6 +41,19 @@ afterEach(() => {
 });
 
 describe("lite deployment env validation", () => {
+  function runValidation(envFile: string) {
+    return spawnSync(findBash(), ["deploy/lite/deploy-release.sh", "validation-test"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        DEPLOY_VALIDATE_ONLY: "1",
+        ENV_FILE: toBashPath(envFile),
+        SERVICE_USER: "test-user",
+      },
+      encoding: "utf8",
+    });
+  }
+
   it("accepts systemd-style env values that are not shell-sourceable", () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "diffriendtiate-lite-env-"));
     tempDirs.push(tempDir);
@@ -56,18 +69,54 @@ describe("lite deployment env validation", () => {
       "utf8",
     );
 
-    const result = spawnSync(findBash(), ["deploy/lite/deploy-release.sh", "validation-test"], {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        DEPLOY_VALIDATE_ONLY: "1",
-        ENV_FILE: toBashPath(envFile),
-      },
-      encoding: "utf8",
-    });
+    const result = runValidation(envFile);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("Production auth check passed");
+    expect(result.stdout).toContain("Deployment env validation completed");
+  });
+
+  it("requires a service-role key when Supabase Auth is configured", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "diffriendtiate-lite-env-"));
+    tempDirs.push(tempDir);
+    const envFile = path.join(tempDir, ".env");
+
+    writeFileSync(
+      envFile,
+      [
+        "VITE_SUPABASE_URL=https://example.supabase.co",
+        "VITE_SUPABASE_ANON_KEY=anon-key",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = runValidation(envFile);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("missing SUPABASE_SERVICE_ROLE_KEY");
+  });
+
+  it("accepts Supabase Auth env when the service-role key is present", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "diffriendtiate-lite-env-"));
+    tempDirs.push(tempDir);
+    const envFile = path.join(tempDir, ".env");
+
+    writeFileSync(
+      envFile,
+      [
+        "VITE_SUPABASE_URL=https://example.supabase.co",
+        "VITE_SUPABASE_ANON_KEY=anon-key",
+        "SUPABASE_SERVICE_ROLE_KEY=service-role-key",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = runValidation(envFile);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Supabase Auth client and server admin env is configured");
     expect(result.stdout).toContain("Deployment env validation completed");
   });
 });
