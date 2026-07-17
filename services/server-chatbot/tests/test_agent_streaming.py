@@ -132,6 +132,14 @@ def model_end_event(content, metadata=None):
     }
 
 
+def model_chain_end_event(content, metadata=None):
+    return {
+        "event": "on_chain_end",
+        "metadata": metadata if metadata is not None else {"langgraph_node": "model"},
+        "data": {"output": AIMessage(content=content)},
+    }
+
+
 class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def collect_stream(self, events, history=None):
         agent = Agent(vectorstore=None)
@@ -173,7 +181,7 @@ class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(token_chunks, ["[TOKEN]Second answer only."])
         self.assertNotIn("First answer must not be replayed", "".join(token_chunks))
 
-    async def test_chat_model_end_is_the_only_non_streaming_answer_fallback(self):
+    async def test_chat_model_end_can_supply_non_streaming_answer_fallback(self):
         chunks = await self.collect_stream([model_end_event("Final provider answer.")])
 
         self.assertIn("[TOKEN]Final provider answer.", chunks)
@@ -181,6 +189,47 @@ class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
             [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
             ["[TOKEN]Final provider answer."],
         )
+
+    async def test_model_chain_end_can_supply_non_streaming_answer_fallback(self):
+        chunks = await self.collect_stream([model_chain_end_event("Final Gemini chain answer.")])
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]Final Gemini chain answer."],
+        )
+
+    async def test_model_chain_end_does_not_duplicate_streamed_tokens(self):
+        chunks = await self.collect_stream(
+            [
+                model_stream_event("Already streamed."),
+                model_chain_end_event("Already streamed."),
+            ],
+        )
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]Already streamed."],
+        )
+
+    async def test_root_chain_end_state_is_not_answer_fallback(self):
+        chunks = await self.collect_stream(
+            [
+                {
+                    "event": "on_chain_end",
+                    "metadata": {"langgraph_node": None},
+                    "data": {
+                        "output": {
+                            "messages": [
+                                AIMessage(content="Old assistant answer."),
+                                AIMessage(content="Old assistant answer.\n\nNew assistant answer."),
+                            ],
+                        },
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual([chunk for chunk in chunks if chunk.startswith("[TOKEN]")], [])
 
     async def test_chat_model_stream_does_not_require_langgraph_node_metadata(self):
         chunks = await self.collect_stream(
