@@ -243,6 +243,15 @@ class Agent:
 
         return None
 
+    def _extract_model_chain_end_text(self, event) -> Optional[str]:
+        """Extract final model text from provider chains that skip chat events."""
+        if event.get("metadata", {}).get("langgraph_node") != "model":
+            return None
+
+        data = event.get("data") or {}
+        payload = data.get("output")
+        return self._extract_chat_event_text(payload)
+
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
 
@@ -468,6 +477,13 @@ class Agent:
                     # Only the chat-model output is safe to use as fallback; chain
                     # events can contain the full previous conversation state.
                     logger.debug("Model produced final content without token chunks; emitting final text once.")
+                    streamed_answer_parts.append(final_text)
+                    yield f"[TOKEN]{final_text}"
+
+            elif event_type == "on_chain_end":
+                final_text = self._extract_model_chain_end_text(event)
+                if final_text and not "".join(streamed_answer_parts).strip():
+                    logger.debug("Chain event produced final model content without token chunks; emitting final text once.")
                     streamed_answer_parts.append(final_text)
                     yield f"[TOKEN]{final_text}"
             
