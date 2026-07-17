@@ -271,6 +271,14 @@ class Agent:
 
         return None
 
+    def _extract_final_ai_text(self, messages: list) -> Optional[str]:
+        for message in reversed(messages or []):
+            if isinstance(message, AIMessage):
+                text = self._extract_text_content(message.content)
+                if text:
+                    return text
+        return None
+
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
 
@@ -524,6 +532,17 @@ class Agent:
                 streamed_answer_parts.append(chain_answer_text)
                 yield f"[TOKEN]{chain_answer_text}"
 
+        if not "".join(streamed_answer_parts).strip():
+            logger.debug("Stream events produced no answer; falling back to non-streaming agent invoke.")
+            fallback_result = await agent.ainvoke({"messages": messages})
+            fallback_messages = fallback_result.get("messages", []) if isinstance(fallback_result, dict) else []
+            fallback_answer = self._extract_final_ai_text(fallback_messages)
+            if fallback_answer:
+                all_messages = fallback_messages
+                sources = self._merge_collected_sources(self._extract_sources(fallback_messages), source_collector)
+                streamed_answer_parts.append(fallback_answer)
+                yield f"[TOKEN]{fallback_answer}"
+
         self._merge_collected_sources(sources, source_collector)
         logger.info(f"Stream complete | sources: {sources}")
         yield f"[SOURCES]{json.dumps(sources)}" # return sources after all tokens
@@ -564,8 +583,7 @@ class Agent:
         logger.debug(f"Invoke started | messages: {len(messages)} | room_id: {room_id} | custom_llm: {llm_model or 'system default'}")
         
         result = await agent.ainvoke({"messages": messages})
-        # answer = result["messages"][-1].content
-        answer = self._extract_text_content(result["messages"][-1].content)
+        answer = self._extract_final_ai_text(result["messages"]) or ""
         sources = self._merge_collected_sources(self._extract_sources(result["messages"]), source_collector)
         chain = self._convert_messages(result["messages"])
         
