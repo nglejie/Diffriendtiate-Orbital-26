@@ -26,7 +26,18 @@ has_real_smtp() {
 }
 
 if has_supabase_auth; then
-  echo "Production auth check passed: Supabase Auth client env is configured."
+  if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
+    cat >&2 <<'EOF'
+Production Supabase Auth is missing SUPABASE_SERVICE_ROLE_KEY.
+
+The server needs the Supabase service-role key to delete Supabase Auth users
+when a member deletes their Diffriendtiate account. Without it, production can
+leave orphaned auth users behind.
+EOF
+    exit 1
+  fi
+
+  echo "Production auth check passed: Supabase Auth client and server admin env is configured."
   exit 0
 fi
 
@@ -38,9 +49,9 @@ fi
 cat >&2 <<'EOF'
 Production auth is not configured safely.
 
-Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY for Supabase Auth, or set
-a real SMTP_URL/SMTP_HOST for built-in auth. Local/dev mail targets such as
-mailpit, localhost, and 127.0.0.1 are intentionally rejected for lite
-production deployments.
+Set VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY
+for Supabase Auth, or set a real SMTP_URL/SMTP_HOST for built-in auth.
+Local/dev mail targets such as mailpit, localhost, and 127.0.0.1 are
+intentionally rejected for lite production deployments.
 EOF
 exit 1

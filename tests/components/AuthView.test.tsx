@@ -1,11 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AuthView from "../../apps/client/src/features/auth/AuthView.tsx";
 
-vi.mock("../../apps/client/src/supabaseAuth.ts", () => ({
+const supabaseAuthMock = vi.hoisted(() => ({
   getActiveSupabaseSession: vi.fn(),
-  isSupabaseAuthConfigured: () => false,
+  isSupabaseAuthConfigured: vi.fn(() => false),
   onSupabaseAuthStateChange: vi.fn(() => () => {}),
   readSupabaseAuthTypeFromUrl: vi.fn(() => ""),
   requestSupabasePasswordReset: vi.fn(),
@@ -17,6 +17,20 @@ vi.mock("../../apps/client/src/supabaseAuth.ts", () => ({
   updateSupabasePassword: vi.fn(),
 }));
 
+vi.mock("../../apps/client/src/supabaseAuth.ts", () => ({
+  getActiveSupabaseSession: supabaseAuthMock.getActiveSupabaseSession,
+  isSupabaseAuthConfigured: supabaseAuthMock.isSupabaseAuthConfigured,
+  onSupabaseAuthStateChange: supabaseAuthMock.onSupabaseAuthStateChange,
+  readSupabaseAuthTypeFromUrl: supabaseAuthMock.readSupabaseAuthTypeFromUrl,
+  requestSupabasePasswordReset: supabaseAuthMock.requestSupabasePasswordReset,
+  resendSupabaseVerificationEmail: supabaseAuthMock.resendSupabaseVerificationEmail,
+  signInWithSupabasePassword: supabaseAuthMock.signInWithSupabasePassword,
+  signOutSupabaseAuth: supabaseAuthMock.signOutSupabaseAuth,
+  signUpWithSupabase: supabaseAuthMock.signUpWithSupabase,
+  startSupabaseOAuth: supabaseAuthMock.startSupabaseOAuth,
+  updateSupabasePassword: supabaseAuthMock.updateSupabasePassword,
+}));
+
 function jsonResponse(payload: any, status = 200) {
   return new Response(JSON.stringify(payload), {
     headers: { "Content-Type": "application/json" },
@@ -25,6 +39,13 @@ function jsonResponse(payload: any, status = 200) {
 }
 
 describe("AuthView", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    supabaseAuthMock.isSupabaseAuthConfigured.mockReturnValue(false);
+    supabaseAuthMock.onSupabaseAuthStateChange.mockReturnValue(() => {});
+    supabaseAuthMock.readSupabaseAuthTypeFromUrl.mockReturnValue("");
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
@@ -180,6 +201,47 @@ describe("AuthView", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       /if this email address can receive mail, check your email/i,
     );
+  });
+
+  it("resends Supabase verification when signup returns a duplicate fake user", async () => {
+    const user = userEvent.setup();
+    const onAuthenticated = vi.fn();
+    supabaseAuthMock.isSupabaseAuthConfigured.mockReturnValue(true);
+    supabaseAuthMock.signUpWithSupabase.mockResolvedValue({
+      data: {
+        session: null,
+        user: {
+          email: "existing@example.com",
+          identities: [],
+        },
+      },
+      error: null,
+    });
+    supabaseAuthMock.resendSupabaseVerificationEmail.mockResolvedValue({ data: {}, error: null });
+
+    render(<AuthView onAuthenticated={onAuthenticated} />);
+
+    await user.click(screen.getByRole("button", { name: /register/i }));
+    await user.type(screen.getByPlaceholderText(/username/i), "Existing User");
+    await user.type(screen.getByPlaceholderText(/email address/i), "existing@example.com");
+    await user.type(screen.getByPlaceholderText(/^password$/i), "quality-pass-123");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    await waitFor(() => {
+      expect(supabaseAuthMock.signUpWithSupabase).toHaveBeenCalledWith({
+        email: "existing@example.com",
+        name: "Existing User",
+        password: "quality-pass-123",
+      });
+      expect(supabaseAuthMock.resendSupabaseVerificationEmail).toHaveBeenCalledWith(
+        "existing@example.com",
+      );
+      expect(screen.getByRole("heading", { name: /verify email/i })).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        /if this email address can receive mail, check your email/i,
+      );
+      expect(onAuthenticated).not.toHaveBeenCalled();
+    });
   });
 
   it("places registration errors above the username field", async () => {
