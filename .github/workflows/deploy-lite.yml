@@ -45,6 +45,7 @@ jobs:
       LITE_KNOWN_HOSTS: ${{ secrets.LITE_KNOWN_HOSTS }}
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Check deployment configuration
@@ -52,7 +53,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for name in LITE_SSH_HOST LITE_SSH_PRIVATE_KEY LITE_SSH_USER VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY; do
+          for name in LITE_SSH_HOST LITE_SSH_PRIVATE_KEY LITE_SSH_USER VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
             if [ -z "${!name}" ]; then
               missing=1
             fi
@@ -60,7 +61,7 @@ jobs:
 
           if [ "$missing" -ne 0 ]; then
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "::error::LITE_SSH_HOST, LITE_SSH_PRIVATE_KEY, LITE_SSH_USER, VITE_SUPABASE_URL, and VITE_SUPABASE_ANON_KEY are required for lite deployment."
+              echo "::error::LITE_SSH_HOST, LITE_SSH_PRIVATE_KEY, LITE_SSH_USER, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY are required for lite deployment."
               exit 1
             fi
 
@@ -167,6 +168,70 @@ jobs:
 
           ssh "${ssh_common[@]}" "$ssh_target" \
             "mkdir -p '${LITE_APP_DIR}/releases' '${LITE_APP_DIR}/shared' '${LITE_APP_DIR}/backups'"
+
+          if [ -n "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            secret_file="$RUNNER_TEMP/supabase_service_role_key"
+            helper_script="$RUNNER_TEMP/update_supabase_service_role.py"
+            trap 'rm -f "$secret_file" "$helper_script"' EXIT
+            umask 077
+            printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" > "$secret_file"
+            cat > "$helper_script" <<'PY'
+          from pathlib import Path
+          import os
+
+          app_dir = Path(os.environ['LITE_APP_DIR'])
+          env_file = app_dir / 'shared' / '.env'
+          secret_file = app_dir / 'shared' / '.supabase_service_role_key.tmp'
+          helper_file = app_dir / 'shared' / 'update_supabase_service_role.py'
+
+          try:
+              key = secret_file.read_text(encoding='utf-8').strip()
+              if not key:
+                  raise SystemExit('SUPABASE_SERVICE_ROLE_KEY secret was empty.')
+
+              lines = env_file.read_text(encoding='utf-8').splitlines() if env_file.exists() else []
+              output = []
+              replaced = False
+
+              for line in lines:
+                  if line.startswith('SUPABASE_SERVICE_ROLE_KEY='):
+                      output.append(f'SUPABASE_SERVICE_ROLE_KEY={key}')
+                      replaced = True
+                  else:
+                      output.append(line)
+
+              if not replaced:
+                  output.append(f'SUPABASE_SERVICE_ROLE_KEY={key}')
+
+              env_file.write_text('\n'.join(output).rstrip() + '\n', encoding='utf-8')
+              env_file.chmod(0o600)
+          finally:
+              secret_file.unlink(missing_ok=True)
+              helper_file.unlink(missing_ok=True)
+
+          print('Updated server-only Supabase key in production env.')
+          PY
+
+            scp \
+              -i "$HOME/.ssh/lite_deploy_key" \
+              -P "$LITE_SSH_PORT" \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              "$secret_file" \
+              "$ssh_target:${LITE_APP_DIR}/shared/.supabase_service_role_key.tmp"
+            rm -f "$secret_file"
+
+            scp \
+              -i "$HOME/.ssh/lite_deploy_key" \
+              -P "$LITE_SSH_PORT" \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              "$helper_script" \
+              "$ssh_target:${LITE_APP_DIR}/shared/update_supabase_service_role.py"
+
+            ssh "${ssh_common[@]}" "$ssh_target" \
+              "LITE_APP_DIR='${LITE_APP_DIR}' python3 '${LITE_APP_DIR}/shared/update_supabase_service_role.py'"
+          fi
 
           scp \
             -i "$HOME/.ssh/lite_deploy_key" \
