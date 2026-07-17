@@ -243,14 +243,33 @@ class Agent:
 
         return None
 
-    def _extract_model_chain_end_text(self, event) -> Optional[str]:
-        """Extract final model text from provider chains that skip chat events."""
+    def _extract_model_chain_payload_text(self, payload) -> Optional[str]:
+        text = self._extract_chat_event_text(payload)
+        if text:
+            return text
+
+        if isinstance(payload, dict):
+            messages = payload.get("messages")
+            if isinstance(messages, list):
+                for message in reversed(messages):
+                    text = self._extract_chat_event_text(message)
+                    if text:
+                        return text
+
+        return None
+
+    def _extract_model_chain_event_text(self, event, *payload_keys: str) -> Optional[str]:
+        """Extract model-node text from provider chains that skip chat events."""
         if event.get("metadata", {}).get("langgraph_node") != "model":
             return None
 
         data = event.get("data") or {}
-        payload = data.get("output")
-        return self._extract_chat_event_text(payload)
+        for key in payload_keys:
+            text = self._extract_model_chain_payload_text(data.get(key))
+            if text:
+                return text
+
+        return None
 
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
@@ -420,6 +439,7 @@ class Agent:
         sources = []
         all_messages = list(messages)
         streamed_answer_parts = []
+        chain_answer_parts = []
         
         tool_call_in_progress = {}
         
@@ -480,16 +500,30 @@ class Agent:
                     streamed_answer_parts.append(final_text)
                     yield f"[TOKEN]{final_text}"
 
+            elif event_type == "on_chain_stream":
+                stream_text = self._extract_model_chain_event_text(event, "chunk", "output")
+                if stream_text and not "".join(streamed_answer_parts).strip():
+                    current_chain_text = "".join(chain_answer_parts)
+                    if current_chain_text and stream_text.startswith(current_chain_text):
+                        chain_answer_parts = [stream_text]
+                    else:
+                        chain_answer_parts.append(stream_text)
+
             elif event_type == "on_chain_end":
-                final_text = self._extract_model_chain_end_text(event)
+                final_text = self._extract_model_chain_event_text(event, "output", "chunk")
                 if final_text and not "".join(streamed_answer_parts).strip():
-                    logger.debug("Chain event produced final model content without token chunks; emitting final text once.")
-                    streamed_answer_parts.append(final_text)
-                    yield f"[TOKEN]{final_text}"
+                    chain_answer_parts = [final_text]
             
             else: # catch any other events
                 logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")
-                
+
+        if not "".join(streamed_answer_parts).strip():
+            chain_answer_text = "".join(chain_answer_parts)
+            if chain_answer_text.strip():
+                logger.debug("Chain event produced model content without chat-model tokens; emitting final text once.")
+                streamed_answer_parts.append(chain_answer_text)
+                yield f"[TOKEN]{chain_answer_text}"
+
         self._merge_collected_sources(sources, source_collector)
         logger.info(f"Stream complete | sources: {sources}")
         yield f"[SOURCES]{json.dumps(sources)}" # return sources after all tokens
