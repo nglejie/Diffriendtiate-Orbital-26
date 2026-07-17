@@ -116,18 +116,18 @@ class FakeGraphAgent:
             yield event
 
 
-def model_stream_event(content):
+def model_stream_event(content, metadata=None):
     return {
         "event": "on_chat_model_stream",
-        "metadata": {"langgraph_node": "model"},
+        "metadata": metadata if metadata is not None else {"langgraph_node": "model"},
         "data": {"chunk": AIMessage(content=content)},
     }
 
 
-def model_end_event(content):
+def model_end_event(content, metadata=None):
     return {
         "event": "on_chat_model_end",
-        "metadata": {"langgraph_node": "model"},
+        "metadata": metadata if metadata is not None else {"langgraph_node": "model"},
         "data": {"output": AIMessage(content=content)},
     }
 
@@ -180,6 +180,30 @@ class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
             ["[TOKEN]Final provider answer."],
+        )
+
+    async def test_chat_model_stream_does_not_require_langgraph_node_metadata(self):
+        chunks = await self.collect_stream(
+            [
+                model_stream_event("Provider text without node metadata.", metadata={}),
+            ],
+        )
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]Provider text without node metadata."],
+        )
+
+    async def test_chat_model_end_does_not_require_langgraph_node_metadata(self):
+        chunks = await self.collect_stream(
+            [
+                model_end_event("Final provider text without node metadata.", metadata={}),
+            ],
+        )
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]Final provider text without node metadata."],
         )
 
     async def test_tool_events_are_forwarded_once_per_real_tool_event(self):

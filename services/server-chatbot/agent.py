@@ -212,6 +212,37 @@ class Agent:
 
         return str(content) if content else None
 
+    def _extract_chat_event_text(self, payload) -> Optional[str]:
+        """Extract visible text from LangChain chat-model event payloads.
+
+        LangChain's stable streaming boundary is the chat-model event itself
+        (`on_chat_model_stream` / `on_chat_model_end`). Node metadata such as
+        `langgraph_node` varies between graph implementations and providers, so
+        filtering by that metadata can drop valid provider responses.
+        """
+        if payload is None:
+            return None
+
+        if hasattr(payload, "content"):
+            return self._extract_text_content(getattr(payload, "content", ""))
+
+        text_value = getattr(payload, "text", None)
+        if callable(text_value):
+            try:
+                text_value = text_value()
+            except TypeError:
+                text_value = None
+        if text_value:
+            return self._extract_text_content(text_value)
+
+        if isinstance(payload, dict):
+            for key in ("content", "text"):
+                text = self._extract_text_content(payload.get(key))
+                if text:
+                    return text
+
+        return None
+
     def _convert_messages(self, messages: list) -> list[dict]:
         """Convert LangGraph messages into dictionary for response
 
@@ -388,9 +419,9 @@ class Agent:
             
             # Handle model answers
             if event_type == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                if (event.get("metadata", {}).get("langgraph_node") == "model" and chunk.content):
-                    token_text = self._extract_text_content(chunk.content)
+                chunk = event["data"].get("chunk")
+                token_text = self._extract_chat_event_text(chunk)
+                if token_text:
                     streamed_answer_parts.append(token_text)
                     yield f"[TOKEN]{token_text}"
             
@@ -428,19 +459,17 @@ class Agent:
                 yield f"[TOOL_END]{json.dumps({'name': tool_name, 'result': tool_output})}"
             
             elif event_type == "on_chat_model_end":
-                if event.get("metadata", {}).get("langgraph_node") == "model":
-                    ai_message = event["data"].get("output")
-                    if isinstance(ai_message, AIMessage):
-                        if ai_message not in all_messages:
-                            all_messages.append(ai_message)
-                        final_text = self._extract_text_content(getattr(ai_message, "content", ""))
-                        if final_text and not "".join(streamed_answer_parts).strip():
-                            # Some providers produce a final message without token chunks.
-                            # Only the chat-model output is safe to use as fallback; chain
-                            # events can contain the full previous conversation state.
-                            logger.debug("Model produced final content without token chunks; emitting final text once.")
-                            streamed_answer_parts.append(final_text)
-                            yield f"[TOKEN]{final_text}"
+                ai_message = event["data"].get("output")
+                if isinstance(ai_message, AIMessage) and ai_message not in all_messages:
+                    all_messages.append(ai_message)
+                final_text = self._extract_chat_event_text(ai_message)
+                if final_text and not "".join(streamed_answer_parts).strip():
+                    # Some providers produce a final message without token chunks.
+                    # Only the chat-model output is safe to use as fallback; chain
+                    # events can contain the full previous conversation state.
+                    logger.debug("Model produced final content without token chunks; emitting final text once.")
+                    streamed_answer_parts.append(final_text)
+                    yield f"[TOKEN]{final_text}"
             
             else: # catch any other events
                 logger.debug(f"Unhandled event type: {event_type} | node: {event.get('metadata', {}).get('langgraph_node')}")
