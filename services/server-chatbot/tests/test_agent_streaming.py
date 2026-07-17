@@ -108,12 +108,18 @@ from agent import Agent
 
 
 class FakeGraphAgent:
-    def __init__(self, events):
+    def __init__(self, events, invoke_result=None):
         self.events = events
+        self.invoke_result = invoke_result
+        self.ainvoke_calls = 0
 
     async def astream_events(self, _state, version="v2"):
         for event in self.events:
             yield event
+
+    async def ainvoke(self, state):
+        self.ainvoke_calls += 1
+        return self.invoke_result if self.invoke_result is not None else state
 
 
 def model_stream_event(content, metadata=None):
@@ -149,9 +155,9 @@ def model_chain_stream_event(content, metadata=None):
 
 
 class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
-    async def collect_stream(self, events, history=None):
+    async def collect_stream(self, events, history=None, invoke_result=None):
         agent = Agent(vectorstore=None)
-        agent._build_agent = lambda **_kwargs: FakeGraphAgent(events)
+        agent._build_agent = lambda **_kwargs: FakeGraphAgent(events, invoke_result=invoke_result)
         message_chain = history or [HistoryMessage(role="user", content="Second question")]
         return [
             chunk
@@ -212,6 +218,25 @@ class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
             ["[TOKEN]Final Gemini chain-stream answer."],
+        )
+
+    async def test_empty_stream_events_fall_back_to_non_streaming_invoke(self):
+        chunks = await self.collect_stream(
+            [
+                {"event": "on_chain_start", "metadata": {"langgraph_node": None}, "data": {}},
+                {"event": "on_chain_start", "metadata": {"langgraph_node": "model"}, "data": {}},
+            ],
+            invoke_result={
+                "messages": [
+                    HumanMessage(content="Reply with exactly: diagnostic ok"),
+                    AIMessage(content="diagnostic ok"),
+                ],
+            },
+        )
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]diagnostic ok"],
         )
 
     async def test_model_chain_stream_does_not_duplicate_streamed_tokens(self):
