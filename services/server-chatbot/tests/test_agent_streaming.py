@@ -140,6 +140,14 @@ def model_chain_end_event(content, metadata=None):
     }
 
 
+def model_chain_stream_event(content, metadata=None):
+    return {
+        "event": "on_chain_stream",
+        "metadata": metadata if metadata is not None else {"langgraph_node": "model"},
+        "data": {"chunk": {"messages": [AIMessage(content=content)]}},
+    }
+
+
 class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def collect_stream(self, events, history=None):
         agent = Agent(vectorstore=None)
@@ -196,6 +204,27 @@ class AgentStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
             ["[TOKEN]Final Gemini chain answer."],
+        )
+
+    async def test_model_chain_stream_can_supply_answer_when_chat_events_are_missing(self):
+        chunks = await self.collect_stream([model_chain_stream_event("Final Gemini chain-stream answer.")])
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]Final Gemini chain-stream answer."],
+        )
+
+    async def test_model_chain_stream_does_not_duplicate_streamed_tokens(self):
+        chunks = await self.collect_stream(
+            [
+                model_stream_event("Already streamed."),
+                model_chain_stream_event("Duplicate chain stream."),
+            ],
+        )
+
+        self.assertEqual(
+            [chunk for chunk in chunks if chunk.startswith("[TOKEN]")],
+            ["[TOKEN]Already streamed."],
         )
 
     async def test_model_chain_end_does_not_duplicate_streamed_tokens(self):
