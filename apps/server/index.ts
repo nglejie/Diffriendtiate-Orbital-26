@@ -635,7 +635,17 @@ async function deleteSupabaseAuthUser(user) {
   const config = getSupabaseAuthConfig();
   const serviceRoleKey = readEnv("SUPABASE_SERVICE_ROLE_KEY");
   const supabaseUserId = String(user?.authProviders?.supabase?.id || "").trim();
-  if (!config.url || !serviceRoleKey || !supabaseUserId) return;
+  if (!supabaseUserId) return;
+
+  if (!config.url || !serviceRoleKey) {
+    const deletionError = new Error(
+      "Supabase account deletion is not configured. Set SUPABASE_SERVICE_ROLE_KEY before deleting Supabase-backed accounts.",
+    ) as Error & {
+      status?: number;
+    };
+    deletionError.status = 503;
+    throw deletionError;
+  }
 
   const response = await fetch(
     `${config.url}/auth/v1/admin/users/${encodeURIComponent(supabaseUserId)}`,

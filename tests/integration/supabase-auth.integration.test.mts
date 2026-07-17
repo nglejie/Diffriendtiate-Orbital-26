@@ -6,16 +6,38 @@ import { getFreePort, startTestApp } from "../helpers/testServer.mts";
 async function startMockSupabaseAuth() {
   const port = await getFreePort();
   const calls: any[] = [];
+  const deletedUserIds = new Set<string>();
+  const usersByToken = new Map([
+    [
+      "mock-supabase-access-token",
+      {
+        email: "supabase-user@example.test",
+        id: "supabase-user-1",
+        name: "Supabase Linked User",
+      },
+    ],
+    [
+      "mock-supabase-delete-token",
+      {
+        email: "supabase-delete@example.test",
+        id: "supabase-user-delete",
+        name: "Deleted Supabase User",
+      },
+    ],
+  ]);
 
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", `http://127.0.0.1:${port}`);
     calls.push({
       authorization: request.headers.authorization,
+      method: request.method,
       path: url.pathname,
     });
 
     if (request.method === "GET" && url.pathname === "/auth/v1/user") {
-      if (request.headers.authorization !== "Bearer mock-supabase-access-token") {
+      const token = String(request.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      const user = usersByToken.get(token);
+      if (!user || deletedUserIds.has(user.id)) {
         response.writeHead(401, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ message: "Invalid token" }));
         return;
@@ -24,14 +46,30 @@ async function startMockSupabaseAuth() {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
         JSON.stringify({
-          id: "supabase-user-1",
-          email: "supabase-user@example.test",
+          id: user.id,
+          email: user.email,
           email_confirmed_at: new Date().toISOString(),
           user_metadata: {
-            name: "Supabase Linked User",
+            name: user.name,
           },
         }),
       );
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname.startsWith("/auth/v1/admin/users/")) {
+      if (
+        request.headers.authorization !== "Bearer mock-service-role-key" ||
+        request.headers.apikey !== "mock-service-role-key"
+      ) {
+        response.writeHead(401, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ message: "Missing service role key" }));
+        return;
+      }
+
+      deletedUserIds.add(decodeURIComponent(url.pathname.split("/").pop() || ""));
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({}));
       return;
     }
 
@@ -61,6 +99,7 @@ describe("Supabase auth bridge", () => {
     app = await startTestApp({
       env: {
         SUPABASE_ANON_KEY: "mock-anon-key",
+        SUPABASE_SERVICE_ROLE_KEY: "mock-service-role-key",
         SUPABASE_URL: supabase.url,
       },
     });
@@ -124,5 +163,35 @@ describe("Supabase auth bridge", () => {
     const roomsPayload = await expectStatus(rooms, 200, "list Supabase user domains");
     expect(roomsPayload.rooms.some((candidate) => candidate.id === room.id)).toBe(true);
     expect(supabase.calls.some((call) => call.path === "/auth/v1/user")).toBe(true);
+  });
+
+  it("deletes the linked Supabase Auth user when deleting an account", async () => {
+    const session = await apiRequest(app.baseUrl, "/api/auth/supabase/session", {
+      method: "POST",
+      body: {
+        accessToken: "mock-supabase-delete-token",
+      },
+    });
+    await expectStatus(session, 200, "exchange Supabase session for deleting user");
+
+    const deleteAccount = await apiRequest(app.baseUrl, "/api/auth/me", {
+      method: "DELETE",
+      token: "mock-supabase-delete-token",
+    });
+    await expectStatus(deleteAccount, 200, "delete Supabase-backed account");
+
+    expect(
+      supabase.calls.some(
+        (call) =>
+          call.method === "DELETE" &&
+          call.path === "/auth/v1/admin/users/supabase-user-delete" &&
+          call.authorization === "Bearer mock-service-role-key",
+      ),
+    ).toBe(true);
+
+    const deletedMe = await apiRequest(app.baseUrl, "/api/auth/me", {
+      token: "mock-supabase-delete-token",
+    });
+    expect(deletedMe.status).toBe(401);
   });
 });

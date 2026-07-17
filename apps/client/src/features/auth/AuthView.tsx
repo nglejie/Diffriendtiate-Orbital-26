@@ -57,6 +57,11 @@ function isRateLimitError(error) {
   return error?.status === 429 || /rate limit|too many|security purposes|after \d+ seconds?/i.test(message);
 }
 
+function isDuplicateSupabaseSignup(data) {
+  const identities = data?.user?.identities;
+  return Array.isArray(identities) && identities.length === 0;
+}
+
 /** Login/register screen that owns form state and delegates saved auth to App. */
 function AuthView({ initialError = "", onAuthenticated, resetToken = "", verificationToken = "" }) {
   const [mode, setMode] = useState(verificationToken ? "verify" : resetToken ? "reset" : "login");
@@ -414,6 +419,18 @@ function AuthView({ initialError = "", onAuthenticated, resetToken = "", verific
       if (data.session) {
         await completeSupabaseSession(data.session);
         return;
+      }
+
+      if (isDuplicateSupabaseSignup(data)) {
+        const { error: resendError } = await resendSupabaseVerificationEmail(email);
+        if (resendError) {
+          if (isRateLimitError(resendError)) {
+            const waitSeconds = readRateLimitWaitSeconds(resendError);
+            startVerificationResendCooldown(waitSeconds * 1000);
+            throw new Error(`Please wait ${formatCooldown(waitSeconds)} before requesting another verification email.`);
+          }
+          throw resendError;
+        }
       }
 
       setForm((current) => ({
