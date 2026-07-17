@@ -770,6 +770,61 @@ describe("Intelligrate grounded stream contract", () => {
     expect(messageChain.at(-1).content).toContain("Available room resource filenames: OrbitalGuide.txt.");
   });
 
+  it("sends clean multi-turn grounded history for follow-up questions", async () => {
+    await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "FollowUpGuide.txt",
+      "Follow-up guide says Orbital is the project context.",
+      "Project Notes",
+    );
+
+    const firstAnswer = "Orbital is Diffriendtiate's project context from the uploaded guide.";
+    const first = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", body: "What does FollowUpGuide say about Orbital?" }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain(firstAnswer);
+
+    const followUp = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "user", body: "What does FollowUpGuide say about Orbital?" },
+          { role: "assistant", body: firstAnswer },
+          { role: "user", body: "What detail did you cite?" },
+        ],
+      }),
+    });
+    expect(followUp.status).toBe(200);
+    const followUpStream = await followUp.text();
+    expect((followUpStream.match(/event: tool_start/g) || [])).toHaveLength(1);
+    expect((followUpStream.match(/event: tool_end/g) || [])).toHaveLength(1);
+
+    const followUpCall = chatbot.calls.streams.at(-1);
+    const messageChain = JSON.parse(followUpCall.message_chain);
+    expect(messageChain.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(messageChain.filter((message) => message.content === firstAnswer)).toHaveLength(1);
+    expect(messageChain.at(-1).content).toContain("What detail did you cite?");
+    expect(messageChain.at(-1).content).not.toContain(firstAnswer);
+  });
+
   it("forwards one supported attachment as multipart and includes its filename in context", async () => {
     const upload = await uploadTextResource(
       app.baseUrl,

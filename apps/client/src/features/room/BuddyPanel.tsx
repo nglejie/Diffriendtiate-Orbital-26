@@ -949,7 +949,8 @@ function BuddyPanel({
               ),
             );
           }
-          if (chainResponse.answer && chainResponse.answer.length >= streamedBody.length) {
+          const hasStreamedAnswer = Boolean(streamedRawBody.trim() || streamedBody.trim());
+          if (!hasStreamedAnswer && chainResponse.answer) {
             streamedBody = separateLeakedToolCalls(chainResponse.answer);
           }
           onMessagesChange(

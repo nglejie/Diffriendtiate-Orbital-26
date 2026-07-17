@@ -14,7 +14,6 @@ from litellm import supports_function_calling
 from vectorstore import VectorStore
 from tools import build_global_tools, build_room_tools, build_file_tool
 from models import HistoryMessage
-from stream_events import extract_messages_from_event_value
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -344,10 +343,6 @@ class Agent:
         
         return messages
 
-    def _extract_ai_messages_from_event_value(self, value) -> list[AIMessage]:
-        """Collect AI messages from LangGraph event payloads across provider event shapes."""
-        return extract_messages_from_event_value(value, lambda candidate: isinstance(candidate, AIMessage))
-        
     async def stream(
         self, 
         message_chain: list[HistoryMessage], 
@@ -434,25 +429,16 @@ class Agent:
             
             elif event_type == "on_chat_model_end":
                 if event.get("metadata", {}).get("langgraph_node") == "model":
-                    for ai_message in self._extract_ai_messages_from_event_value(event["data"].get("output")):
+                    ai_message = event["data"].get("output")
+                    if isinstance(ai_message, AIMessage):
                         if ai_message not in all_messages:
                             all_messages.append(ai_message)
                         final_text = self._extract_text_content(getattr(ai_message, "content", ""))
                         if final_text and not "".join(streamed_answer_parts).strip():
                             # Some providers produce a final message without token chunks.
-                            # Emit it once so the web UI never has to invent a fallback answer.
+                            # Only the chat-model output is safe to use as fallback; chain
+                            # events can contain the full previous conversation state.
                             logger.debug("Model produced final content without token chunks; emitting final text once.")
-                            streamed_answer_parts.append(final_text)
-                            yield f"[TOKEN]{final_text}"
-
-            elif event_type in {"on_chain_stream", "on_chain_end"}:
-                if event.get("metadata", {}).get("langgraph_node") in {"model", None}:
-                    for ai_message in self._extract_ai_messages_from_event_value(event.get("data", {})):
-                        if ai_message not in all_messages:
-                            all_messages.append(ai_message)
-                        final_text = self._extract_text_content(getattr(ai_message, "content", ""))
-                        if final_text and not "".join(streamed_answer_parts).strip():
-                            logger.debug("Chain event produced final model content without token chunks; emitting final text once.")
                             streamed_answer_parts.append(final_text)
                             yield f"[TOKEN]{final_text}"
             
