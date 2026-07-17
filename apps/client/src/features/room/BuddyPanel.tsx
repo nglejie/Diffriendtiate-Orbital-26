@@ -949,7 +949,8 @@ function BuddyPanel({
               ),
             );
           }
-          if (chainResponse.answer && chainResponse.answer.length >= streamedBody.length) {
+          const hasStreamedAnswer = Boolean(streamedRawBody.trim() || streamedBody.trim());
+          if (!hasStreamedAnswer && chainResponse.answer) {
             streamedBody = separateLeakedToolCalls(chainResponse.answer);
           }
           onMessagesChange(
@@ -1218,7 +1219,7 @@ function BuddyPanel({
             <p>
               Start your chatting session by optionally adding a file that you wish to
               learn more about. Then ask Intelligrate for any enquiries you have on the
-              file attached, or any relevant resources already uploaded into the study room.
+              file attached, or any relevant resources already uploaded into the Domain.
             </p>
             <p>
               Intelligrate is powered by AI, so mistakes are possible. Please review

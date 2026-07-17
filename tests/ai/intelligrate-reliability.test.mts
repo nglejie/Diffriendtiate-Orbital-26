@@ -178,6 +178,180 @@ describe("Intelligrate app-side reliability", () => {
   });
 });
 
+describe("Intelligrate built-in Gemini limits", () => {
+  let app;
+  let chatbot;
+  let owner;
+  let room;
+
+  beforeAll(async () => {
+    chatbot = await startMockChatbot({ streamAnswer: "Built-in Gemini answer" });
+    app = await startTestApp({
+      chatbotUrl: chatbot.url,
+      env: {
+        BUILT_IN_LLM_DAILY_REQUEST_LIMIT: "1",
+        GEMINI_API_KEY: "test-gemini-key",
+        INTELLIGRATE_GPU_ENABLED: "false",
+        LLM_API_KEY_ENCRYPTION_KEY:
+          "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      },
+    });
+    owner = await registerUser(app.baseUrl, { name: "Gemini Limit Owner" });
+    room = await createRoom(app.baseUrl, owner.token, {
+      name: "Gemini Limit Room",
+      moduleCode: "CS2103T",
+    });
+  });
+
+  afterAll(async () => {
+    await app?.stop();
+    await chatbot?.stop();
+  });
+
+  it("caps built-in requests per account without blocking saved BYOK models", async () => {
+    const first = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", body: "Use the built-in model once." }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain("Built-in Gemini answer");
+
+    const second = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", body: "Use the built-in model again." }],
+      }),
+    });
+    expect(second.status).toBe(429);
+    const secondPayload = await second.json();
+    expect(secondPayload).toMatchObject({ code: "daily_limit_reached" });
+
+    const providersAfterLimit = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/buddy/providers`, {
+      token: owner.token,
+    });
+    const builtIn = providersAfterLimit.payload.providers.find((provider) => provider.id === "intelligrate");
+    expect(builtIn).toMatchObject({
+      available: false,
+    });
+    expect(builtIn.unavailableReason).toContain("limit");
+
+    const savedKey = await apiRequest(app.baseUrl, "/api/auth/llm-api-keys", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        providerId: "openai",
+        label: "Fallback OpenAI",
+        model: "openai/gpt-4o-mini",
+        apiKey: "sk-member-fallback-key",
+      },
+    });
+    expect(savedKey.status).toBe(201);
+
+    const byok = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        providerKeyId: savedKey.payload.key.id,
+        messages: [{ role: "user", body: "Use my saved model." }],
+      }),
+    });
+    expect(byok.status).toBe(200);
+    expect(await byok.text()).toContain("Built-in Gemini answer");
+    expect(chatbot.calls.streams.at(-1)).toMatchObject({
+      llm_model: "openai/gpt-4o-mini",
+      room_id: room.id,
+    });
+  });
+});
+
+describe("Intelligrate built-in Gemini quota cooldown", () => {
+  let app;
+  let chatbot;
+  let owner;
+  let room;
+
+  beforeAll(async () => {
+    chatbot = await startMockChatbot({
+      streamEvents: [
+        {
+          event: "error",
+          data: { message: "429 RESOURCE_EXHAUSTED: Gemini quota exceeded" },
+        },
+      ],
+    });
+    app = await startTestApp({
+      chatbotUrl: chatbot.url,
+      env: {
+        BUILT_IN_LLM_DAILY_REQUEST_LIMIT: "0",
+        BUILT_IN_LLM_QUOTA_COOLDOWN_MINUTES: "30",
+        GEMINI_API_KEY: "test-gemini-key",
+        INTELLIGRATE_GPU_ENABLED: "false",
+      },
+    });
+    owner = await registerUser(app.baseUrl, { name: "Gemini Quota Owner" });
+    room = await createRoom(app.baseUrl, owner.token, {
+      name: "Gemini Quota Room",
+      moduleCode: "CS3230",
+    });
+  });
+
+  afterAll(async () => {
+    await app?.stop();
+    await chatbot?.stop();
+  });
+
+  it("marks built-in Intelligrate unavailable after a Gemini quota signal", async () => {
+    const response = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", body: "Trigger shared quota." }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const streamText = await response.text();
+    expect(streamText).toContain("event: error");
+    expect(streamText).toContain("shared built-in Intelligrate quota");
+
+    const providers = await apiRequest(app.baseUrl, `/api/rooms/${room.id}/buddy/providers`, {
+      token: owner.token,
+    });
+    const builtIn = providers.payload.providers.find((provider) => provider.id === "intelligrate");
+    expect(builtIn).toMatchObject({
+      available: false,
+    });
+    expect(builtIn.unavailableReason).toContain("quota");
+
+    const retry = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", body: "Try while cooldown is active." }],
+      }),
+    });
+    expect(retry.status).toBe(429);
+  });
+});
+
 describe("Intelligrate BYOK LiteLLM routing", () => {
   let app;
   let chatbot;
@@ -594,6 +768,61 @@ describe("Intelligrate grounded stream contract", () => {
     ]);
     expect(messageChain.at(-1).content).toContain("What is Orbital?");
     expect(messageChain.at(-1).content).toContain("Available room resource filenames: OrbitalGuide.txt.");
+  });
+
+  it("sends clean multi-turn grounded history for follow-up questions", async () => {
+    await uploadTextResource(
+      app.baseUrl,
+      owner.token,
+      room.id,
+      "FollowUpGuide.txt",
+      "Follow-up guide says Orbital is the project context.",
+      "Project Notes",
+    );
+
+    const firstAnswer = "Orbital is Diffriendtiate's project context from the uploaded guide.";
+    const first = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", body: "What does FollowUpGuide say about Orbital?" }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain(firstAnswer);
+
+    const followUp = await fetch(`${app.baseUrl}/api/rooms/${room.id}/buddy/message/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "user", body: "What does FollowUpGuide say about Orbital?" },
+          { role: "assistant", body: firstAnswer },
+          { role: "user", body: "What detail did you cite?" },
+        ],
+      }),
+    });
+    expect(followUp.status).toBe(200);
+    const followUpStream = await followUp.text();
+    expect((followUpStream.match(/event: tool_start/g) || [])).toHaveLength(1);
+    expect((followUpStream.match(/event: tool_end/g) || [])).toHaveLength(1);
+
+    const followUpCall = chatbot.calls.streams.at(-1);
+    const messageChain = JSON.parse(followUpCall.message_chain);
+    expect(messageChain.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(messageChain.filter((message) => message.content === firstAnswer)).toHaveLength(1);
+    expect(messageChain.at(-1).content).toContain("What detail did you cite?");
+    expect(messageChain.at(-1).content).not.toContain(firstAnswer);
   });
 
   it("forwards one supported attachment as multipart and includes its filename in context", async () => {

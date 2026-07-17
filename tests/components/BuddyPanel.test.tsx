@@ -486,6 +486,74 @@ describe("BuddyPanel provider selection", () => {
     expect(onAskBuddy.mock.calls[1][2].provider.providerKeyId).toBe("llmkey_openai");
   });
 
+  it("does not replay a previous assistant answer when a later chain event contains full history", async () => {
+    renderBuddyPanel(
+      [
+        {
+          id: "intelligrate",
+          providerId: "intelligrate",
+          providerName: "Intelligrate",
+          label: "Intelligrate",
+          model: "gemini-3.5-flash",
+          builtIn: true,
+          available: true,
+        },
+      ],
+      {
+        initialMessages: [
+          {
+            id: "user-first",
+            role: "user",
+            body: "First question",
+            createdAt: "2026-07-17T00:00:00.000Z",
+          },
+          {
+            id: "assistant-first",
+            role: "assistant",
+            providerName: "Intelligrate",
+            providerLabel: "Intelligrate",
+            model: "gemini-3.5-flash",
+            body: "First response should stay only in turn one.",
+            createdAt: "2026-07-17T00:00:01.000Z",
+          },
+        ],
+        onAskBuddy: vi.fn(async (_messages, _attachments, handlers) => {
+          handlers.onThinking?.({
+            event: "tool_start",
+            payload: JSON.stringify({ name: "search_corpus", args: { query: "second" } }),
+          });
+          handlers.onThinking?.({
+            event: "tool_end",
+            payload: JSON.stringify({
+              name: "search_corpus",
+              result: "[Source: Second.txt] Second turn source.",
+            }),
+          });
+          handlers.onToken?.("Second response only.");
+          handlers.onChain?.([
+            { role: "user", content: "First question" },
+            { role: "assistant", content: "First response should stay only in turn one." },
+            { role: "user", content: "Second question" },
+            {
+              role: "assistant",
+              content: "First response should stay only in turn one.\n\nSecond response only.",
+            },
+          ]);
+        }),
+      },
+    );
+    const tester = userEvent.setup();
+
+    await tester.type(screen.getByPlaceholderText("Ask anything"), "Second question");
+    await tester.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Second response only.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getAllByText("First response should stay only in turn one.")).toHaveLength(1),
+    );
+    expect(screen.getAllByText(/Searching Domain context for "second"/)).toHaveLength(1);
+  });
+
   it("opens the native file input directly and filters unsupported attachment formats", async () => {
     const onNotify = vi.fn();
     const onUploadFiles = vi.fn(async () => []);
