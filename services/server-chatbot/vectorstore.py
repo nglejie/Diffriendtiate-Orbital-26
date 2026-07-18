@@ -38,7 +38,7 @@ GEMINI_API_KEY = normalise_optional_secret(os.getenv("GEMINI_API_KEY"))
 GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-001")
 
 NODE_BASE_URL = os.getenv("NODE_BASE_URL", "http://server:4000")
-SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.35"))
+SEARCH_MIN_RELEVANCE = float(os.getenv("SEARCH_MIN_RELEVANCE", "0.55"))
 PDF_HIGHLIGHT_MAX_RECTS = int(os.getenv("PDF_HIGHLIGHT_MAX_RECTS", "24"))
 PDF_HIGHLIGHT_MAX_SOURCE_CHARS = int(os.getenv("PDF_HIGHLIGHT_MAX_SOURCE_CHARS", "600"))
 
@@ -645,8 +645,19 @@ class VectorStore:
         elif source_type:
             clauses.append({"source_type": source_type})
 
+        source_id = str(scope.get("source_id") or "").strip()
+        if source_id:
+            # Tool callers often know a human file/channel title instead of the
+            # app's canonical ID, so source_id accepts both exact IDs and labels.
+            clauses.append({"$or": [
+                {"source_id": source_id},
+                {"resource_id": source_id},
+                {"file_name": source_id},
+                {"label": source_id},
+                {"title": source_id},
+            ]})
+
         for scope_key, metadata_key in (
-            ("source_id", "source_id"),
             ("resource_id", "resource_id"),
             ("message_id", "message_id"),
             ("annotation_id", "annotation_id"),

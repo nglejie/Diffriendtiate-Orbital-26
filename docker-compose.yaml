@@ -130,7 +130,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Singapore}
-      SEARCH_MIN_RELEVANCE: ${SEARCH_MIN_RELEVANCE:-0.35}
+      SEARCH_MIN_RELEVANCE: ${SEARCH_MIN_RELEVANCE:-0.55}
       NODE_BASE_URL: ${NODE_BASE_URL:-http://server:4000}
       CHROMA_DIR: ${CHROMA_DIR:-/app/chroma_db}
       GPU_ENABLED: false

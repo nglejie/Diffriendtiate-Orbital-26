@@ -1159,6 +1159,9 @@ function enrichBuddySourceForNavigation(source, text, resources: any[] = []) {
 export function inferMentionedBuddySources(text, resources: any[] = []) {
   const haystack = String(text || "");
   if (!haystack.trim() || !Array.isArray(resources) || !resources.length) return [];
+  const negativeEvidencePattern =
+    /\b(?:no\s+(?:specific\s+)?(?:mention|information|relevant|matching|result|source)|not found|cannot find|could not find|couldn't find|unable to find|does not mention|do not mention)\b/i;
+  if (negativeEvidencePattern.test(haystack)) return [];
 
   const found = [];
   resources.forEach((resource) => {

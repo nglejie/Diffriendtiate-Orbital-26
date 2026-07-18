@@ -195,6 +195,35 @@ describe("Intelligrate presentation utilities", () => {
     ]);
   });
 
+  it("does not infer resource source pills from negative no-evidence answers", () => {
+    const resources = [
+      {
+        id: "res_amortization",
+        originalName: "Amortization Proof Notes.pdf",
+        title: "Amortization Proof Notes.pdf",
+      },
+      {
+        id: "res_orbital",
+        originalName: "Orbital Bridge Notes.pdf",
+        title: "Orbital Bridge Notes.pdf",
+      },
+    ];
+
+    expect(
+      inferMentionedBuddySources(
+        "I searched Amortization Proof Notes.pdf and Orbital Bridge Notes.pdf. There is no mention of a ZebraNebula chipset in the provided documents.",
+        resources,
+      ),
+    ).toEqual([]);
+    expect(
+      mergeBuddySources(
+        [],
+        "I checked Amortization Proof Notes.pdf. There is no specific information about a ZebraNebula chipset.",
+        resources,
+      ),
+    ).toEqual([]);
+  });
+
   it("adds page focus to source pills when a known resource citation names a page", () => {
     const resources = [
       {

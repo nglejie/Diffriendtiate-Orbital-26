@@ -102,7 +102,7 @@ def _infer_source_type(query: str, explicit_source_type: str = "") -> str:
         matches.append("convolution")
     if re.search(r"\b(annotation|annotations|comment|comments)\b", text):
         matches.append("annotation")
-    if re.search(r"\b(coordidate|calendar|meeting|meetings|event|events|schedule|schedules|deadline|deadlines|availability)\b", text):
+    if re.search(r"\b(coordidate|calendar|meeting|meetings|event|events|deadline|deadlines|availability)\b", text):
         matches.append("meeting")
 
     # Only infer when the member clearly names one Domain area. Mixed requests
