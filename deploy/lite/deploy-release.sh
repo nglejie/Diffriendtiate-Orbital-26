@@ -153,7 +153,46 @@ EOF
 
 write_caddyfile() {
   if command -v caddy >/dev/null 2>&1; then
-    sudo cp "$SCRIPT_DIR/Caddyfile" /etc/caddy/Caddyfile
+    public_base_url="$(read_env_file_value OAUTH_PUBLIC_BASE_URL)"
+    if [[ -z "$public_base_url" ]]; then
+      public_base_url="$(read_env_file_value PUBLIC_APP_URL)"
+    fi
+    if [[ -z "$public_base_url" ]]; then
+      public_base_url="$(read_env_file_value APP_PUBLIC_URL)"
+    fi
+    if [[ -z "$public_base_url" ]]; then
+      echo "Missing OAUTH_PUBLIC_BASE_URL/PUBLIC_APP_URL/APP_PUBLIC_URL for Caddy." >&2
+      return 1
+    fi
+
+    public_host="$(
+      python3 - "$public_base_url" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+value = sys.argv[1].strip()
+if "://" not in value:
+    value = "https://" + value
+parsed = urlparse(value)
+host = parsed.netloc or parsed.path
+host = host.split("@")[-1].split("/")[0]
+if not host:
+    raise SystemExit(1)
+print(host)
+PY
+    )"
+
+    sudo tee /etc/caddy/Caddyfile >/dev/null <<EOF
+${public_host} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4000
+}
+
+http://${public_host} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4000
+}
+EOF
     sudo systemctl enable caddy >/dev/null
     sudo systemctl reload caddy || sudo systemctl restart caddy
   else

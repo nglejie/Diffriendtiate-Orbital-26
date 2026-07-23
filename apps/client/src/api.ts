@@ -3,6 +3,9 @@ const TOKEN_KEY = "diffriendtiate_token";
 const SESSION_TOKEN_KEY = "diffriendtiate_session_token";
 
 let authToken = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY) || "";
+let authTokenRefreshHandler: (() => Promise<string | null | undefined>) | null = null;
+let authSessionExpiredHandler: ((error: Error & { payload?: any; status?: number }) => void) | null =
+  null;
 
 type ApiRequestOptions = Omit<RequestInit, "body" | "headers"> & {
   body?: any;
@@ -85,6 +88,38 @@ export function setAuthToken(token: string, options: { remember?: boolean } = {}
   }
 }
 
+export function replaceAuthToken(token: string) {
+  const remember = !sessionStorage.getItem(SESSION_TOKEN_KEY);
+  setAuthToken(token, { remember });
+}
+
+export function setAuthTokenRefreshHandler(
+  handler: (() => Promise<string | null | undefined>) | null,
+) {
+  authTokenRefreshHandler = handler;
+}
+
+export function setAuthSessionExpiredHandler(
+  handler: ((error: Error & { payload?: any; status?: number }) => void) | null,
+) {
+  authSessionExpiredHandler = handler;
+}
+
+async function getRequestAuthToken() {
+  if (!authToken || !authTokenRefreshHandler) return authToken;
+
+  const nextToken = await authTokenRefreshHandler();
+  if (nextToken && nextToken !== authToken) {
+    replaceAuthToken(nextToken);
+  }
+  return authToken;
+}
+
+function isSessionExpiredResponse(status: number, payload: any) {
+  if (status !== 401) return false;
+  return /log\s*in again|login\s*again|session/i.test(String(payload?.message || ""));
+}
+
 export function getOAuthUrl(provider: string) {
   return `${API_BASE}/api/auth/oauth/${encodeURIComponent(provider)}`;
 }
@@ -96,9 +131,10 @@ export function getOAuthUrl(provider: string) {
  */
 async function request(path: string, options: ApiRequestOptions = {}) {
   const headers: Record<string, string> = { ...(options.headers || {}) };
+  const requestAuthToken = await getRequestAuthToken();
 
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
+  if (requestAuthToken) {
+    headers.Authorization = `Bearer ${requestAuthToken}`;
   }
 
   const init: RequestInit = {
@@ -127,6 +163,13 @@ async function request(path: string, options: ApiRequestOptions = {}) {
     Object.assign(error, payload);
     error.payload = payload;
     error.status = response.status;
+    if (
+      requestAuthToken &&
+      requestAuthToken === getAuthToken() &&
+      isSessionExpiredResponse(response.status, payload)
+    ) {
+      authSessionExpiredHandler?.(error);
+    }
     throw error;
   }
 
@@ -159,9 +202,10 @@ function parseSseBlock(block: string) {
  */
 async function streamRequest(path: string, body: any, onEvent: any, options: StreamRequestOptions = {}) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const requestAuthToken = await getRequestAuthToken();
 
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
+  if (requestAuthToken) {
+    headers.Authorization = `Bearer ${requestAuthToken}`;
   }
 
   const response = await fetch(`${API_BASE}${path}`, {
@@ -181,6 +225,13 @@ async function streamRequest(path: string, body: any, onEvent: any, options: Str
     Object.assign(error, payload);
     error.payload = payload;
     error.status = response.status;
+    if (
+      requestAuthToken &&
+      requestAuthToken === getAuthToken() &&
+      isSessionExpiredResponse(response.status, payload)
+    ) {
+      authSessionExpiredHandler?.(error);
+    }
     throw error;
   }
 
