@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { api, getAuthToken, setAuthToken } from "./api.ts";
+import { Info, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  api,
+  getAuthToken,
+  replaceAuthToken,
+  setAuthSessionExpiredHandler,
+  setAuthToken,
+  setAuthTokenRefreshHandler,
+} from "./api.ts";
 import AuthView from "./features/auth/AuthView.tsx";
 import Dashboard from "./features/dashboard/Dashboard.tsx";
 import { JoinWorldDialog } from "./features/dashboard/DashboardComponents.tsx";
@@ -8,9 +16,15 @@ import RoomView from "./features/room/RoomView.tsx";
 import AppLoadingScreen from "./shared/ui/AppLoadingScreen.tsx";
 import AppTooltip from "./shared/ui/AppTooltip.tsx";
 import {
-  getActiveSupabaseSession,
+  looksLikeSupabaseAccessToken,
+  readJwtExpiresAtMs,
+  usesSupabaseBrowserSession,
+} from "./authSession.ts";
+import {
+  getSupabaseSessionExpiresAtMs,
   isSupabaseAuthConfigured,
   readSupabaseAuthTypeFromUrl,
+  refreshActiveSupabaseSession,
   signOutSupabaseAuth,
 } from "./supabaseAuth.ts";
 import { applyThemeMode, readStoredThemeMode, storeThemeMode } from "./theme.ts";
@@ -57,6 +71,24 @@ function parseRoute() {
   return { name: "dashboard" };
 }
 
+const SESSION_REFRESH_LEEWAY_MS = 5 * 60 * 1000;
+const SESSION_WARNING_LEEWAY_MS = 5 * 60 * 1000;
+const SESSION_EXPIRED_MESSAGE = "Your session expired. Please log in again.";
+
+function SessionNotice({ message, onDismiss }) {
+  if (!message) return null;
+
+  return (
+    <div className="room-toast" role="status">
+      <Info size={18} aria-hidden="true" />
+      <span>{message}</span>
+      <button aria-label="Dismiss session warning" onClick={onDismiss} type="button">
+        <X size={16} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 /**
  * Owns top-level authentication state and hash-based routing.
  * Keeping routing here keeps feature screens focused on their own workflows.
@@ -69,8 +101,23 @@ function App() {
   const [inviteError, setInviteError] = useState("");
   const [joiningInvite, setJoiningInvite] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [sessionNotice, setSessionNotice] = useState("");
   const [themeMode, setThemeMode] = useState(readStoredThemeMode);
   const suppressNextSupabaseSessionError = useRef(false);
+  const usesSupabaseSession = usesSupabaseBrowserSession(user, token);
+
+  const handleSessionExpired = useCallback((message = SESSION_EXPIRED_MESSAGE) => {
+    suppressNextSupabaseSessionError.current = true;
+    void signOutSupabaseAuth();
+    setAuthToken("");
+    setAuthTokenRefreshHandler(null);
+    setToken("");
+    setUser(null);
+    setBooting(false);
+    setSessionNotice("");
+    setAuthError(message);
+    window.location.hash = "/";
+  }, []);
 
   useEffect(() => {
     applyThemeMode(themeMode);
@@ -103,6 +150,8 @@ function App() {
       return;
     }
 
+    suppressNextSupabaseSessionError.current = true;
+    void signOutSupabaseAuth();
     setAuthToken(route.token);
     setToken(route.token);
     setUser(null);
@@ -110,6 +159,13 @@ function App() {
     setAuthError("");
     navigate("/");
   }, [route]);
+
+  useEffect(() => {
+    setAuthSessionExpiredHandler((error) => {
+      handleSessionExpired(error.message || SESSION_EXPIRED_MESSAGE);
+    });
+    return () => setAuthSessionExpiredHandler(null);
+  }, [handleSessionExpired]);
 
   useEffect(() => {
     if (!token) {
@@ -126,14 +182,32 @@ function App() {
         if (active) {
           setUser(currentUser);
           setAuthError("");
+          suppressNextSupabaseSessionError.current = false;
         }
       })
-      .catch(() => {
-        if (active) {
-          setAuthToken("");
-          setToken("");
-          setUser(null);
+      .catch(async () => {
+        if (!active) return;
+
+        if (isSupabaseAuthConfigured() && looksLikeSupabaseAccessToken(token)) {
+          try {
+            const session = await refreshActiveSupabaseSession(SESSION_REFRESH_LEEWAY_MS);
+            if (active && session?.access_token) {
+              replaceAuthToken(session.access_token);
+              setToken(session.access_token);
+              const payload = await api.completeSupabaseSession({
+                accessToken: session.access_token,
+              });
+              if (active) {
+                handleAuthenticated({ ...payload, remember: true });
+              }
+              return;
+            }
+          } catch {
+            // Fall through to the normal expired-session path below.
+          }
         }
+
+        handleSessionExpired();
       })
       .finally(() => {
         if (active) setBooting(false);
@@ -142,16 +216,129 @@ function App() {
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [handleSessionExpired, token]);
 
   useEffect(() => {
-    if (!isSupabaseAuthConfigured() || token) return;
+    if (!token || !usesSupabaseSession || !isSupabaseAuthConfigured()) {
+      setAuthTokenRefreshHandler(null);
+      return () => setAuthTokenRefreshHandler(null);
+    }
+
+    let active = true;
+    setAuthTokenRefreshHandler(async () => {
+      try {
+        const session = await refreshActiveSupabaseSession(SESSION_REFRESH_LEEWAY_MS);
+        if (!session?.access_token) {
+          if (active) handleSessionExpired();
+          return "";
+        }
+
+        if (active && session.access_token !== getAuthToken()) {
+          replaceAuthToken(session.access_token);
+          setToken(session.access_token);
+        }
+
+        return session.access_token;
+      } catch {
+        if (active) handleSessionExpired();
+        return "";
+      }
+    });
+
+    return () => {
+      active = false;
+      setAuthTokenRefreshHandler(null);
+    };
+  }, [handleSessionExpired, token, usesSupabaseSession]);
+
+  useEffect(() => {
+    if (!token || !usesSupabaseSession || !isSupabaseAuthConfigured()) return undefined;
+
+    let active = true;
+    let refreshTimeoutId = 0;
+
+    const syncSupabaseSession = async () => {
+      window.clearTimeout(refreshTimeoutId);
+
+      try {
+        const session = await refreshActiveSupabaseSession(SESSION_REFRESH_LEEWAY_MS);
+        if (!active) return;
+
+        if (!session?.access_token) {
+          handleSessionExpired();
+          return;
+        }
+
+        if (session.access_token !== getAuthToken()) {
+          replaceAuthToken(session.access_token);
+          setToken(session.access_token);
+        }
+
+        const expiresAtMs = getSupabaseSessionExpiresAtMs(session);
+        if (!expiresAtMs) return;
+
+        const nextRefreshDelayMs = Math.max(
+          30_000,
+          expiresAtMs - Date.now() - SESSION_REFRESH_LEEWAY_MS,
+        );
+        refreshTimeoutId = window.setTimeout(syncSupabaseSession, nextRefreshDelayMs);
+      } catch {
+        if (active) handleSessionExpired();
+      }
+    };
+
+    const handleWake = () => {
+      if (document.visibilityState !== "hidden") {
+        void syncSupabaseSession();
+      }
+    };
+
+    void syncSupabaseSession();
+    window.addEventListener("focus", handleWake);
+    document.addEventListener("visibilitychange", handleWake);
+
+    return () => {
+      active = false;
+      window.clearTimeout(refreshTimeoutId);
+      window.removeEventListener("focus", handleWake);
+      document.removeEventListener("visibilitychange", handleWake);
+    };
+  }, [handleSessionExpired, token, usesSupabaseSession]);
+
+  useEffect(() => {
+    setSessionNotice("");
+    if (!token || usesSupabaseSession) return undefined;
+
+    const expiresAtMs = readJwtExpiresAtMs(token);
+    if (!expiresAtMs) return undefined;
+
+    if (expiresAtMs <= Date.now()) {
+      handleSessionExpired();
+      return undefined;
+    }
+
+    const warningDelayMs = expiresAtMs - Date.now() - SESSION_WARNING_LEEWAY_MS;
+    const warningTimeoutId = window.setTimeout(() => {
+      setSessionNotice("Your session will expire soon. Save your work and log in again.");
+    }, Math.max(0, warningDelayMs));
+    const expiryTimeoutId = window.setTimeout(() => {
+      handleSessionExpired();
+    }, Math.max(0, expiresAtMs - Date.now()));
+
+    return () => {
+      window.clearTimeout(warningTimeoutId);
+      window.clearTimeout(expiryTimeoutId);
+    };
+  }, [handleSessionExpired, token, usesSupabaseSession]);
+
+  useEffect(() => {
+    if (!isSupabaseAuthConfigured() || token || route.name === "auth-callback") return;
     if (readSupabaseAuthTypeFromUrl() === "recovery") return;
 
     let active = true;
     setBooting(true);
 
-    getActiveSupabaseSession()
+    refreshActiveSupabaseSession(SESSION_REFRESH_LEEWAY_MS)
       .then(async (session) => {
         if (!active || !session?.access_token) return;
         const payload = await api.completeSupabaseSession({
@@ -173,7 +360,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [route.name, token]);
 
   /** Stores a successful login/register payload in app state and local storage. */
   function handleAuthenticated(payload) {
@@ -182,6 +369,7 @@ function App() {
     setToken(payload.token);
     setUser(payload.user);
     setAuthError("");
+    setSessionNotice("");
     if (["auth-callback", "email-verification", "password-reset"].includes(route.name)) {
       navigate("/");
     }
@@ -192,9 +380,11 @@ function App() {
     suppressNextSupabaseSessionError.current = true;
     void signOutSupabaseAuth();
     setAuthToken("");
+    setAuthTokenRefreshHandler(null);
     setToken("");
     setUser(null);
     setAuthError("");
+    setSessionNotice("");
     window.location.hash = "/";
   }
 
@@ -227,6 +417,10 @@ function App() {
     }
   }
 
+  const sessionNoticeNode = (
+    <SessionNotice message={sessionNotice} onDismiss={() => setSessionNotice("")} />
+  );
+
   if (booting) {
     return (
       <>
@@ -254,6 +448,7 @@ function App() {
     return (
       <>
         <AppTooltip />
+        {sessionNoticeNode}
         <main className="app-shell">
           <Dashboard
             onLogout={handleLogout}
@@ -272,6 +467,7 @@ function App() {
     return (
       <>
         <AppTooltip />
+        {sessionNoticeNode}
         <main className="app-shell invite-route-shell">
           <JoinWorldDialog
             error={inviteError}
@@ -289,6 +485,7 @@ function App() {
   return (
     <>
       <AppTooltip />
+      {sessionNoticeNode}
       <main className="room-shell">
         <RoomView
           inviteCode={route.inviteCode}

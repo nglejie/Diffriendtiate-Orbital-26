@@ -1,7 +1,19 @@
 import { createClient, type AuthChangeEvent, type Session } from "@supabase/supabase-js";
 
-const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || "").trim();
-const supabaseAnonKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || "").trim();
+export function normalizePublicEnvValue(value: unknown) {
+  const trimmed = String(value || "").trim();
+  if (trimmed.length < 2) return trimmed;
+
+  const quote = trimmed[0];
+  if ((quote === "\"" || quote === "'") && trimmed[trimmed.length - 1] === quote) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
+
+const supabaseUrl = normalizePublicEnvValue(import.meta.env.VITE_SUPABASE_URL);
+const supabaseAnonKey = normalizePublicEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
@@ -43,6 +55,40 @@ export async function getActiveSupabaseSession() {
   const { data, error } = await client.auth.getSession();
   if (error) return null;
   return data.session;
+}
+
+export function getSupabaseSessionExpiresAtMs(session: Session | null | undefined) {
+  const expiresAtSeconds = Number(session?.expires_at || 0);
+  return Number.isFinite(expiresAtSeconds) && expiresAtSeconds > 0
+    ? expiresAtSeconds * 1000
+    : 0;
+}
+
+export function shouldRefreshSupabaseSession(
+  session: Session | null | undefined,
+  refreshLeewayMs = 5 * 60 * 1000,
+) {
+  const expiresAtMs = getSupabaseSessionExpiresAtMs(session);
+  return Boolean(expiresAtMs && expiresAtMs - Date.now() <= refreshLeewayMs);
+}
+
+export async function refreshActiveSupabaseSession(refreshLeewayMs = 5 * 60 * 1000) {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  const { data, error } = await client.auth.getSession();
+  if (error) throw error;
+
+  if (!data.session) return null;
+  if (!shouldRefreshSupabaseSession(data.session, refreshLeewayMs)) {
+    return data.session;
+  }
+
+  const { data: refreshedData, error: refreshError } = await client.auth.refreshSession(
+    data.session,
+  );
+  if (refreshError) throw refreshError;
+  return refreshedData.session;
 }
 
 export function onSupabaseAuthStateChange(
